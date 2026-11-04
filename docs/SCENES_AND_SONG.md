@@ -15,7 +15,7 @@ Open the three-line **PROJECT** button on the cassette deck. The original projec
 5. Select another pad and build another combination. One scene can contain kick+bass, another kick+bass+melody, another only percussion, etc.
 6. Tap a saved pad, or press its key, to launch its loop set. The app queues the change for the **next whole bar**, with a short audio fade at the transition. Each scene loops until you launch another scene or stop.
 
-The standard MIDI note numbers for C1..B1 are **24..35**. When LOOP MODE is enabled, the first 12 keys of the FM-1's native 53-based keyboard are interpreted as virtual C1..B1 (physical MIDI notes 53..64). This avoids needing a firmware update to retune the MIDI keys. Outside LOOP MODE the FM-1 keyboard behaves normally.
+In **Ableton Live's note naming**, C1..B1 are MIDI **36..47** (D1 = 38). The app also accepts MIDI **24..35**, the same pitches labelled C1..B1 in scientific octave notation. When LOOP MODE is enabled, the first 12 keys of the FM-1's native 53-based keyboard are interpreted as virtual C1..B1 (physical MIDI notes 53..64). This avoids needing a firmware update to retune the MIDI keys. Outside LOOP MODE the FM-1 keyboard behaves normally.
 
 All the clip audio and settings remain on the phone. A scene captures the **recorded loop audio**, not a new instrument preset or its live unrecorded notes. Scenes retain up to eight loop tracks. Capturing a saved scene and subsequently editing a track uses copy-on-write: previously saved scenes are not changed until explicitly replaced.
 
