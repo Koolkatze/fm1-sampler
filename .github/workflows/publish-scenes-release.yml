@@ -1,0 +1,71 @@
+name: Publish FM1 Sampler Scenes Android preview
+
+on:
+  push:
+    branches: [feature/scene-launcher-song-mode]
+    paths:
+      - '.github/workflows/publish-scenes-release.yml'
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download previously tested Android APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          gh run download 41914448880 \
+            --repo "$GITHUB_REPOSITORY" \
+            --name FM1-Sampler-CUE-APK \
+            --dir dist
+          test -s dist/app-debug.apk
+          mv dist/app-debug.apk dist/FM1-Sampler-Scenes-SongMode.apk
+          unzip -t dist/FM1-Sampler-Scenes-SongMode.apk | tail -n 1
+          sha256sum dist/FM1-Sampler-Scenes-SongMode.apk
+
+      - name: Create release and attach APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v0.37-scenes-preview.1
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## FM1 Sampler — Scenes + Song Mode (Android preview)
+
+          **Install the attached `FM1-Sampler-Scenes-SongMode.apk` on Android.**
+          This is the phone app, not an FM-1 hardware firmware image.
+
+          - PROJECT now shows its existing loop/project operations and a separate Loop/Song panel; panels adapt to screen width in the original light and dark styles.
+          - **LOOP MODE:** save up to 12 scenes (C1..B1), selecting any of the eight existing track loops, and launch them live with bar-synced transitions.
+          - **SONG MODE:** arrange saved scenes in a sequence (up to 64 steps), repeat or reorder steps, and play through the complete song before stopping.
+          - Saved scene audio and song order persist in private app storage.
+          - External MIDI scene pads support Ableton Live C1=36 / D1=38, scientific C1=24 / D1=26, and the physical FM-1's first keys 53..64 when forwarded through MIDI.
+          - Includes the previous sampler and CUE functions.
+
+          **Compatibility:** This is a separately installable **preview** build, package
+          `com.ferluht.fm1sampler.scenes`, based on the unmerged Scenes feature branch
+          ([PR #2](https://github.com/Koolkatze/fm1-sampler/pull/2)).
+          The current debug-signing key and app data are separate from other FM1 Sampler apps.
+          GitHub Actions validated engine tests and APK compilation; real-phone and
+          physical-controller behavior still needs user testing.
+
+          Source and detailed usage: [Scenes and Song Mode guide](https://github.com/Koolkatze/fm1-sampler/blob/feature/scene-launcher-song-mode/docs/SCENES_AND_SONG.md).
+          EOF
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/FM1-Sampler-Scenes-SongMode.apk \
+              --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" dist/FM1-Sampler-Scenes-SongMode.apk \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title 'FM1 Sampler — Scenes + Song Mode (Android preview)' \
+              --notes-file release-notes.md \
+              --prerelease
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --json url,assets,isPrerelease \
+            --jq '{url: .url, isPrerelease: .isPrerelease, files: [.assets[].name]}'
