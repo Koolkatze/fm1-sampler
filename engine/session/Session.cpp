@@ -10,6 +10,9 @@
 #include "TapeInsert.h"
 #include "Wav.h"
 #include <algorithm>
+#include <array>
+#include <fstream>
+#include <memory>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -42,7 +45,7 @@ struct Session::Impl {
         float speed = 1.f, semis = 0.f, rangeA = 0.f, rangeB = 1.f; uint32_t gen = 0;
         float sliceThr = 0.22f, kitSemis = 0.f, grainScatter = 1.f, paulStretch = 8.f, paulWidth = 1.f; int grainN = 7; std::vector<float> slices;   // mode parameters; slices for the UI (under infoMtx)
         // the audio loop of this track
-        std::vector<float> clip;     // interleaved stereo, loopSamples frames
+        std::shared_ptr<std::vector<float>> clip = std::make_shared<std::vector<float>>();  // COW: scene snapshots share loop audio
         bool clipHas = false, clipRec = false;
         bool recPrevOk = false; double recPrevCp = 0; float recPrevL = 0, recPrevR = 0;   // tape-speed recording: previous write position and input
         std::atomic<float> peak{0.f};
@@ -143,7 +146,7 @@ struct Session::Impl {
 
     // ---- free take ----
     void freeStart(int track) {
-        for (auto& t : tracks) { releaseAll(*t); t->clip.clear(); t->clip.shrink_to_fit(); t->clipHas = false; t->clipRec = false; }
+        for (auto& t : tracks) { releaseAll(*t); t->clip = std::make_shared<std::vector<float>>(); t->clipHas = false; t->clipRec = false; }
         loopSamples = 0; a_loop = 0;
         freeArmed = true; a_freeArmed = true; freeRec = false; freeTrack = track;
         freeBuf.clear(); freeBuf.reserve((size_t)sr * 2 * 30);
@@ -165,7 +168,7 @@ struct Session::Impl {
         bpm = std::min(300.f, std::max(30.f, nb)); a_bpm = bpm; loopBars = n; a_bars = n;
         loopSamples = (int32_t)std::lround(len); a_loop = loopSamples;
         Track& ft = *tracks[freeTrack];
-        if (!freeBuf.empty()) { freeBuf.resize((size_t)loopSamples * 2, 0.f); ft.clip = std::move(freeBuf); ft.clipHas = true; }
+        if (!freeBuf.empty()) { freeBuf.resize((size_t)loopSamples * 2, 0.f); ft.clip = std::make_shared<std::vector<float>>(std::move(freeBuf)); ft.clipHas = true; }
         freeBuf = {};
         pos = 0; tapePos = 0;
     }
@@ -269,7 +272,7 @@ struct Session::Impl {
             for (int32_t f = a; f < e; f += step) {
                 float sum = 0;
                 for (int t = 0; t < kTracks; t++) {
-                    const auto& c = tracks[(size_t)t]->clip;
+                    const auto& c = *tracks[(size_t)t]->clip;
                     if (!tracks[(size_t)t]->clipHas || c.size() != (size_t)L * 2) continue;
                     const float v = 0.5f * (c[(size_t)2 * f] + c[(size_t)2 * f + 1]); sum += v; tp[t] = std::max(tp[t], std::fabs(v));
                 }
@@ -407,7 +410,7 @@ struct Session::Impl {
                     const float src0 = bus[2 * i], src1 = bus[2 * i + 1];
                     const int32_t k = (int32_t)cp % loopSamples;
                     if (t.clipHas) {
-                        auto& c = t.clip;
+                        auto& c = *t.clip;
                         // Linear interpolation permits a fractional CUE start and avoids
                         // the octave/pitch artifacts of rounded read pointers.
                         auto sampleAt = [&](double at, int ch) {
@@ -432,8 +435,9 @@ struct Session::Impl {
                     }
                     // Never overdub stuttered audio into the original clip.
                     if (t.clipRec && !ramp && !cueAudible) {
-                        if (t.clip.size() != (size_t)loopSamples * 2) t.clip.assign((size_t)loopSamples * 2, 0.f);
-                        auto& c = t.clip;
+                        if (!t.clip.unique()) t.clip = std::make_shared<std::vector<float>>(*t.clip);
+                        if (t.clip->size() != (size_t)loopSamples * 2) t.clip->assign((size_t)loopSamples * 2, 0.f);
+                        auto& c = *t.clip;
                         // recording works at any tape speed, as the head of a tape machine: the input lands on the moving tape position.
                         // Slower than 1x the input is spread over the two neighbouring cells weighted by the speed (no pile-up);
                         // faster than 1x the cells the tape skipped since the last sample are filled by interpolating the input (no holes).
@@ -609,20 +613,22 @@ void Session::setRetLevel(int w, float v) { d->post([=] { d->ret[w & 1] = clampf
 
 // ---- looper ----
 void Session::freeRecord(int t, bool on) { if (t >= 0 && t < kTracks) d->post([=] { if (on) d->freeStart(t); else d->freeStop(); }); }
-void Session::clipRecord(int t, bool on) { if (t >= 0 && t < kTracks) d->post([=] { d->tracks[(size_t)t]->clipRec = on; }); }
+void Session::clipRecord(int t, bool on) { if (t >= 0 && t < kTracks) d->post([=] { auto& tr = *d->tracks[(size_t)t]; if (on && !tr.clip.unique()) tr.clip = std::make_shared<std::vector<float>>(*tr.clip); tr.clipRec = on; }); }
 void Session::clipClear(int t) {
-    if (t >= 0 && t < kTracks) d->post([=] { auto& tr = *d->tracks[(size_t)t]; tr.clipRec = false; tr.clip.clear(); tr.clipHas = false; d->clearIfEmpty(); });
+    if (t >= 0 && t < kTracks) d->post([=] { auto& tr = *d->tracks[(size_t)t]; tr.clipRec = false; tr.clip = std::make_shared<std::vector<float>>(); tr.clipHas = false; d->clearIfEmpty(); });
 }
 void Session::clipClearAll() {
-    d->post([this] { for (auto& t : d->tracks) { t->clipRec = false; t->clip.clear(); t->clipHas = false; } d->clearIfEmpty(); });
+    d->post([this] { for (auto& t : d->tracks) { t->clipRec = false; t->clip = std::make_shared<std::vector<float>>(); t->clipHas = false; } d->clearIfEmpty(); });
 }
 void Session::loopDouble() {
     d->post([this] {
         const int32_t L = d->loopSamples;
         if (L <= 0 || (int64_t)L * 2 > (int64_t)d->sr * 180) return;
         for (auto& t : d->tracks) {
-            if (t->clipHas && t->clip.size() == (size_t)L * 2) { auto& c = t->clip; c.resize((size_t)L * 4); std::copy(c.begin(), c.begin() + (size_t)L * 2, c.begin() + (size_t)L * 2); }
-            else { t->clip.clear(); t->clipHas = false; }
+            if (t->clipHas && t->clip->size() == (size_t)L * 2) {
+                if (!t->clip.unique()) t->clip = std::make_shared<std::vector<float>>(*t->clip);
+                auto& c = *t->clip; c.resize((size_t)L * 4); std::copy(c.begin(), c.begin() + (size_t)L * 2, c.begin() + (size_t)L * 2);
+            } else { t->clip = std::make_shared<std::vector<float>>(); t->clipHas = false; }
         }
         d->loopSamples = L * 2; d->a_loop = d->loopSamples;
         d->loopBars = std::min(32, d->loopBars * 2); d->a_bars = d->loopBars;
@@ -632,7 +638,10 @@ void Session::loopHalve() {
     d->post([this] {
         const int32_t L = d->loopSamples, h = L / 2;
         if (L <= 0 || h < d->sr / 4) return;
-        for (auto& t : d->tracks) if (t->clipHas && t->clip.size() == (size_t)L * 2) t->clip.resize((size_t)h * 2);
+        for (auto& t : d->tracks) if (t->clipHas && t->clip->size() == (size_t)L * 2) {
+            if (!t->clip.unique()) t->clip = std::make_shared<std::vector<float>>(*t->clip);
+            t->clip->resize((size_t)h * 2);
+        }
         d->loopSamples = h; d->a_loop = h;
         d->loopBars = std::max(1, d->loopBars / 2); d->a_bars = d->loopBars;
         if (d->pos >= h) d->pos = std::fmod(d->pos, (double)h);
@@ -675,7 +684,7 @@ void Session::setLoopSpeed(float v) { d->tapeSpeed.store(clampf(v, 0.25f, 2.f));
 void Session::setLoopSource(int src) { d->post([=] { d->loopSrc = src ? 1 : 0; }); }
 bool Session::saveClip(int t) {
     if (t < 0 || t >= kTracks || !d->tracks[(size_t)t]->clipHas) return false;
-    std::vector<float> c = d->tracks[(size_t)t]->clip;   // a copy, written on the worker
+    std::vector<float> c = *d->tracks[(size_t)t]->clip;   // a copy, written on the worker
     d->job([this, c = std::move(c)]() mutable { d->finishSample(std::move(c)); d->a_pending = false; });
     return true;
 }
