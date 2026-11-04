@@ -5,6 +5,8 @@
 #include <Stretch.h>
 #include <Wav.h>
 #include <Slicer.h>
+#include <SamplerUI.h>
+#include <Theme.h>
 #include <Reverb.h>
 #include <cmath>
 #include <thread>
@@ -134,6 +136,75 @@ int main() {
       hold(SamplerApp::OCT_UP, false); run(0.04);
       CHECK(app.page() == originalPage, "releasing OCT+ restores the previous page");
       app.loopClear(); run(0.3); }
+    {   // Live C1/D1 scenes, independent track groups, ordered song, persistence and light/dark UI.
+        app.selectTrack(0); app.loopClear(); run(0.2);
+        app.loopRecord(); run(0.08);
+        app.playNote(60, true); run(0.75); app.playNote(60, false); run(0.18);
+        app.loopRecord(); run(0.25);
+        CHECK(app.loopExists(), "scenes: first loop exists");
+        app.selectScene(0); app.saveScene(); run(0.16);
+        CHECK((app.status().sceneMask & 1u) && app.status().sceneTracks[0] == 1u,
+              "C1 contains exactly track 1 (mask %u)", (unsigned)app.status().sceneTracks[0]);
+        // Build a different pack: add a second loop while track 1 is already sounding.
+        app.selectTrack(1); app.loopRecord(); run(0.15);
+        app.playNote(65, true); run(0.4); app.playNote(65, false); run(0.25);
+        app.loopRecord(); run(0.18);
+        app.selectScene(2); app.saveScene(); run(0.22);
+        CHECK((app.status().sceneMask & 5u) == 5u &&
+              (app.status().sceneTracks[2] & 3u) == 3u,
+              "D1 contains tracks 1+2 while C1 preserves only track 1");
+        app.setSongMode(false);   // enable the scene note bank explicitly
+        uint8_t c1[3] = {0x90, 24, 100}, d1[3] = {0x90, 26, 100};
+        app.onMidi(c1, 3); run(1.2);
+        CHECK(app.status().activeScene == 0 && !app.status().track_has_clip[1],
+              "pressing MIDI C1 launches scene C1 without changing D1");
+        app.onMidi(d1, 3); run(1.2);
+        CHECK(app.status().activeScene == 2 && app.status().track_has_clip[1],
+              "pressing MIDI D1 launches a different loop structure");
+        // FM-1 physical first C-scene key uses firmware's 53 offset.
+        uint8_t physicalC1[3] = {0x90, 53, 100};
+        app.onMidi(physicalC1, 3); run(1.1);
+        CHECK(app.status().activeScene == 0, "FM-1 physical first note launches C1");
+        app.setSongMode(true);
+        app.selectScene(0); app.songAdd();
+        app.selectScene(2); app.songAdd();
+        app.selectScene(0); app.songAdd(); run(0.1);
+        CHECK(app.songOrder().size() == 3 && app.songOrder()[0] == 0 &&
+              app.songOrder()[1] == 2 && app.songOrder()[2] == 0,
+              "Song Mode keeps C1, D1, C1, including repeated scenes");
+        app.songMove(-1);
+        CHECK(app.songOrder()[1] == 0 && app.songOrder()[2] == 2, "Song Mode can reorder steps");
+        app.songMove(+1); run(0.1);
+        app.playSong(); run(0.12);
+        CHECK(app.status().songPlaying && app.status().songStep == 0 &&
+              app.status().activeScene == 0, "Song starts on its first scene");
+        run(2.0);
+        CHECK(!app.status().songPlaying && !app.status().playing,
+              "Song ends after the final scene instead of looping forever");
+        run(0.4);
+        CHECK(std::filesystem::exists("/tmp/fm1sampler_t2/fm1_scenes.dat"),
+              "saved scenes and Song Mode order are persisted for the next launch");
+
+        // Project sheet must render two separate columns in both existing themes.
+        SamplerUI ui(app); ui.setSize(860.f, 400.f, 0.f, 0.f);
+        ui.openProject(true);
+        for (bool light : {true, false}) {
+            theme::apply(light);
+            ui.frame(now + (light ? 1 : 2));
+            bool project = false, song = false, pad = false;
+            for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+                project |= op.text == "PROJECT";
+                song |= op.text == "SONG MODE";
+                pad |= op.text == "C1";
+            }
+            CHECK(project && song && pad,
+                  "PROJECT and scene/song editor render together in %s theme",
+                  light ? "light" : "dark");
+        }
+        theme::apply(true);
+        app.setSongMode(false);
+        app.loopClear(); run(0.25);
+    }
     {   // loudness normalisation and auto-tune, on synthetic samples: a quiet and a loud 220 Hz tone
       auto tone = [&](const char* path, float amp, double hz) { std::vector<float> st; for (int i = 0; i < 2 * sr; i++) { const float v = amp * (float)std::sin(2 * M_PI * hz * i / sr) * (i < 100 ? i / 100.f : 1.f); st.push_back(v); st.push_back(v); } writeWav16(path, st, sr); };
       tone("/tmp/fm1sampler_t2/tone_quiet.wav", 0.03f, 220.0); tone("/tmp/fm1sampler_t2/tone_loud.wav", 0.95f, 220.0); tone("/tmp/fm1sampler_t2/tone_flat.wav", 0.5f, 220.0 * std::pow(2.0, 0.3 / 12));
