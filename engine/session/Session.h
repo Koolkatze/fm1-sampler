@@ -38,6 +38,8 @@ public:
         int activeScene, queuedScene;
         bool songPlaying;
         int songStep, songSize;
+        bool arrangementLoaded;
+        int arrangementSize, arrangement[64]; // saved scene order for UI restoration
         float clipPos[kTracks];  // 0..1 read position of the loops (follows the loop speed)
         float lfoValue[kTracks]; // -1..1, for the UI
         float scGain[kTracks], scLevel[kTracks];   // sidechain: the gain a track is pulled down to (1 = untouched) and the level it is measured by (its own level before the fader)
