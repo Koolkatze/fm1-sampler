@@ -15,6 +15,7 @@ public:
     static constexpr int kTracks = 8;
     static constexpr int kVoiceMax = 32;
     static constexpr int kLoopBins = 400;
+    static constexpr int kScenes = 12;   // C1..B1
 
     struct Status {
         bool playing;
@@ -33,6 +34,10 @@ public:
         int sampleTrack; float sampleSeconds, inputPeak;
         int sampleVersion;       // bumps when a sample was loaded into a track (sampleTrack)
         int sampleFails;         // bumps when a sample could not be loaded
+        uint32_t sceneMask;       // saved scene slots
+        int activeScene, queuedScene;
+        bool songPlaying;
+        int songStep, songSize;
         float clipPos[kTracks];  // 0..1 read position of the loops (follows the loop speed)
         float lfoValue[kTracks]; // -1..1, for the UI
         float scGain[kTracks], scLevel[kTracks];   // sidechain: the gain a track is pulled down to (1 = untouched) and the level it is measured by (its own level before the fader)
@@ -90,6 +95,12 @@ public:
     void scrubEnd();                      // the finger lifts: the tape returns to the transport speed, or comes to a stop
     void seek(float fraction);            // move the playhead to a place of the loop (0..1): all loops share it
     void setCue(bool on, int division);    // momentary beat-repeat from current position; 0..5 = 1/1..1/32
+    void captureScene(int slot);           // snapshot all eight recorded clips
+    void clearScene(int slot);
+    void launchScene(int slot);            // quantized to the next bar
+    void startSong(const std::vector<int>& order);
+    void stopSong();
+    void saveArrangement(const std::vector<int>& order);
     void setLoopSpeed(float speed);       // 0.25..2, tape speed of all loops together; 1 = locked to the transport
     void setLoopSource(int src);          // what the loop records: 0 microphone, 1 the track's sound
     bool saveClip(int track);             // the loop of `track` as sample_*.wav in the data dir
