@@ -62,6 +62,8 @@ public:
     // looper and recorder
     void transportPlay();
     void transportSet(bool play);                 // phone PLAY / STOP keys
+    void cueHold(bool down);                     // momentary CUE from the phone touch controls
+    bool cueActive() const { return cueActive_; }
     bool recordingNow() const { bool r = st_.freeRecording || st_.freeArmed; for (int t = 0; t < kTracks; t++) r |= st_.track_clip_rec[t]; return r; }
     void endRecording();                          // PLAY / STOP while recording: the take ends, the loop keeps playing
     void loopRecord();                            // REC: arm / end the first take, or toggle overdub once a loop exists
