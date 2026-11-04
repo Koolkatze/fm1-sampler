@@ -9,7 +9,7 @@
 enum { SYSEX_MAX = 300, SYSEX_Q = 4, KEYS = 27, BUTTONS = 14, ENC = 7, KEY_BASE = 53 };
 enum { CMD_LED = 1, CMD_CLEAR = 2, CMD_RECT = 3, CMD_TEXT = 4, CMD_PING = 5, CMD_SCALE = 6, CMD_PAL = 8, CMD_BLIT = 9, CMD_BATCH = 10, CMD_NOP = 0x7e };   /* numbers are the wire format (PROTOCOL.md): keep them explicit */
 enum { EV_SCALE = 0x41, EV_REDRAW = 0x42 };
-enum { BTN_OCT_DOWN = 0, BTN_OCT_UP = 1, BTN_SCL = 3 };
+enum { BTN_OCT_DOWN = 0, BTN_OCT_UP = 1, BTN_SCL = 3, BTN_PLAY = 12 };
 
 /* ---- SysEx receive: routing task -> control task ------------------------- */
 static struct { uint8_t data[SYSEX_MAX]; volatile uint16_t length; } rxq[SYSEX_Q];
@@ -336,13 +336,29 @@ void groove_screen_control(void)
     if (scl && !overlay) { overlay = 1; overlay_dirty = 1; }
     else if (!scl && overlay) { overlay = 0; sysex_reply((const uint8_t[]){EV_REDRAW}, 1); }
 
-    /* OCT -/+ shift the keys by an octave (a scale setting, so the phone hears the final notes). */
+    /* Forward OCT buttons like every other panel key so the phone can detect
+     * OCT- + PLAY (restart) and OCT+ + PLAY (CUE). A standalone tap still
+     * changes octave, but on release so a modifier cannot detune the keys.
+     * Holding OCT+ for two seconds enters CUE select and never shifts octave. */
     {
-        static uint32_t prev_oct;
-        uint32_t pressed = c.buttons & ~prev_oct & ((1U << BTN_OCT_DOWN) | (1U << BTN_OCT_UP));
-        prev_oct = c.buttons;
-        if (pressed & (1U << BTN_OCT_DOWN)) scale_set(sc_scale, sc_root, sc_oct - 1, sc_mode);
-        if (pressed & (1U << BTN_OCT_UP)) scale_set(sc_scale, sc_root, sc_oct + 1, sc_mode);
+        static uint32_t prev_oct, oct_since[2];
+        static uint8_t oct_used[2];
+        const uint32_t oct_mask = (1U << BTN_OCT_DOWN) | (1U << BTN_OCT_UP);
+        const uint32_t pressed = c.buttons & ~prev_oct & oct_mask;
+        const uint32_t released = ~c.buttons & prev_oct & oct_mask;
+        for (unsigned i = 0; i < 2; ++i) {
+            const uint32_t bit = 1U << i;
+            if (pressed & bit) { oct_since[i] = now; oct_used[i] = 0; }
+            if (c.buttons & bit) {
+                if (c.buttons & (1U << BTN_PLAY)) oct_used[i] = 1;
+                if (i == BTN_OCT_UP && (uint32_t)(now - oct_since[i]) >= 2000U) oct_used[i] = 1;
+            }
+            if (released & bit) {
+                if (!oct_used[i]) scale_set(sc_scale, sc_root, sc_oct + (i == BTN_OCT_UP ? 1 : -1), sc_mode);
+                oct_used[i] = 0;
+            }
+        }
+        prev_oct = c.buttons & oct_mask;
     }
 
     /* Keys: notes through the scale, channel 1. */
@@ -351,9 +367,8 @@ void groove_screen_control(void)
         if (!(kdiff >> i & 1U)) continue;
         if (keys >> i & 1U) key_down(i); else key_up(i);
     }
-    /* Other buttons: notes 0..13 on channel 2 (SCL and OCT are handled here, not forwarded). */
-    const uint32_t local = (1U << BTN_OCT_DOWN) | (1U << BTN_OCT_UP);
-    uint32_t forwarded = c.buttons & ((1UL << BUTTONS) - 1U) & ~local;
+    /* Other buttons: notes 0..13 on channel 2, including OCT modifiers. */
+    uint32_t forwarded = c.buttons & ((1UL << BUTTONS) - 1U);
     uint32_t bdiff = forwarded ^ sent_buttons;
     for (unsigned i = 0; i < BUTTONS && bdiff; ++i)
         if (bdiff >> i & 1U) {
