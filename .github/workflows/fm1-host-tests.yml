@@ -1,0 +1,26 @@
+name: FM-1 Sampler host tests
+
+on:
+  push:
+    branches: [feature/fm1-cue-beat-repeat]
+  pull_request:
+    paths:
+      - "engine/**"
+      - "firmware/app/ctrl.c"
+      - ".github/workflows/fm1-host-tests.yml"
+
+jobs:
+  engine-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile sampler and test harness
+        run: |
+          make -C engine -j2 all
+          make -C engine "$GITHUB_WORKSPACE/engine/build/test_app"
+      - name: Provide sample library
+        run: |
+          mkdir -p "$HOME/fm1-sampler"
+          ln -s "$GITHUB_WORKSPACE/samples" "$HOME/fm1-sampler/samples"
+      - name: Run engine regression tests
+        run: ./engine/build/test_app
