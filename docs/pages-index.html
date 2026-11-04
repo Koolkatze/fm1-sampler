@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="dark">
+<title>FM1-Sampler — Android firmware Workbench</title>
+<style>
+:root{font-family:system-ui,-apple-system,Roboto,sans-serif;background:#10161b;color:#ecf4f2;color-scheme:dark;line-height:1.5}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;padding:18px env(safe-area-inset-right) 28px env(safe-area-inset-left)}
+main{max-width:640px;margin:auto;padding:12px}h1{font-size:clamp(1.7rem,6vw,2.4rem);line-height:1.14;margin:0 0 12px}h2{font-size:1.05rem;margin:0 0 8px}
+p{color:#b1c4c5;margin:0 0 18px}.eyebrow{font-size:.78rem;text-transform:uppercase;letter-spacing:.14em;color:#91dbbc;margin:0 0 13px}
+section{border:1px solid #304249;border-radius:14px;background:#192329;padding:18px;margin:16px 0}
+button,.button{font:600 1rem system-ui;border:0;display:inline-flex;align-items:center;justify-content:center;min-height:48px;padding:12px 18px;border-radius:9px;cursor:pointer;text-decoration:none}
+.primary{background:#a9efd7;color:#0e302b;width:100%}.secondary{background:#31434b;color:#e6f3f2;width:100%;margin-top:10px}
+button:focus-visible,a:focus-visible{outline:3px solid #b1f5df;outline-offset:3px}
+#result{display:block;margin:14px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;background:#101b20;padding:12px;border-radius:10px;min-height:46px;font-size:.9rem;color:#c2d8d5}
+small,footer{color:#97aead}ul{padding-left:20px;color:#c5d5d5}li+li{margin-top:8px}a:not(.button){color:#a9efd7}
+.warning{color:#f3d19b}footer{font-size:.8rem;margin-top:20px}
+</style>
+</head>
+<body>
+<main>
+<p class="eyebrow">M-VAVE FM-1 · ferluht/fm1-sampler · HTTPS</p>
+<h1>FM1-Sampler Workbench</h1>
+<p>Mobile-friendly launcher for the original firmware installer. The firmware image has not been modified or rebuilt.</p>
+<section>
+<h2>1. Check MIDI + SysEx permission</h2>
+<p>Use a full Chrome tab on Android. Plug the powered FM-1 into your phone with a USB data/OTG cable and approve Android's USB prompt if shown.</p>
+<button class="primary" id="check" type="button">Check Web MIDI permission</button>
+<output id="result" role="status" aria-live="polite">Tap the button to request the required MIDI + SysEx permission.</output>
+</section>
+<section>
+<h2>2. Open the firmware installer</h2>
+<p>Once MIDI is permitted and the FM-1 is visible, open the original Workbench. Back up samples and projects before flashing. Do not disconnect the USB cable during an update.</p>
+<a class="button primary" href="./workbench.html">Open Workbench</a>
+<a class="button secondary" href="https://github.com/ferluht/fm1-sampler/releases/tag/v0.37" rel="noopener">Original v0.37 release</a>
+</section>
+<section>
+<h2>If permission is denied</h2>
+<ul>
+<li>Open this page directly in <strong>Chrome</strong>, not inside ChatGPT, GitHub, or another app's internal browser.</li>
+<li>Make sure the address begins with <strong>https://</strong> and Chrome's site permission for MIDI is not blocked.</li>
+<li>If Chrome shows a USB access prompt, grant it, then retry with the FM-1 powered on.</li>
+<li>If no MIDI inputs or outputs appear, try another USB data cable or OTG adapter and reconnect the FM-1.</li>
+<li>Do not flash until the actual Workbench identifies your device. SysEx permission alone does not prove compatibility.</li>
+</ul>
+</section>
+<footer>Community hosting wrapper; not an official M-VAVE service. Workbench source and license notices are included in the original installer. FM1-Sampler v0.37 is host-tested only according to its release notes. HTTPS can resolve local-file origin restrictions but cannot override unsupported USB/MIDI hardware.</footer>
+</main>
+<script>
+'use strict';
+const result = document.querySelector('#result');
+const button = document.querySelector('#check');
+button.addEventListener('click', async () => {
+  button.disabled = true;
+  try {
+    if (!window.isSecureContext) throw new Error('This page is not a secure context. Open the HTTPS GitHub Pages URL.');
+    if (typeof navigator.requestMIDIAccess !== 'function') throw new Error('This browser does not expose Web MIDI. Open the HTTPS page in Chrome for Android.');
+    result.textContent = 'Requesting MIDI + SysEx permission…';
+    const access = await navigator.requestMIDIAccess({ sysex: true });
+    const inputs = Array.from(access.inputs.values(), p => p.name || '(unnamed MIDI input)');
+    const outputs = Array.from(access.outputs.values(), p => p.name || '(unnamed MIDI output)');
+    result.textContent = 'MIDI + SysEx permission granted.\nInputs ('+inputs.length+'): '+(inputs.join(', ')||'none')+'\nOutputs ('+outputs.length+'): '+(outputs.join(', ')||'none')+(inputs.length && outputs.length ? '\nYou can now try the Workbench.' : '\nNo complete input/output pair is visible yet. Check USB OTG and cable.');
+  } catch (e) {
+    const name = e && e.name ? e.name + ': ' : '';
+    result.textContent = name + (e && e.message ? e.message : String(e)) + '\nCheck Chrome site settings and USB permission, then retry.';
+  } finally {
+    button.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
