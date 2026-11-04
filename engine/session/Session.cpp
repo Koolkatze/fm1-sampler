@@ -380,6 +380,18 @@ struct Session::Impl {
             }
             tapeEnd = acc;
         }
+        std::array<float, kBlock> sceneGain{};
+        const int fadeTotal = std::max(1, sr / 180);
+        for (int i = 0; i < n; ++i) {
+            float gain = sceneFadeFrames > 0 ? 1.f - sceneFadeFrames / (float)fadeTotal : 1.f;
+            if (sceneFadeFrames > 0) --sceneFadeFrames;
+            // Fade out a few milliseconds before a quantised switch too.
+            double until = -1;
+            if (songPlaying) until = loopSamples - (pos + i);
+            else if (pendingScene >= 0) until = pendingAt - (pos + i);
+            if (until >= 0 && until < fadeTotal) gain = std::min(gain, (float)(until / fadeTotal));
+            sceneGain[(size_t)i] = std::max(0.f, std::min(1.f, gain));
+        }
         const bool locked = !ramp && std::fabs(spd - 1.0) < 0.01;
         // All eight clips read from the same CUE head, generated only once per
         // audio frame (not once per track). 1/1 is one 4/4 bar at the session BPM.
@@ -478,8 +490,8 @@ struct Session::Impl {
                             baseL += (qL - baseL) * mix;
                             baseR += (qR - baseR) * mix;
                         }
-                        bus[2 * i] += baseL * lg;
-                        bus[2 * i + 1] += baseR * lg;
+                        bus[2 * i] += baseL * lg * sceneGain[(size_t)i];
+                        bus[2 * i + 1] += baseR * lg * sceneGain[(size_t)i];
                     }
                     // Never overdub stuttered audio into the original clip.
                     if (t.clipRec && !ramp && !cueAudible) {
@@ -573,14 +585,41 @@ void Session::process(float* out, const float* in, int frames) {
     }
     for (auto& f : d->run) f();
     d->run.clear();
-    for (int done = 0; done < frames; done += kBlock) {
-        const int n = std::min(kBlock, frames - done);
+    for (int done = 0; done < frames;) {
+        int n = std::min(kBlock, frames - done);
+        const bool timeline = d->playing && !d->stopping && !d->freeRec && d->loopSamples > 0;
+        if (timeline) {
+            // Split precisely on a bar/scene boundary instead of waiting for a 256-frame block.
+            const double next = d->songPlaying ? (double)d->loopSamples :
+                d->pendingScene >= 0 ? d->pendingAt : (double)d->loopSamples;
+            if (d->songPlaying || d->pendingScene >= 0)
+                n = std::max(1, std::min(n, (int)std::ceil(std::max(1.0, next - d->pos - 1e-7))));
+        }
+        const double oldPos = d->pos;
         d->block(out + 2 * done, in ? in + 2 * done : nullptr, n);
+        done += n;
+        if (timeline && d->songPlaying && d->loopSamples > 0 &&
+            oldPos + n >= d->loopSamples - 0.51) {
+            if (d->songStep + 1 < (int)d->songOrder.size()) {
+                ++d->songStep;
+                d->activateScene(d->songOrder[(size_t)d->songStep]);
+            } else {
+                d->songPlaying = false; d->playing = false; d->stopping = false;
+                d->pos = d->tapePos = 0;
+                for (auto& track : d->tracks) d->releaseAll(*track);
+            }
+        } else if (timeline && !d->songPlaying && d->pendingScene >= 0 &&
+                   oldPos + n >= d->pendingAt - 0.51) {
+            d->activateScene(d->pendingScene);
+        }
     }
     d->a_pos = d->pos; d->a_playing = d->playing && !d->stopping; d->a_free = d->freeRec;
     uint32_t cm = 0, rm = 0;
     for (int i = 0; i < kTracks; i++) { cm |= (uint32_t)d->tracks[(size_t)i]->clipHas << i; rm |= (uint32_t)d->tracks[(size_t)i]->clipRec << i; }
     d->a_clip_mask = cm; d->a_cliprec_mask = rm;
+    d->a_activeScene = d->activeScene; d->a_queuedScene = d->pendingScene;
+    d->a_songPlaying = d->songPlaying; d->a_songStep = d->songStep;
+    d->a_songSize = (int)d->songOrder.size();
     const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count(), budget = frames * 1e6 / d->sr;
     d->a_cpu = (d->a_cpu.load() * 7 + (uint32_t)(1000.0 * us / budget)) / 8;
 }
@@ -590,6 +629,7 @@ void Session::play(bool on) {
     d->post([this, on] {
         if (!on) {
             if (d->freeRec || d->freeArmed) d->freeStop();
+            d->songPlaying = false; d->pendingScene = -1;
             if (d->playing) d->stopping = true;   // the tape slows down to standstill (block() ends it: playing = false, notes released)
         } else {
             d->stopping = false;
@@ -835,5 +875,8 @@ Session::Status Session::status() const {
     s.freeRecording = d->a_free; s.freeArmed = d->a_freeArmed; s.freeSeconds = d->a_freeSec;
     s.sampleState = d->a_sampleState; s.sampleTrack = d->a_sampleTrack; s.sampleSeconds = d->a_sampleSec; s.inputPeak = d->a_inPeak;
     s.sampleVersion = d->a_sampleVersion; s.sampleFails = d->a_sampleFails; s.samplePending = d->a_pending;
+    s.sceneMask = d->a_sceneMask; s.activeScene = d->a_activeScene;
+    s.queuedScene = d->a_queuedScene; s.songPlaying = d->a_songPlaying;
+    s.songStep = d->a_songStep; s.songSize = d->a_songSize;
     return s;
 }
