@@ -173,7 +173,7 @@ private:
     // loop / recorder
     Session::Status st_{};
     bool loopAny_ = false;
-    bool songMode_ = false, scenesLoaded_ = false;
+    bool songMode_ = false, scenesLoaded_ = false, sceneKeys_ = false;
     int selectedScene_ = 0, songSelected_ = -1;
     uint8_t sceneTracks_ = 0xff;   // which loop tracks to capture in the selected pad
     std::vector<int> songOrder_;
