@@ -317,17 +317,102 @@ SamplerApp::Knobs SamplerApp::knobs(Page p) {
     return k;
 }
 
+// ---- live scene launcher and arrangement ----
+std::string SamplerApp::sceneLabel(int slot) {
+    static const char* notes[12] = {"C1", "C#1", "D1", "D#1", "E1", "F1",
+                                    "F#1", "G1", "G#1", "A1", "A#1", "B1"};
+    return slot >= 0 && slot < Session::kScenes ? notes[slot] : "--";
+}
+void SamplerApp::setSongMode(bool song) {
+    if (song == songMode_ && sceneKeys_) return;
+    if (st_.songPlaying) s_.stopSong();
+    songMode_ = song;
+    sceneKeys_ = true;  // capture physical C1..B1 pad bank only after enabling Loop Mode
+    say(songMode_ ? "SONG MODE" : "LOOP MODE: C1-B1");
+}
+void SamplerApp::selectScene(int slot, bool trigger) {
+    if (slot < 0 || slot >= Session::kScenes) return;
+    selectedScene_ = slot;
+    sceneTracks_ = sceneSaved(slot) ? st_.sceneTracks[slot] : 0xff;
+    if (!trigger || songMode_) return;
+    if (recordingNow()) { say("FINISH RECORDING FIRST"); return; }
+    if (!sceneSaved(slot)) { say("EMPTY PAD " + sceneLabel(slot)); return; }
+    s_.launchScene(slot);
+    say("SCENE " + sceneLabel(slot) + " QUEUED");
+}
+void SamplerApp::toggleSceneTrack(int t) {
+    if (t >= 0 && t < kTracks) sceneTracks_ ^= (uint8_t)(1u << t);
+}
+void SamplerApp::saveScene() {
+    if (recordingNow()) { say("END RECORDING FIRST"); return; }
+    if (!loopAny_ || st_.loopSamples <= 0) { say("RECORD A LOOP FIRST"); return; }
+    bool usable = false;
+    for (int t = 0; t < kTracks; ++t) if ((sceneTracks_ & (1u << t)) && st_.track_has_clip[t]) usable = true;
+    if (!usable) { say("SELECT A RECORDED TRACK"); return; }
+    s_.captureScene(selectedScene_, sceneTracks_);
+    say("SAVED TO " + sceneLabel(selectedScene_));
+}
+void SamplerApp::deleteScene() {
+    s_.clearScene(selectedScene_);
+    for (int& x : songOrder_) if (x == selectedScene_) x = -1;
+    songOrder_.erase(std::remove(songOrder_.begin(), songOrder_.end(), -1), songOrder_.end());
+    songSelected_ = songOrder_.empty() ? -1 : std::min(songSelected_, (int)songOrder_.size() - 1);
+    s_.saveArrangement(songOrder_);
+    say("SCENE DELETED");
+}
+void SamplerApp::selectSongStep(int step) {
+    if (step >= 0 && step < (int)songOrder_.size()) {
+        songSelected_ = step;
+        selectedScene_ = songOrder_[(size_t)step];
+        sceneTracks_ = st_.sceneTracks[selectedScene_];
+    }
+}
+void SamplerApp::songAdd() {
+    if (!sceneSaved(selectedScene_)) { say("SAVE THIS SCENE FIRST"); return; }
+    if (songOrder_.size() >= 64) { say("SONG LIMIT: 64 SCENES"); return; }
+    const int at = std::min((int)songOrder_.size(), songSelected_ + 1);
+    songOrder_.insert(songOrder_.begin() + at, selectedScene_);
+    songSelected_ = at;
+    s_.saveArrangement(songOrder_);
+    say(sceneLabel(selectedScene_) + " ADDED");
+}
+void SamplerApp::songRemove() {
+    if (songSelected_ < 0 || songSelected_ >= (int)songOrder_.size()) return;
+    songOrder_.erase(songOrder_.begin() + songSelected_);
+    songSelected_ = songOrder_.empty() ? -1 : std::min(songSelected_, (int)songOrder_.size() - 1);
+    s_.saveArrangement(songOrder_);
+}
+void SamplerApp::songMove(int direction) {
+    const int to = songSelected_ + direction;
+    if (songSelected_ < 0 || to < 0 || to >= (int)songOrder_.size()) return;
+    std::swap(songOrder_[(size_t)songSelected_], songOrder_[(size_t)to]);
+    songSelected_ = to;
+    s_.saveArrangement(songOrder_);
+}
+void SamplerApp::playSong() {
+    if (recordingNow()) { say("END RECORDING FIRST"); return; }
+    if (songOrder_.empty()) { say("ADD SCENES TO THE SONG"); return; }
+    s_.startSong(songOrder_);
+    say("SONG FROM THE START");
+}
+void SamplerApp::stopSong() {
+    s_.stopSong();
+    say("SONG STOPPED");
+}
+
 // ---- looper, recorder ----
 void SamplerApp::endRecording() {
     if (st_.freeArmed || st_.freeRecording) { s_.freeRecord(track_, false); say(st_.freeArmed && !st_.freeRecording ? "CANCELLED" : "LOOP SET"); }
     for (int t = 0; t < kTracks; t++) if (st_.track_clip_rec[t]) s_.clipRecord(t, false);
 }
-void SamplerApp::transportPlay() {   // while recording the first press ends the recording (the loop plays on), the next one stops the tape
+void SamplerApp::transportPlay() {   // hardware PLAY follows the selected PROJECT mode
     if (recordingNow()) { endRecording(); return; }
+    if (songMode_) { if (st_.songPlaying) stopSong(); else playSong(); return; }
     s_.play(!st_.playing);
 }
 void SamplerApp::transportSet(bool play) {
     if (recordingNow()) { if (!play) endRecording(); return; }
+    if (songMode_) { if (play) playSong(); else stopSong(); return; }
     s_.play(play);
 }
 void SamplerApp::cueHold(bool down) {
@@ -343,6 +428,7 @@ void SamplerApp::cueHold(bool down) {
     }
 }
 void SamplerApp::loopRecord() {
+    if (st_.songPlaying) { say("STOP SONG BEFORE RECORDING"); return; }
     if (st_.freeArmed || st_.freeRecording) { s_.freeRecord(track_, false); say("LOOP SET"); return; }
     if (!loopAny_ && !st_.track_clip_rec[track_]) {   // a clean looper: arm the first take, it starts with the first note (or sound) and sets the loop length
         s_.freeRecord(track_, true);
@@ -389,8 +475,15 @@ std::string SamplerApp::loopText() const {
     if (!loopAny_) return "LOOP EMPTY";
     return fmt("LOOP %.0fBPM ", st_.bpm) + std::to_string(st_.loopBars) + (st_.loopBars == 1 ? " BAR" : " BARS");
 }
-void SamplerApp::keyEvent(int raw, bool down) {   // a key of the FM-1 (chromatic note 53+key): octave shift, chords in CHORD mode
+void SamplerApp::keyEvent(int raw, bool down) {   // MIDI scene bank in LOOP mode; ordinary keyboard elsewhere
     if (raw < 0 || raw > 127) return;
+    if (sceneKeys_ && !songMode_) {
+        // External MIDI C1=24..B1=35; the physical FM-1's first octave is
+        // encoded as 53..64, mapped onto those same 12 scene pads.
+        const int slot = raw >= 24 && raw <= 35 ? raw - 24 :
+                         raw >= 53 && raw <= 64 ? raw - 53 : -1;
+        if (slot >= 0) { if (down) selectScene(slot, true); return; }
+    }
     if (down) {
         if (keyCount_[raw]) keyEvent(raw, false);
         const bool kit = ts_[track_].algo == 3;   // KIT: every key is a pad (note 60 + key), whatever the tonality or octave
@@ -523,6 +616,14 @@ void SamplerApp::tick(uint32_t now) {
     if (fwDirty_) { fwDirty_ = false; sysex(6, {7, (uint8_t)scale_.root, (uint8_t)(scale_.octave + 3), (uint8_t)scale_.mode}, true); }
     if (repaintAt_ && now >= repaintAt_) { repaintAt_ = repaintAt_ + 2500 < now + 2500 && repaintCount_++ < 1 ? now + 2500 : 0; needClear_ = true; }
     st_ = s_.status();
+    if (!scenesLoaded_ && st_.arrangementLoaded) {
+        scenesLoaded_ = true;
+        songOrder_.clear();
+        for (int i = 0; i < st_.arrangementSize; ++i)
+            if (st_.arrangement[i] >= 0 && st_.arrangement[i] < Session::kScenes)
+                songOrder_.push_back(st_.arrangement[i]);
+        songSelected_ = songOrder_.empty() ? -1 : 0;
+    }
     // OCT+ held for two seconds opens the beat division selector without changing key octave.
     if ((held_ & (1u << OCT_UP)) && !cueSelect_ && now - octUpAt_ >= 2000U) {
         cueReturnPage_ = page_;
