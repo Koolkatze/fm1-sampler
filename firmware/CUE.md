@@ -13,6 +13,10 @@ These controls apply to the FM-1 Sampler phone audio engine and its matching **F
 | Release PLAY | End CUE and return to the uninterrupted underlying loop transport |
 | Release OCT+ | Close the division selector and restore the previous page |
 
+## Android app (no FM-1 firmware change required)
+
+The Android APK contains the native C++ sampler engine and CUE. Open the **CUE** page from the phone's editor or from the cassette deck's page notches, select a division with K1, then **touch and hold the CUE transport button** in the cassette deck to repeat. Release the touch to return to the main tape transport. This works entirely on the phone, with no physical FM-1 connected. The GitHub Actions debug APK is a separately installable application (`com.ferluht.fm1sampler.cue`) to avoid replacing an existing installed sampler.
+
 The K1 divisions are **1/1**, **1/2**, **1/4**, **1/8**, **1/16**, and **1/32**. The default is **1/4** (one quarter note). Length is calculated from the session BPM in common time: 1/1 = four beats, 1/2 = two beats, 1/4 = one beat, etc. The repeated audio begins where the playhead was when PLAY was pressed; no global loop content is altered. The original transport keeps running in the background, so releasing CUE resumes at the position it would have reached without the effect (slip-style).
 
 The repeat is non-destructive; it does not write repeated material into a clip. Audio transitions use short crossfades. K1 changes the rate without rearming PLAY.
