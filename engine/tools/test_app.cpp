@@ -155,13 +155,17 @@ int main() {
               (app.status().sceneTracks[2] & 3u) == 3u,
               "D1 contains tracks 1+2 while C1 preserves only track 1");
         app.setSongMode(false);   // enable the scene note bank explicitly
-        uint8_t c1[3] = {0x90, 24, 100}, d1[3] = {0x90, 26, 100};
+        uint8_t c1[3] = {0x90, 36, 100}, d1[3] = {0x90, 38, 100};
         app.onMidi(c1, 3); run(1.2);
         CHECK(app.status().activeScene == 0 && !app.status().track_has_clip[1],
-              "pressing MIDI C1 launches scene C1 without changing D1");
+              "pressing Ableton MIDI C1 (36) launches scene C1 without changing D1");
         app.onMidi(d1, 3); run(1.2);
         CHECK(app.status().activeScene == 2 && app.status().track_has_clip[1],
-              "pressing MIDI D1 launches a different loop structure");
+              "pressing Ableton MIDI D1 (38) launches a different loop structure");
+        // Scientific C1=24 also launches the C1 scene for alternate controllers.
+        uint8_t scientificC1[3] = {0x90, 24, 100};
+        app.onMidi(scientificC1, 3); run(1.1);
+        CHECK(app.status().activeScene == 0, "scientific MIDI C1 (24) also launches C1");
         // FM-1 physical first C-scene key uses firmware's 53 offset.
         uint8_t physicalC1[3] = {0x90, 53, 100};
         app.onMidi(physicalC1, 3); run(1.1);
