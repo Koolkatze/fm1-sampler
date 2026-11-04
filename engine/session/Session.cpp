@@ -768,6 +768,82 @@ void Session::setCue(bool on, int division) {
         }
     });
 }
+void Session::captureScene(int slot) {
+    if (slot < 0 || slot >= kScenes) return;
+    d->post([this, slot] {
+        if (d->loopSamples <= 0 || d->freeArmed || d->freeRec) return;
+        for (const auto& t : d->tracks) if (t->clipRec) return;
+        auto& sc = d->scenes[(size_t)slot];
+        sc = Impl::Scene{};
+        sc.samples = d->loopSamples; sc.tempo = d->bpm; sc.bars = d->loopBars;
+        for (int i = 0; i < kTracks; ++i) {
+            const auto& t = *d->tracks[(size_t)i];
+            sc.has[(size_t)i] = t.clipHas && t.clip && t.clip->size() == (size_t)d->loopSamples * 2;
+            if (sc.has[(size_t)i]) {
+                sc.clips[(size_t)i] = t.clip;
+                sc.filled = true;
+            }
+        }
+        d->updateSceneMask();
+        d->persistScenes();
+    });
+}
+void Session::clearScene(int slot) {
+    if (slot < 0 || slot >= kScenes) return;
+    d->post([this, slot] {
+        d->scenes[(size_t)slot] = Impl::Scene{};
+        if (d->pendingScene == slot) d->pendingScene = -1;
+        if (d->activeScene == slot) d->activeScene = -1;
+        if (d->songPlaying) { d->songPlaying = false; d->songStep = -1; }
+        d->updateSceneMask();
+        d->persistScenes();
+    });
+}
+void Session::launchScene(int slot) {
+    if (slot < 0 || slot >= kScenes) return;
+    d->post([this, slot] {
+        if (!d->scenes[(size_t)slot].filled || d->freeRec || d->freeArmed) return;
+        for (const auto& t : d->tracks) if (t->clipRec) return;
+        d->songPlaying = false;
+        d->songStep = -1;
+        if (!d->playing || d->stopping || d->loopSamples <= 0) {
+            d->activateScene(slot);
+        } else {
+            d->pendingScene = slot;
+            const double bar = std::max(1.0, d->loopSamples / (double)std::max(1, d->loopBars));
+            const double next = (std::floor(d->pos / bar) + 1.0) * bar;
+            d->pendingAt = std::min((double)d->loopSamples, next);
+        }
+    });
+}
+void Session::startSong(const std::vector<int>& order) {
+    d->post([this, order] {
+        if (d->freeRec || d->freeArmed) return;
+        for (const auto& t : d->tracks) if (t->clipRec) return;
+        std::vector<int> valid;
+        for (int slot : order) if (slot >= 0 && slot < kScenes &&
+               d->scenes[(size_t)slot].filled && valid.size() < 64) valid.push_back(slot);
+        if (valid.empty()) return;
+        d->songOrder = std::move(valid); d->songStep = 0; d->songPlaying = true;
+        d->activateScene(d->songOrder[0]);
+    });
+}
+void Session::stopSong() {
+    d->post([this] {
+        d->songPlaying = false; d->songStep = -1; d->pendingScene = -1;
+        if (d->playing) d->stopping = true;
+    });
+}
+void Session::saveArrangement(const std::vector<int>& order) {
+    d->post([this, order] {
+        if (d->songPlaying) return; // do not overwrite a currently playing song
+        d->songOrder.clear();
+        for (int i : order) if (i >= 0 && i < kScenes && d->songOrder.size() < 64)
+            d->songOrder.push_back(i);
+        d->persistScenes();
+    });
+}
+
 void Session::setLoopSpeed(float v) { d->tapeSpeed.store(clampf(v, 0.25f, 2.f)); }
 void Session::setLoopSource(int src) { d->post([=] { d->loopSrc = src ? 1 : 0; }); }
 bool Session::saveClip(int t) {
