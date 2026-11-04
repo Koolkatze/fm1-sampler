@@ -1,0 +1,53 @@
+name: FM-1 Sampler Android APK
+
+on:
+  push:
+    branches: [feature/fm1-cue-beat-repeat]
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'engine/**'
+      - '.github/workflows/android-debug-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fm1-sampler-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-android-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install Android SDK, NDK and CMake
+        run: |
+          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "ndk;27.2.12479018" "cmake;3.22.1"
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Compile debug APK with sampler audio engine
+        working-directory: android
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Rename APK artifact
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-CUE-debug.apk
+      - name: Upload installable APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: FM1-Sampler-CUE-Android-APK
+          path: dist/FM1-Sampler-CUE-debug.apk
+          if-no-files-found: error
+          retention-days: 30
