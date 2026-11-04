@@ -7,9 +7,9 @@ android {
     // The GitHub-built test APK installs alongside a signed production FM-1 Sampler.
     buildTypes {
         debug {
-            applicationIdSuffix '.cue'
-            versionNameSuffix '-cue-test'
-            manifestPlaceholders = [appLabel: 'FM1 Sampler CUE']
+            applicationIdSuffix '.scenes'
+            versionNameSuffix '-scenes-test'
+            manifestPlaceholders = [appLabel: 'FM1 Sampler Scenes']
         }
         release {
             manifestPlaceholders = [appLabel: 'FM1 Sampler']
