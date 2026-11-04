@@ -82,6 +82,25 @@ public:
     int micState() const { return mic_; }         // 0 idle, 1 waiting for sound, 2 recording, 3 saving
     bool loopExists() const { return loopAny_; }
     std::string loopText() const;
+    // Live performance: 12 reusable 8-track scenes on the C1..B1 bank.
+    static std::string sceneLabel(int slot);
+    bool songMode() const { return songMode_; }
+    void setSongMode(bool song);
+    int selectedScene() const { return selectedScene_; }
+    void selectScene(int slot, bool trigger = false);
+    uint8_t sceneTracks() const { return sceneTracks_; }
+    void toggleSceneTrack(int t);
+    bool sceneSaved(int slot) const { return slot >= 0 && slot < Session::kScenes && (st_.sceneMask & (1u << slot)); }
+    void saveScene();
+    void deleteScene();
+    const std::vector<int>& songOrder() const { return songOrder_; }
+    int selectedSongStep() const { return songSelected_; }
+    void selectSongStep(int step);
+    void songAdd();
+    void songRemove();
+    void songMove(int direction);
+    void playSong();
+    void stopSong();
     std::string toast() const { return nowMs_ < toastUntil_ ? toast_ : ""; }
     void say(const std::string& t) { toast_ = t; toastUntil_ = nowMs_ + 1800; }
     // mixer and per-track state
@@ -154,6 +173,10 @@ private:
     // loop / recorder
     Session::Status st_{};
     bool loopAny_ = false;
+    bool songMode_ = false, scenesLoaded_ = false;
+    int selectedScene_ = 0, songSelected_ = -1;
+    uint8_t sceneTracks_ = 0xff;   // which loop tracks to capture in the selected pad
+    std::vector<int> songOrder_;
     int mic_ = 0, micTrack_ = 0;
     int lastSampleVersion_ = 0, lastSampleFails_ = 0;
     uint32_t commitAt_ = 0; int commitTrack_ = -1;
