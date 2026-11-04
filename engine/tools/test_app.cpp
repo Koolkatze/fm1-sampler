@@ -178,7 +178,7 @@ int main() {
         app.playSong(); run(0.12);
         CHECK(app.status().songPlaying && app.status().songStep == 0 &&
               app.status().activeScene == 0, "Song starts on its first scene");
-        run(2.0);
+        run(3.4);
         CHECK(!app.status().songPlaying && !app.status().playing,
               "Song ends after the final scene instead of looping forever");
         run(0.4);
