@@ -35,6 +35,7 @@ public:
         int sampleVersion;       // bumps when a sample was loaded into a track (sampleTrack)
         int sampleFails;         // bumps when a sample could not be loaded
         uint32_t sceneMask;       // saved scene slots
+        uint8_t sceneTracks[kScenes]; // which of 8 loops belongs to each scene
         int activeScene, queuedScene;
         bool songPlaying;
         int songStep, songSize;
@@ -97,7 +98,7 @@ public:
     void scrubEnd();                      // the finger lifts: the tape returns to the transport speed, or comes to a stop
     void seek(float fraction);            // move the playhead to a place of the loop (0..1): all loops share it
     void setCue(bool on, int division);    // momentary beat-repeat from current position; 0..5 = 1/1..1/32
-    void captureScene(int slot);           // snapshot all eight recorded clips
+    void captureScene(int slot, uint8_t tracks = 0xff); // capture chosen loops, up to eight
     void clearScene(int slot);
     void launchScene(int slot);            // quantized to the next bar
     void startSong(const std::vector<int>& order);
