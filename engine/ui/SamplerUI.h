@@ -64,7 +64,9 @@ private:
     bool linkMidi_ = false, linkAudio_ = false, sheetOpen_ = false, editor_ = false, projectOpen_ = false;
     float sheetScroll_ = 0, sheetLastY_ = 0, sheetMoved_ = 0;
     Rect sheetList_{0, 0, 0, 0};
-    uint32_t clearArmed_ = 0;
+    uint32_t clearArmed_ = 0, sceneSaveAt_ = 0, sceneDeleteAt_ = 0;
+    int sceneArmedSlot_ = -1, deleteArmedSlot_ = -1;
+    bool projectRight_ = false;  // narrow screens: show columns in separate tabs
     float dragY_ = 0, dragV_ = 0;
     static constexpr int kHist = 118;   // the mixer picture: the last four seconds of the active channel (its level, the sidechain source, the gain it is pulled down to)
     float hOwn_[kHist] = {}, hSrc_[kHist] = {}, hGain_[kHist] = {}; int hPos_ = 0, hTrack_ = -1; uint32_t hAt_ = 0;
