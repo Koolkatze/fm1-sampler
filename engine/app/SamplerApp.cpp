@@ -330,6 +330,18 @@ void SamplerApp::transportSet(bool play) {
     if (recordingNow()) { if (!play) endRecording(); return; }
     s_.play(play);
 }
+void SamplerApp::cueHold(bool down) {
+    if (!down) {
+        if (cueActive_) { cueActive_ = false; s_.setCue(false, cueDivision_); }
+        return;
+    }
+    if (recordingNow()) { say("FINISH RECORDING FIRST"); return; }
+    if (!loopAny_ || st_.loopSamples <= 0) { say("NO LOOP FOR CUE"); return; }
+    if (!cueActive_) {
+        cueActive_ = true;
+        s_.setCue(true, cueDivision_);
+    }
+}
 void SamplerApp::loopRecord() {
     if (st_.freeArmed || st_.freeRecording) { s_.freeRecord(track_, false); say("LOOP SET"); return; }
     if (!loopAny_ && !st_.track_clip_rec[track_]) {   // a clean looper: arm the first take, it starts with the first note (or sound) and sets the loop length
@@ -445,7 +457,7 @@ void SamplerApp::button(int b, bool down) {
             octUpAt_ = nowMs_;
             cueReturnPage_ = page_;
         } else {
-            if (cueActive_) { cueActive_ = false; s_.setCue(false, cueDivision_); }
+            cueHold(false);
             if (cueSelect_) page_ = cueReturnPage_;
             cueSelect_ = false;
         }
@@ -453,8 +465,7 @@ void SamplerApp::button(int b, bool down) {
     }
     if (b == OCT_DOWN) return;
     if (b == PLAY && !down && cueActive_) {
-        cueActive_ = false;
-        s_.setCue(false, cueDivision_);    // gate: release PLAY to return to the normal loop
+        cueHold(false);    // gate: release PLAY to return to the normal loop
         return;
     }
     if (b == SAVE) {   // only the LOOP page: saving and clearing loops lives in the phone's PROJECT menu
@@ -478,8 +489,7 @@ void SamplerApp::button(int b, bool down) {
             if (!loopAny_ || st_.loopSamples <= 0) { say("NO LOOP FOR CUE"); break; }
             if (!cueSelect_) { cueReturnPage_ = page_; cueSelect_ = true; }
             page_ = P_CUE;
-            cueActive_ = true;
-            s_.setCue(true, cueDivision_);
+            cueHold(true);
             break;
         }
         if (held_ & (1u << OCT_DOWN)) {
