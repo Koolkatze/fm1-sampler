@@ -478,9 +478,10 @@ std::string SamplerApp::loopText() const {
 void SamplerApp::keyEvent(int raw, bool down) {   // MIDI scene bank in LOOP mode; ordinary keyboard elsewhere
     if (raw < 0 || raw > 127) return;
     if (sceneKeys_ && !songMode_) {
-        // External MIDI C1=24..B1=35; the physical FM-1's first octave is
-        // encoded as 53..64, mapped onto those same 12 scene pads.
-        const int slot = raw >= 24 && raw <= 35 ? raw - 24 :
+        // Ableton labels MIDI 36..47 as C1..B1. Also accept scientific C1
+        // (24..35), while the physical FM-1 first 12 keys arrive as 53..64.
+        const int slot = raw >= 36 && raw <= 47 ? raw - 36 :
+                         raw >= 24 && raw <= 35 ? raw - 24 :
                          raw >= 53 && raw <= 64 ? raw - 53 : -1;
         if (slot >= 0) { if (down) selectScene(slot, true); return; }
     }
