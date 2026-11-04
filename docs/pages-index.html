@@ -25,6 +25,11 @@ small,footer{color:#97aead}ul{padding-left:20px;color:#c5d5d5}li+li{margin-top:8
 <p class="eyebrow">M-VAVE FM-1 · ferluht/fm1-sampler · HTTPS</p>
 <h1>FM1-Sampler Workbench</h1>
 <p>Mobile-friendly launcher for the original firmware installer. The firmware image has not been modified or rebuilt.</p>
+<section aria-label="Firmware Hub compatibility notice" style="border-color:#987347;background:#2b2720">
+<h2 class="warning">Important: do not import the standalone .fwsc into Firmware Hub</h2>
+<p>The extracted <code>FM1-Sampler-v0.37.fwsc</code> includes M-VAVE's vendor update loader, not the verified Felucca update loader that Firmware Hub requires for this custom firmware. Firmware Hub correctly refuses this combination. Renaming the file or changing its metadata cannot make it a verified Felucca package.</p>
+<p>For this particular release, use the <strong>embedded firmware update</strong> in the original Workbench below, which checks the bundled package and its loader against the author's own metadata. Do not attempt an update if the Workbench cannot positively identify your device or if it suggests an unsupported migration. The original author reports no physical FM-1 validation of this release.</p>
+</section>
 <section>
 <h2>1. Check MIDI + SysEx permission</h2>
 <p>Use a full Chrome tab on Android. Plug the powered FM-1 into your phone with a USB data/OTG cable and approve Android's USB prompt if shown.</p>
