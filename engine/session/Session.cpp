@@ -52,6 +52,22 @@ struct Session::Impl {
         explicit Track(int sr) : tape(sr) {}
     };
 
+    struct Scene {
+        bool filled = false;
+        int32_t samples = 0;
+        float tempo = 120.f;
+        int bars = 4;
+        std::array<std::shared_ptr<std::vector<float>>, kTracks> clips{};
+        std::array<bool, kTracks> has{};
+    };
+    std::array<Scene, Session::kScenes> scenes;
+    int activeScene = -1, pendingScene = -1;
+    double pendingAt = 0;   // audio frame of the next whole-bar boundary
+    int sceneFadeFrames = 0;  // short scene start fade, no click on clip changes
+    std::vector<int> songOrder;
+    int songStep = -1;
+    bool songPlaying = false;
+
     int sr;
     std::vector<std::unique_ptr<Track>> tracks;
     Reverb reverb; TapeDelay delay;
@@ -104,6 +120,9 @@ struct Session::Impl {
     std::atomic<uint32_t> a_cpu{0}, a_clip_mask{0}, a_cliprec_mask{0};
     std::atomic<int> a_bars{4}, a_sampleState{0}, a_sampleTrack{0}, a_sampleVersion{0}, a_sampleFails{0};
     std::atomic<int32_t> a_loop{0};
+    std::atomic<uint32_t> a_sceneMask{0};
+    std::atomic<int> a_activeScene{-1}, a_queuedScene{-1}, a_songStep{-1}, a_songSize{0};
+    std::atomic<bool> a_songPlaying{false};
     std::atomic<float> a_clipPos{0.f}, a_lfo[kTracks], a_scGain[kTracks], a_scLevel[kTracks];
     std::atomic<int> a_voiceN[kTracks]; std::atomic<float> a_voicePos[kTracks][kVoiceMax], a_voiceLvl[kTracks][kVoiceMax];
 
@@ -130,6 +149,35 @@ struct Session::Impl {
     void job(std::function<void()> f) { { std::lock_guard<std::mutex> l(wMtx); jobs.push_back(std::move(f)); } wCv.notify_one(); }
     void post(std::function<void()> f) { std::lock_guard<std::mutex> l(cmdMtx); cmds.push_back(std::move(f)); }
     template <class T> void bury(std::unique_ptr<T> p) { if (p) { auto sp = std::make_shared<std::unique_ptr<T>>(std::move(p)); job([sp] { sp->reset(); }); } }   // freed on the worker, not in the audio callback
+
+    void updateSceneMask() {
+        uint32_t mask = 0;
+        for (int i = 0; i < Session::kScenes; ++i) if (scenes[(size_t)i].filled) mask |= 1u << i;
+        a_sceneMask.store(mask);
+    }
+
+    // Change all 8 loop tracks together. Copy-on-write clips make this constant-time
+    // even when a scene contains long samples. No pointers into unloaded files.
+    void activateScene(int slot) {
+        if (slot < 0 || slot >= Session::kScenes || !scenes[(size_t)slot].filled) return;
+        const Scene& sc = scenes[(size_t)slot];
+        if (sc.samples <= 0) return;
+        for (int i = 0; i < kTracks; i++) {
+            auto& t = *tracks[(size_t)i];
+            releaseAll(t);
+            t.clip = sc.has[(size_t)i] ? sc.clips[(size_t)i] : std::make_shared<std::vector<float>>();
+            t.clipHas = sc.has[(size_t)i]; t.clipRec = false; t.recPrevOk = false;
+        }
+        loopSamples = sc.samples; a_loop = loopSamples;
+        loopBars = sc.bars; a_bars = loopBars;
+        bpm = sc.tempo; a_bpm = bpm;
+        activeScene = slot; pendingScene = -1; a_activeScene = slot; a_queuedScene = -1;
+        pos = tapePos = 0.0;
+        playing = true; stopping = false; rate = 1.0;
+        scrubActive = scrubTail = false;
+        cueActive = false; cueMix = 0.f;
+        sceneFadeFrames = std::max(1, sr / 180);  // about 5.5 ms
+    }
 
     // ---- notes ----
     void releaseAll(Track& t) {
