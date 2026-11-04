@@ -22,7 +22,7 @@ public:
     using Send = std::function<void(const uint8_t*, size_t)>;
     static constexpr int kTracks = 8;
     enum Button { OCT_DOWN, OCT_UP, FX, SEL, ENV, LFO, EDIT, GLO, HOME, SAVE, ARP, SEQ, PLAY, REC };
-    enum Page { P_HOME, P_FX, P_ENV, P_LFO, P_ARP, P_SEQ, P_MIX, P_KEY, P_SAVE, P_LEN, kPages };
+    enum Page { P_HOME, P_FX, P_ENV, P_LFO, P_ARP, P_SEQ, P_MIX, P_KEY, P_SAVE, P_LEN, P_CUE, kPages };
     struct Knob {
         std::string name, value;
         float norm = 0;
@@ -168,6 +168,10 @@ private:
     int heldNote_[128];
     int keyNotes_[128][3] = {}; int keyCount_[128] = {};
     bool fwDirty_ = true; uint32_t lenAt_ = 0;
+    int cueDivision_ = 2;                 // 1/4 default, selectable 1/1..1/32
+    bool cueActive_ = false, cueSelect_ = false;
+    uint32_t octUpAt_ = 0;
+    Page cueReturnPage_ = P_HOME;
     uint32_t held_ = 0;
     ScaleState scale_;
     uint32_t touchedAt_ = 0; int touchedKnob_ = -1;
