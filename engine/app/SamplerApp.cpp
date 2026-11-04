@@ -14,7 +14,7 @@ void setPalette(bool light) {
     if (light) { BLACK = rgb(241, 239, 233); PAPER = rgb(17, 17, 17); DIM = rgb(154, 150, 140); BAR = rgb(214, 211, 201); ACCENT = rgb(255, 90, 10); }
     else { BLACK = rgb(0, 0, 0); PAPER = rgb(255, 255, 255); DIM = rgb(106, 106, 106); BAR = rgb(42, 42, 42); ACCENT = rgb(255, 106, 31); }
 }
-const char* kPage[] = {"SAMPLE", "FX", "ENVELOPE", "LFO", "ARP", "TAPE", "MIXER", "KEY", "LOOP", "LENGTH"};
+const char* kPage[] = {"SAMPLE", "FX", "ENVELOPE", "LFO", "ARP", "TAPE", "MIXER", "KEY", "LOOP", "LENGTH", "CUE"};
 const char* kAlgo[] = {"MELODIC", "ONE-SHOT", "LOOPED", "KIT/SLICE", "GRANULAR", "PAULSTRETCH"};
 const char* kScaleName[] = {"CHROM", "MIX", "MAJ", "MIN", "HMIN", "PHRYG", "MIN+", "OFF"};
 const char* kNote[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
@@ -307,6 +307,11 @@ SamplerApp::Knobs SamplerApp::knobs(Page p) {
         k[3] = b;
         break;
     }
+    case P_CUE:
+        k[0] = choice("RATE", &cueDivision_, {"1/1", "1/2", "1/4", "1/8", "1/16", "1/32"},
+                      [this] { if (cueActive_) s_.setCue(true, cueDivision_); });
+        // Keep the remaining encoders inert during the momentary beat-repeat.
+        break;
     default: break;
     }
     return k;
@@ -324,6 +329,18 @@ void SamplerApp::transportPlay() {   // while recording the first press ends the
 void SamplerApp::transportSet(bool play) {
     if (recordingNow()) { if (!play) endRecording(); return; }
     s_.play(play);
+}
+void SamplerApp::cueHold(bool down) {
+    if (!down) {
+        if (cueActive_) { cueActive_ = false; s_.setCue(false, cueDivision_); }
+        return;
+    }
+    if (recordingNow()) { say("FINISH RECORDING FIRST"); return; }
+    if (!loopAny_ || st_.loopSamples <= 0) { say("NO LOOP FOR CUE"); return; }
+    if (!cueActive_) {
+        cueActive_ = true;
+        s_.setCue(true, cueDivision_);
+    }
 }
 void SamplerApp::loopRecord() {
     if (st_.freeArmed || st_.freeRecording) { s_.freeRecord(track_, false); say("LOOP SET"); return; }
@@ -435,6 +452,22 @@ void SamplerApp::onSysex(const uint8_t* m, size_t n) {
 void SamplerApp::button(int b, bool down) {
     lastLed_ = ~0ull;   // the firmware's own LED handling must not win: the active page stays lit, the others go dark
     if (down) held_ |= 1u << b; else held_ &= ~(1u << b);
+    if (b == OCT_UP) {
+        if (down) {
+            octUpAt_ = nowMs_;
+            cueReturnPage_ = page_;
+        } else {
+            cueHold(false);
+            if (cueSelect_) page_ = cueReturnPage_;
+            cueSelect_ = false;
+        }
+        return;   // octave changes arrive separately as EV_SCALE on short standalone taps
+    }
+    if (b == OCT_DOWN) return;
+    if (b == PLAY && !down && cueActive_) {
+        cueHold(false);    // gate: release PLAY to return to the normal loop
+        return;
+    }
     if (b == SAVE) {   // only the LOOP page: saving and clearing loops lives in the phone's PROJECT menu
         if (down) page_ = P_SAVE;
         return;
@@ -450,7 +483,25 @@ void SamplerApp::button(int b, bool down) {
     case EDIT: page_ = P_MIX; break;
     case GLO: page_ = P_KEY; break;
     case SEL: page_ = P_LEN; break;
-    case PLAY: transportPlay(); break;
+    case PLAY:
+        if (held_ & (1u << OCT_UP)) {
+            if (recordingNow()) { endRecording(); break; }
+            if (!loopAny_ || st_.loopSamples <= 0) { say("NO LOOP FOR CUE"); break; }
+            if (!cueSelect_) { cueReturnPage_ = page_; cueSelect_ = true; }
+            page_ = P_CUE;
+            cueHold(true);
+            break;
+        }
+        if (held_ & (1u << OCT_DOWN)) {
+            if (recordingNow()) { endRecording(); break; }
+            s_.setCue(false, cueDivision_);
+            s_.seek(0.f);
+            s_.play(true);
+            say("LOOP FROM START");
+            break;
+        }
+        transportPlay();
+        break;
     case REC: loopRecord(); break;
     default: break;
     }
@@ -472,6 +523,12 @@ void SamplerApp::tick(uint32_t now) {
     if (fwDirty_) { fwDirty_ = false; sysex(6, {7, (uint8_t)scale_.root, (uint8_t)(scale_.octave + 3), (uint8_t)scale_.mode}, true); }
     if (repaintAt_ && now >= repaintAt_) { repaintAt_ = repaintAt_ + 2500 < now + 2500 && repaintCount_++ < 1 ? now + 2500 : 0; needClear_ = true; }
     st_ = s_.status();
+    // OCT+ held for two seconds opens the beat division selector without changing key octave.
+    if ((held_ & (1u << OCT_UP)) && !cueSelect_ && now - octUpAt_ >= 2000U) {
+        cueReturnPage_ = page_;
+        cueSelect_ = true;
+        page_ = P_CUE;
+    }
     loopAny_ = false;
     for (int t = 0; t < kTracks; t++) loopAny_ |= st_.track_has_clip[t];
     if (now - lastLoss_ > 4000 && now - lastRaise_ > 2000 && gap_ > 16) { gap_ = std::max<uint32_t>(16, gap_ * 9 / 10); lastRaise_ = now; }
@@ -592,7 +649,7 @@ void SamplerApp::leds() {
 void SamplerApp::draw(uint32_t now) {
     static int lastLight = -1; if ((int)theme::light != lastLight) { lastLight = theme::light; setPalette(theme::light); needClear_ = true; }
     static int lastHero = -1;
-    const int heroKind = mic_ == 1 || mic_ == 2 ? 6 : page_ == P_ENV ? 1 : page_ == P_LFO ? 2 : page_ == P_MIX ? 3 : page_ == P_KEY ? 4 : page_ == P_LEN ? 5 : 0;
+    const int heroKind = mic_ == 1 || mic_ == 2 ? 6 : page_ == P_ENV ? 1 : page_ == P_LFO ? 2 : page_ == P_MIX ? 3 : page_ == P_KEY ? 4 : page_ == P_LEN ? 5 : page_ == P_CUE ? 7 : 0;
     if (heroKind != lastHero) { lastHero = heroKind; needClear_ = true; }
     if (needClear_) { fwDirty_ = true; clear(BLACK); std::fill(cells_.begin(), cells_.end(), SurfaceCell()); std::fill(rects_.begin(), rects_.end(), ~0ull); needResend_ = false; }
     else if (needResend_) { needResend_ = false; std::fill(cells_.begin(), cells_.end(), SurfaceCell()); std::fill(rects_.begin(), rects_.end(), ~0ull); }
@@ -621,10 +678,12 @@ void SamplerApp::draw(uint32_t now) {
     std::string line;
     if (mic_ == 1) line = "MIC: WAITING FOR SOUND";
     else if (mic_ == 2) line = fmt("MIC: RECORDING %.1fS", st_.sampleSeconds);
+    else if (cueActive_) line = std::string("CUE 1/") + std::to_string(1 << cueDivision_) + "  REPEATING";
+    else if (cueSelect_) line = "CUE RATE: TURN K1, HOLD PLAY";
     else if (!toast().empty()) line = toast();
     else if (auditionAt_) { const Entry& e = lib_[(size_t)libCursor_]; line = ">" + e.label + "  " + e.group; }
     else line = std::string(kAlgo[ts_[track_].algo]) + "  " + loopText();
-    const bool hot = !toast().empty() || mic_ || auditionAt_ || st_.freeRecording || recNow || st_.freeArmed;
+    const bool hot = cueActive_ || cueSelect_ || !toast().empty() || mic_ || auditionAt_ || st_.freeRecording || recNow || st_.freeArmed;
     const bool hasLoopBar = loopAny_ && st_.loopSamples > 0;
     const int px = (int)(st_.track_has_clip[track_] ? st_.clipPos[track_] * 216 : (hasLoopBar ? st_.pos / st_.loopSamples * 216 : 0));
     static int lastPx = -1; if (px != lastPx) { lastPx = px; rects_[24] = ~0ull; }   // the bar is redrawn under the growing fill
@@ -653,7 +712,7 @@ void SamplerApp::draw(uint32_t now) {
         rects_[70 + i] = ~0ull;
         rect(70 + i, cx, cy + 38, bw, 3, ACCENT);
     }
-    const char* hint = mic_ == 1 ? (page_ == P_SAVE ? "K4 = TRIGGER LEVEL  LINE = THRESHOLD" : "K1 = TRIGGER LEVEL  LINE = THRESHOLD") : mic_ == 2 ? "RECORDING  K1 ON LOOP PAGE STOPS"  : page_ == P_LEN ? "TURN K1: X2 OR /2  THE LOOP REPEATS" : page_ == P_SAVE ? "SAVE AND CLEAR LOOPS: PROJECT MENU ON THE PHONE" : page_ == P_KEY ? "KEYS FOLLOW THE KEY  CHANGE ANY TIME"
+    const char* hint = mic_ == 1 ? (page_ == P_SAVE ? "K4 = TRIGGER LEVEL  LINE = THRESHOLD" : "K1 = TRIGGER LEVEL  LINE = THRESHOLD") : mic_ == 2 ? "RECORDING  K1 ON LOOP PAGE STOPS"  : page_ == P_CUE ? "K1 RATE LIVE  HOLD OCT+ AND PLAY" : page_ == P_LEN ? "TURN K1: X2 OR /2  THE LOOP REPEATS" : page_ == P_SAVE ? "SAVE AND CLEAR LOOPS: PROJECT MENU ON THE PHONE" : page_ == P_KEY ? "KEYS FOLLOW THE KEY  CHANGE ANY TIME"
                      : "SEL TRACK  PRE BROWSE  ALG ALGORITHM";
     drawText(90, 12, 228, 1, DIM, BLACK, hint, 38);
     needClear_ = false;
@@ -682,6 +741,9 @@ void SamplerApp::hero(uint32_t now, const Knobs& k) {
             float live[2048]; const int ln = s_.livePeaks(live, 2048), per = std::max(1, (ln + n - 1) / n);
             for (int i = 0; i < n; i++) { float v = 0; for (int j = i * per; j < std::min(ln, (i + 1) * per); j++) v = std::max(v, live[j]); column(i, x0 + i * 4, 3, (int)(std::min(1.f, v * 1.1f) * H) + 1, i * per < ln ? PAPER : BAR, false); }
         }
+    } else if (page_ == P_CUE) {
+        drawText(100, x0, y0 + 8, 3, ACCENT, BLACK, std::string("1/") + std::to_string(1 << cueDivision_), 9);
+        drawText(101, x0, y0 + 32, 2, PAPER, BLACK, cueActive_ ? "CUE REPEATING" : "HOLD PLAY FOR CUE", 18);
     } else if (page_ == P_LEN) {   // the loop length in big letters
         char b[32];
         if (st_.loopSamples > 0) snprintf(b, sizeof b, "%.0f BARS", (double)st_.loopBars); else snprintf(b, sizeof b, "NO LOOP");

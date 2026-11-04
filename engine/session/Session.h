@@ -89,6 +89,7 @@ public:
     void scrubMove(float fraction);
     void scrubEnd();                      // the finger lifts: the tape returns to the transport speed, or comes to a stop
     void seek(float fraction);            // move the playhead to a place of the loop (0..1): all loops share it
+    void setCue(bool on, int division);    // momentary beat-repeat from current position; 0..5 = 1/1..1/32
     void setLoopSpeed(float speed);       // 0.25..2, tape speed of all loops together; 1 = locked to the transport
     void setLoopSource(int src);          // what the loop records: 0 microphone, 1 the track's sound
     bool saveClip(int track);             // the loop of `track` as sample_*.wav in the data dir
