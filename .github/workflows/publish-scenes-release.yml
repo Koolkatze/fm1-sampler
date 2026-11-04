@@ -4,65 +4,99 @@ on:
   push:
     branches: [feature/scene-launcher-song-mode]
     paths:
+      - 'android/app/src/main/AndroidManifest.xml'
+      - 'android/app/src/main/res/**'
+      - 'android/app/build.gradle'
       - '.github/workflows/publish-scenes-release.yml'
+  workflow_dispatch:
 
 permissions:
-  actions: read
   contents: write
 
+concurrency:
+  group: fm1-scenes-publish-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  release:
+  build-and-release:
     runs-on: ubuntu-latest
     steps:
-      - name: Download previously tested Android APK
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Checkout Scenes source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK, NDK and CMake
+        run: |
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          for attempt in 1 2 3; do
+            if "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-34" "build-tools;34.0.0" "ndk;27.2.12479018" "cmake;3.22.1"; then
+              break
+            fi
+            echo "SDK installation attempt $attempt failed"
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep 8
+          done
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Compile APK with monochrome cassette and orange dot launcher icon
+        working-directory: android
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Inspect and stage APK
         run: |
           mkdir -p dist
-          gh run download 41914448880 \
-            --repo "$GITHUB_REPOSITORY" \
-            --name FM1-Sampler-CUE-APK \
-            --dir dist
-          test -s dist/app-debug.apk
-          mv dist/app-debug.apk dist/FM1-Sampler-Scenes-SongMode.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Scenes-SongMode.apk
           unzip -t dist/FM1-Sampler-Scenes-SongMode.apk | tail -n 1
+          unzip -l dist/FM1-Sampler-Scenes-SongMode.apk | grep -E 'ic_launcher|AndroidManifest'
           sha256sum dist/FM1-Sampler-Scenes-SongMode.apk
 
-      - name: Create release and attach APK
+      - name: Publish APK in new GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v0.37-scenes-preview.1
+          TAG: v0.37-scenes-preview.2
         run: |
           cat > release-notes.md <<'EOF'
-          ## FM1 Sampler — Scenes + Song Mode (Android preview)
+          ## FM1 Sampler Scenes + Song Mode — launcher icon update
 
           **Install the attached `FM1-Sampler-Scenes-SongMode.apk` on Android.**
-          This is the phone app, not an FM-1 hardware firmware image.
 
-          - PROJECT now shows its existing loop/project operations and a separate Loop/Song panel; panels adapt to screen width in the original light and dark styles.
-          - **LOOP MODE:** save up to 12 scenes (C1..B1), selecting any of the eight existing track loops, and launch them live with bar-synced transitions.
-          - **SONG MODE:** arrange saved scenes in a sequence (up to 64 steps), repeat or reorder steps, and play through the complete song before stopping.
-          - Saved scene audio and song order persist in private app storage.
-          - External MIDI scene pads support Ableton Live C1=36 / D1=38, scientific C1=24 / D1=26, and the physical FM-1's first keys 53..64 when forwarded through MIDI.
-          - Includes the previous sampler and CUE functions.
+          - New cassette-tape application icon, split white and black with an orange dot, displayed by the Android launcher.
+          - All existing LOOP MODE (C1–B1) and SONG MODE functionality retained.
+          - PROJECT panels continue to use the original light/dark design.
+          - Includes the earlier FM1 Sampler CUE feature.
+          - Package: `com.ferluht.fm1sampler.scenes`.
+          - Preview version: 0.37.1-scenes-test (versionCode 38).
 
-          **Compatibility:** This is a separately installable **preview** build, package
-          `com.ferluht.fm1sampler.scenes`, based on the unmerged Scenes feature branch
-          ([PR #2](https://github.com/Koolkatze/fm1-sampler/pull/2)).
-          The current debug-signing key and app data are separate from other FM1 Sampler apps.
-          GitHub Actions validated engine tests and APK compilation; real-phone and
-          physical-controller behavior still needs user testing.
+          **Important:** GitHub builds of this preview use the Android default
+          debug signing key, which can differ between CI runs. If Android
+          refuses to update an earlier preview due to a signing mismatch, do
+          not uninstall until you have safeguarded any project data. An
+          uninstall may erase the app's privately stored scenes and songs.
 
-          Source and detailed usage: [Scenes and Song Mode guide](https://github.com/Koolkatze/fm1-sampler/blob/feature/scene-launcher-song-mode/docs/SCENES_AND_SONG.md).
+          A Nothing OS monochrome icon pack may recolor app icons regardless
+          of the original APK asset. To retain the split white/black and orange
+          in the launcher, choose the original/default icon presentation
+          rather than a forced monochrome icon pack.
+
+          Source: [Scenes + Song Mode](https://github.com/Koolkatze/fm1-sampler/pull/2).
           EOF
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/FM1-Sampler-Scenes-SongMode.apk \
-              --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$TAG" dist/FM1-Sampler-Scenes-SongMode.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md
           else
             gh release create "$TAG" dist/FM1-Sampler-Scenes-SongMode.apk \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
-              --title 'FM1 Sampler — Scenes + Song Mode (Android preview)' \
+              --title "FM1 Sampler Scenes + Song Mode — cassette icon" \
               --notes-file release-notes.md \
               --prerelease
           fi
