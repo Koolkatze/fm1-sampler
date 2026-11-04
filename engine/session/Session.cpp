@@ -121,6 +121,7 @@ struct Session::Impl {
     std::atomic<int> a_bars{4}, a_sampleState{0}, a_sampleTrack{0}, a_sampleVersion{0}, a_sampleFails{0};
     std::atomic<int32_t> a_loop{0};
     std::atomic<uint32_t> a_sceneMask{0};
+    std::atomic<uint8_t> a_sceneTracks[Session::kScenes];
     std::atomic<int> a_activeScene{-1}, a_queuedScene{-1}, a_songStep{-1}, a_songSize{0};
     std::atomic<bool> a_songPlaying{false}, a_arrangementLoaded{false};
     std::atomic<int> a_arrangementSize{0};
@@ -140,6 +141,7 @@ struct Session::Impl {
         for (auto& a : a_scLevel) a = 0.f;
         for (auto& a : a_voiceN) a = 0;
         for (auto& a : a_arrangement) a = -1;
+        for (auto& a : a_sceneTracks) a = 0;
         worker = std::thread([this] {
             for (;;) {
                 std::function<void()> j;
@@ -155,7 +157,13 @@ struct Session::Impl {
 
     void updateSceneMask() {
         uint32_t mask = 0;
-        for (int i = 0; i < Session::kScenes; ++i) if (scenes[(size_t)i].filled) mask |= 1u << i;
+        for (int i = 0; i < Session::kScenes; ++i) {
+            uint8_t tracks = 0;
+            for (int t = 0; t < kTracks; ++t)
+                if (scenes[(size_t)i].has[(size_t)t]) tracks |= (uint8_t)(1u << t);
+            a_sceneTracks[(size_t)i].store(tracks);
+            if (scenes[(size_t)i].filled) mask |= 1u << i;
+        }
         a_sceneMask.store(mask);
     }
 
@@ -881,17 +889,18 @@ void Session::setCue(bool on, int division) {
         }
     });
 }
-void Session::captureScene(int slot) {
+void Session::captureScene(int slot, uint8_t tracks) {
     if (slot < 0 || slot >= kScenes) return;
-    d->post([this, slot] {
-        if (d->loopSamples <= 0 || d->freeArmed || d->freeRec) return;
+    d->post([this, slot, tracks] {
+        if (d->loopSamples <= 0 || !tracks || d->freeArmed || d->freeRec) return;
         for (const auto& t : d->tracks) if (t->clipRec) return;
         auto& sc = d->scenes[(size_t)slot];
         sc = Impl::Scene{};
         sc.samples = d->loopSamples; sc.tempo = d->bpm; sc.bars = d->loopBars;
         for (int i = 0; i < kTracks; ++i) {
             const auto& t = *d->tracks[(size_t)i];
-            sc.has[(size_t)i] = t.clipHas && t.clip && t.clip->size() == (size_t)d->loopSamples * 2;
+            sc.has[(size_t)i] = !!(tracks & (1u << i)) && t.clipHas &&
+                t.clip && t.clip->size() == (size_t)d->loopSamples * 2;
             if (sc.has[(size_t)i]) {
                 sc.clips[(size_t)i] = t.clip;
                 sc.filled = true;
@@ -1065,6 +1074,7 @@ Session::Status Session::status() const {
     s.sampleState = d->a_sampleState; s.sampleTrack = d->a_sampleTrack; s.sampleSeconds = d->a_sampleSec; s.inputPeak = d->a_inPeak;
     s.sampleVersion = d->a_sampleVersion; s.sampleFails = d->a_sampleFails; s.samplePending = d->a_pending;
     s.sceneMask = d->a_sceneMask; s.activeScene = d->a_activeScene;
+    for (int i = 0; i < kScenes; ++i) s.sceneTracks[i] = d->a_sceneTracks[(size_t)i];
     s.queuedScene = d->a_queuedScene; s.songPlaying = d->a_songPlaying;
     s.songStep = d->a_songStep; s.songSize = d->a_songSize;
     s.arrangementLoaded = d->a_arrangementLoaded;
