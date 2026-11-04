@@ -1,0 +1,48 @@
+name: Publish FM1-Sampler Workbench
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'firmware/FM1-Sampler-Workbench.html'
+      - 'docs/pages-index.html'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout the fork
+        uses: actions/checkout@v4
+      - name: Verify embedded firmware installer exists
+        run: |
+          test -s firmware/FM1-Sampler-Workbench.html
+          grep -qi '<!doctype html>' firmware/FM1-Sampler-Workbench.html
+      - name: Stage static HTTPS site (without rebuilding firmware)
+        run: |
+          mkdir -p _site
+          cp docs/pages-index.html _site/index.html
+          cp firmware/FM1-Sampler-Workbench.html _site/workbench.html
+          touch _site/.nojekyll
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
