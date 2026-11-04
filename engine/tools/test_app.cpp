@@ -185,6 +185,23 @@ int main() {
         run(0.4);
         CHECK(std::filesystem::exists("/tmp/fm1sampler_t2/fm1_scenes.dat"),
               "saved scenes and Song Mode order are persisted for the next launch");
+        {
+            Session restored(sr);
+            restored.setDataDir("/tmp/fm1sampler_t2");
+            std::vector<float> o(512), input(512, 0.f);
+            Session::Status loaded{};
+            for (int i = 0; i < 80; ++i) {
+                restored.process(o.data(), input.data(), 256);
+                loaded = restored.status();
+                if (loaded.arrangementLoaded) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(4));
+            }
+            CHECK(loaded.arrangementLoaded && (loaded.sceneMask & 5u) == 5u &&
+                  loaded.sceneTracks[0] == 1u && (loaded.sceneTracks[2] & 3u) == 3u &&
+                  loaded.arrangementSize == 3 && loaded.arrangement[0] == 0 &&
+                  loaded.arrangement[1] == 2 && loaded.arrangement[2] == 0,
+                  "saved C1/D1 loop packs and the C1-D1-C1 song survive app restart");
+        }
 
         // Project sheet must render two separate columns in both existing themes.
         SamplerUI ui(app); ui.setSize(860.f, 400.f, 0.f, 0.f);
@@ -203,6 +220,22 @@ int main() {
                   light ? "light" : "dark");
         }
         theme::apply(true);
+        // A narrower screen must switch between project and scene columns
+        // rather than draw both on top of each other.
+        ui.setSize(640.f, 400.f, 0.f, 0.f);
+        ui.frame(now + 3);
+        bool narrowProject = false, narrowSong = false;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+            narrowProject |= op.text == "PROJECT"; narrowSong |= op.text == "SONG MODE";
+        }
+        CHECK(narrowProject && !narrowSong, "narrow screen shows PROJECT alone");
+        ui.touch(0, 490, 32, now + 3); ui.touch(2, 490, 32, now + 3);
+        ui.frame(now + 4);
+        narrowProject = narrowSong = false;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+            narrowProject |= op.text == "PROJECT"; narrowSong |= op.text == "SONG MODE";
+        }
+        CHECK(!narrowProject && narrowSong, "narrow screen switches to scene/song column");
         app.setSongMode(false);
         app.loopClear(); run(0.25);
     }
