@@ -122,7 +122,9 @@ struct Session::Impl {
     std::atomic<int32_t> a_loop{0};
     std::atomic<uint32_t> a_sceneMask{0};
     std::atomic<int> a_activeScene{-1}, a_queuedScene{-1}, a_songStep{-1}, a_songSize{0};
-    std::atomic<bool> a_songPlaying{false};
+    std::atomic<bool> a_songPlaying{false}, a_arrangementLoaded{false};
+    std::atomic<int> a_arrangementSize{0};
+    std::atomic<int> a_arrangement[64];
     std::atomic<float> a_clipPos{0.f}, a_lfo[kTracks], a_scGain[kTracks], a_scLevel[kTracks];
     std::atomic<int> a_voiceN[kTracks]; std::atomic<float> a_voicePos[kTracks][kVoiceMax], a_voiceLvl[kTracks][kVoiceMax];
 
@@ -137,6 +139,7 @@ struct Session::Impl {
         for (auto& a : a_scGain) a = 1.f;
         for (auto& a : a_scLevel) a = 0.f;
         for (auto& a : a_voiceN) a = 0;
+        for (auto& a : a_arrangement) a = -1;
         worker = std::thread([this] {
             for (;;) {
                 std::function<void()> j;
@@ -177,6 +180,113 @@ struct Session::Impl {
         scrubActive = scrubTail = false;
         cueActive = false; cueMix = 0.f;
         sceneFadeFrames = std::max(1, sr / 180);  // about 5.5 ms
+    }
+
+    // Save/load whole scenes off the audio thread. The shared buffers cannot
+    // change while the worker reads them: live overdubs use copy-on-write.
+    void persistScenes() {
+        if (dataDir.empty()) return;
+        const auto copy = scenes;
+        const auto order = songOrder;
+        const int sampleRate = sr;
+        const std::string dir = dataDir;
+        job([copy, order, sampleRate, dir] {
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            fs::create_directories(dir, ec);
+            const auto temp = dir + "/fm1_scenes.tmp";
+            const auto path = dir + "/fm1_scenes.dat";
+            std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+            if (!out) return;
+            auto put = [&](const auto& value) { out.write(reinterpret_cast<const char*>(&value), sizeof(value)); };
+            const uint32_t magic = 0x314E4353; // SCN1
+            const uint32_t rate = (uint32_t)sampleRate;
+            put(magic); put(rate);
+            for (const auto& sc : copy) {
+                const uint8_t filled = sc.filled ? 1 : 0;
+                put(filled);
+                if (!filled) continue;
+                put(sc.samples); put(sc.tempo); put(sc.bars);
+                for (int t = 0; t < kTracks; ++t) {
+                    const auto& ptr = sc.clips[(size_t)t];
+                    const uint8_t has = sc.has[(size_t)t] && ptr &&
+                        ptr->size() == (size_t)sc.samples * 2 ? 1 : 0;
+                    put(has);
+                    if (has) out.write(reinterpret_cast<const char*>(ptr->data()),
+                                       (std::streamsize)(ptr->size() * sizeof(float)));
+                }
+            }
+            const uint32_t len = (uint32_t)std::min<size_t>(64, order.size());
+            put(len);
+            for (uint32_t i = 0; i < len; ++i) {
+                const uint8_t slot = (uint8_t)order[i];
+                put(slot);
+            }
+            out.flush();
+            if (!out.good()) { out.close(); fs::remove(temp, ec); return; }
+            out.close();
+            fs::rename(temp, path, ec);
+            if (ec) { fs::remove(path, ec); ec.clear(); fs::rename(temp, path, ec); }
+            if (ec) fs::remove(temp, ec);
+        });
+    }
+    void restoreScenes() {
+        if (dataDir.empty()) return;
+        const auto path = dataDir + "/fm1_scenes.dat";
+        const int sampleRate = sr;
+        job([this, path, sampleRate] {
+            std::array<Scene, Session::kScenes> loaded;
+            std::vector<int> order;
+            std::ifstream in(path, std::ios::binary);
+            bool ok = (bool)in;
+            auto get = [&](auto& value) {
+                in.read(reinterpret_cast<char*>(&value), sizeof(value));
+                if (!in) ok = false;
+            };
+            if (ok) {
+                uint32_t magic = 0, rate = 0; get(magic); get(rate);
+                if (magic != 0x314E4353 || rate != (uint32_t)sampleRate) ok = false;
+            }
+            size_t totalFloats = 0;
+            for (int i = 0; ok && i < Session::kScenes; ++i) {
+                auto& sc = loaded[(size_t)i];
+                uint8_t filled = 0; get(filled);
+                if (!filled) continue;
+                get(sc.samples); get(sc.tempo); get(sc.bars);
+                if (sc.samples <= 0 || sc.samples > sampleRate * 180 ||
+                    sc.tempo < 30.f || sc.tempo > 300.f ||
+                    sc.bars < 1 || sc.bars > 32) { ok = false; break; }
+                for (int t = 0; ok && t < kTracks; ++t) {
+                    uint8_t has = 0; get(has);
+                    if (!has) continue;
+                    const size_t n = (size_t)sc.samples * 2;
+                    totalFloats += n;
+                    if (totalFloats > 100000000) { ok = false; break; }
+                    auto ptr = std::make_shared<std::vector<float>>(n);
+                    in.read(reinterpret_cast<char*>(ptr->data()), (std::streamsize)(n * sizeof(float)));
+                    if (!in) { ok = false; break; }
+                    sc.clips[(size_t)t] = std::move(ptr); sc.has[(size_t)t] = true;
+                    sc.filled = true;
+                }
+            }
+            if (ok) {
+                uint32_t len = 0; get(len);
+                if (len > 64) ok = false;
+                for (uint32_t i = 0; ok && i < len; ++i) {
+                    uint8_t slot = 0; get(slot);
+                    if (slot < Session::kScenes) order.push_back(slot);
+                }
+            }
+            post([this, ok, loaded = std::move(loaded), order = std::move(order)]() mutable {
+                // If a user has already captured something, their new work wins.
+                if (a_sceneMask.load() == 0 && ok) {
+                    scenes = std::move(loaded);
+                    songOrder = std::move(order);
+                    updateSceneMask();
+                }
+                a_arrangementLoaded = true;
+            });
+        });
     }
 
     // ---- notes ----
@@ -620,6 +730,9 @@ void Session::process(float* out, const float* in, int frames) {
     d->a_activeScene = d->activeScene; d->a_queuedScene = d->pendingScene;
     d->a_songPlaying = d->songPlaying; d->a_songStep = d->songStep;
     d->a_songSize = (int)d->songOrder.size();
+    d->a_arrangementSize = (int)std::min<size_t>(64, d->songOrder.size());
+    for (int i = 0; i < d->a_arrangementSize.load(); ++i)
+        d->a_arrangement[(size_t)i] = d->songOrder[(size_t)i];
     const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - t0).count(), budget = frames * 1e6 / d->sr;
     d->a_cpu = (d->a_cpu.load() * 7 + (uint32_t)(1000.0 * us / budget)) / 8;
 }
@@ -893,7 +1006,7 @@ int Session::livePeaks(float* out, int maxBins) const {
 }
 
 // ---- library ----
-void Session::setDataDir(const std::string& dir) { d->dataDir = dir; }
+void Session::setDataDir(const std::string& dir) { d->dataDir = dir; d->restoreScenes(); }
 void Session::setSampleDir(const std::string& dir) { d->sampleDir = dir; }
 std::string Session::dataDir() const { return d->dataDir; }
 std::string Session::sampleDir() const { return d->sampleDir; }
@@ -954,5 +1067,8 @@ Session::Status Session::status() const {
     s.sceneMask = d->a_sceneMask; s.activeScene = d->a_activeScene;
     s.queuedScene = d->a_queuedScene; s.songPlaying = d->a_songPlaying;
     s.songStep = d->a_songStep; s.songSize = d->a_songSize;
+    s.arrangementLoaded = d->a_arrangementLoaded;
+    s.arrangementSize = std::max(0, std::min(64, d->a_arrangementSize.load()));
+    for (int i = 0; i < s.arrangementSize; ++i) s.arrangement[i] = d->a_arrangement[i].load();
     return s;
 }
