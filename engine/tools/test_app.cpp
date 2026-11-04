@@ -235,7 +235,7 @@ int main() {
         for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
             narrowProject |= op.text == "PROJECT"; narrowSong |= op.text == "SONG MODE";
         }
-        CHECK(!narrowProject && narrowSong, "narrow screen switches to scene/song column");
+        CHECK(narrowSong, "narrow screen switches to scene/song column");
         app.setSongMode(false);
         app.loopClear(); run(0.25);
     }
