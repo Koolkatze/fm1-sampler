@@ -110,6 +110,22 @@ Non-audio files imported as part of ZIP packs remain visible without being
 mistaken for playable WAV samples. External file imports remain available
 from the separate EDIT action, not from directory navigation.
 
+## HOME LIBRARY overlay restored (0.38.5)
+
+The **LIBRARY** folder icon on the cassette HOME page opens the in-app
+**FM1-SAMPLER** library panel again. That panel displays the root folders,
+current path, file-type icons, file names, **ENTER**, **BACK**, and the
+**+ IMPORT ZIP** button. Tapping **+ IMPORT ZIP** launches Android's document
+picker *only for choosing an external ZIP*, then extracts the pack under
+`FM1-SAMPLER/PACKS/`. It never launches the external picker simply to
+navigate existing library folders.
+
+The same cursor is used by physical **PRESETS** and taps in the library list.
+Any WAV selected by knob or touch is immediately loaded into the current track,
+with no ENTER required; ENTER is reserved for entering folders and BACK for
+the parent directory. Closing LIBRARY returns to HOME, retaining navigation
+state. No second independent folder list or selection state is used.
+
 ## EXPORT ALL LOOPS (0.38.2)
 
 The **PROJECT** page has three separate actions: SAVE PROJECT,
