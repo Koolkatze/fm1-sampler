@@ -31,7 +31,7 @@ public:
         std::function<void(float)> set;      // absolute 0..1 (touch)
     };
     using Knobs = std::array<Knob, 4>;
-    struct Entry { std::string label, group, path; bool kit; };
+    struct Entry { std::string label, group, path; bool kit = false; std::string pack, folder; };
     struct ScaleState { int scale = 3, root = 0, octave = 0, mode = 0; };
 
     SamplerApp(Session& s, Send send);
@@ -59,6 +59,13 @@ public:
     void importFile(const std::string& wavPath);  // a file picked from the disk (already copied into the data dir as a WAV)
     bool wantFile() { bool w = wantFile_; wantFile_ = false; return w; }   // the UI asked for the disk picker: Java polls this
     void requestFile() { wantFile_ = true; }
+    void requestPack() { wantPack_ = true; }
+    bool wantPack() { bool result = wantPack_; wantPack_ = false; return result; }
+    void requestName(int kind) { dialogRequest_ = kind; } // 1 named loop, 2 named project slot
+    void requestSaveProjectName(int slot) { pendingProjectSlot_ = slot; dialogRequest_ = 2; }
+    int takeDialogRequest() { int request = dialogRequest_; dialogRequest_ = 0; return request; }
+    void submitName(int kind, const std::string& name);
+    std::string projectName(int slot) const;
     // looper and recorder
     void transportPlay();
     void transportSet(bool play);                 // phone PLAY / STOP keys
@@ -77,7 +84,7 @@ public:
     void scrub(int phase /*0 down 1 move 2 up*/, float fraction) { if (phase == 0) s_.scrubBegin(fraction); else if (phase == 1) s_.scrubMove(fraction); else s_.scrubEnd(); }   // phone timeline
     void autoTune();                              // MELODIC / ONE-SHOT: detect the pitch of the sample and tune the keys to it (again: reset)
     bool tuned(int t) const { return ts_[t].tuned; }
-    void loopSave();
+    void loopSave(const std::string& name = "");
     void loopClear();                             // every loop of every track (phone PROJECT menu)
     void loopClearTrack();                        // the loop of the selected track
     void micSample();                             // toggle: record the microphone into a new sample for the selected track
@@ -192,7 +199,8 @@ private:
     std::array<std::string, kTracks> trackSourceNames_{};
     int libCursor_ = 0, loadedCursor_ = -1;
     uint32_t auditionAt_ = 0, previewOffAt_ = 0; int previewNote_ = -1, previewTrack_ = -1;
-    bool wantFile_ = false, previewAfterLoad_ = false;
+    bool wantFile_ = false, wantPack_ = false, previewAfterLoad_ = false;
+    int dialogRequest_ = 0, pendingProjectSlot_ = -1;
     // loop / recorder
     Session::Status st_{};
     bool loopAny_ = false;
