@@ -14,6 +14,7 @@ static int midi_n; static int midi_full;
 static unsigned ready_ports = 1U << FM1_MIDI_USB;
 unsigned fm1_midi_ready_ports(void) { return ready_ports; }
 static unsigned char sx_log[64][40]; static int sx_len[64]; static int sx_n;
+int groove_master_update(unsigned adc) { (void)adc; return 0; }
 void fm1_controls_init(void) {}
 void fm1_controls_read(struct fm1_controls *s) { *s = ctl; memset(ctl.encoders, 0, sizeof ctl.encoders); }
 void fm1_led_set(unsigned k, int on) { (void)k; (void)on; }
