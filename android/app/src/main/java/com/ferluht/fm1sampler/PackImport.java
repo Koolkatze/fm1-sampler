@@ -46,13 +46,24 @@ final class PackImport {
                 while ((entry = zip.getNextEntry()) != null) {
                     if (++files > 20000) throw new IOException("Pack contains too many entries");
                     String name = entry.getName().replace('\\', '/');
-                    File out = new File(target, name);
-                    String canon = out.getCanonicalPath();
+                    File original = new File(target, name);
+                    String canon = original.getCanonicalPath();
                     if (!canon.startsWith(root) && !canon.equals(target.getCanonicalPath()))
                         throw new IOException("Unsafe ZIP file path");
+                    File out = original;
                     if (entry.isDirectory()) {
                         if (!out.isDirectory() && !out.mkdirs()) throw new IOException("Cannot create folder");
                     } else {
+                        // ZIP archives may contain duplicate entry names.
+                        // Preserve every occurrence rather than silently overwriting an earlier sample.
+                        if (out.exists()) {
+                            String filename = out.getName();
+                            int dot = filename.lastIndexOf('.');
+                            String stem = dot > 0 ? filename.substring(0, dot) : filename;
+                            String ext = dot > 0 ? filename.substring(dot) : "";
+                            for (int serial = 2; out.exists(); serial++)
+                                out = new File(original.getParentFile(), stem + " (" + serial + ")" + ext);
+                        }
                         File parent = out.getParentFile();
                         if (!parent.exists() && !parent.mkdirs()) throw new IOException("Cannot create parent");
                         if (out.isDirectory()) throw new IOException("Invalid ZIP path");
