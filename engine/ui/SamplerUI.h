@@ -52,6 +52,7 @@ private:
     void pagePanel(Rect r);
     void librarySheet();
     void projectSheet();
+    void toggleTouchCueModifier();
 
     SamplerApp& app_;
     float W_ = 860, H_ = 400, top_ = 0, bottom_ = 0;
@@ -62,6 +63,8 @@ private:
     uint32_t now_ = 0;
     uint32_t playHeldAt_ = 0;
     bool playHeld_ = false, playLongFired_ = false;
+    bool cueTouchArmed_ = false, cueTouchPlay_ = false;
+    SamplerApp::Page cueTouchReturn_ = SamplerApp::P_HOME;
     Session::Status st_{};
     bool linkMidi_ = false, linkAudio_ = false, sheetOpen_ = false, editor_ = false, projectOpen_ = false;
     float sheetScroll_ = 0, sheetLastY_ = 0, sheetMoved_ = 0;
