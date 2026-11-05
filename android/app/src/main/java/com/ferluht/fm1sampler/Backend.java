@@ -44,31 +44,13 @@ public class Backend {
 
     Backend(Context c) {
         ctx = c;
-        java.io.File samples = new java.io.File(c.getFilesDir(), "samples");
-        java.io.File official = new java.io.File(samples, "OFFICIAL");
-        samples.mkdirs();
-        official.mkdirs();
-        // Upgrade the previous flat library without deleting any user packs or samples.
-        for (String category : new String[]{"Bass", "Drums", "Keys", "Pads"}) {
-            java.io.File old = new java.io.File(samples, category);
-            java.io.File dest = new java.io.File(official, category);
-            if (old.isDirectory() && !dest.exists() && !old.renameTo(dest))
-                Log.w(TAG, "Could not move legacy OFFICIAL directory: " + category);
+        try {
+            // One root for the UI, packs, official sounds, recordings and FMP2 projects.
+            java.io.File root = StorageLayout.initialize(c);
+            engine = Native.create(StorageLayout.projects(c).getAbsolutePath(), root.getAbsolutePath());
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Cannot initialize FM1-SAMPLER library", e);
         }
-        if (!new java.io.File(samples, ".v2").exists()) {
-            try {
-                // Bundled assets are copied only when a category is missing, not on every update.
-                for (String category : new String[]{"Bass", "Drums", "Keys", "Pads"}) {
-                    java.io.File dest = new java.io.File(official, category);
-                    if (!dest.exists()) copyAssets(c, "samples/" + category, dest);
-                }
-                new java.io.File(samples, ".v2").createNewFile();
-            } catch (java.io.IOException e) { Log.w(TAG, "official samples: " + e); }
-        }
-        new java.io.File(samples, "SAVED/Loops").mkdirs();
-        new java.io.File(samples, "SAVED/Recordings").mkdirs();
-        new java.io.File(samples, "SAVED/Imports").mkdirs();
-        engine = Native.create(c.getFilesDir().getAbsolutePath(), samples.getAbsolutePath());
         midi = (MidiManager) c.getSystemService(Context.MIDI_SERVICE);
         am = (AudioManager) c.getSystemService(Context.AUDIO_SERVICE);
     }
