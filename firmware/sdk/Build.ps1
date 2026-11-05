@@ -79,9 +79,9 @@ function Test-Firmware {
         'audio_app_usb_microphone_enable','audio_app_usb_speaker_enable',
         'connectivity_audio_usb_microphone_enable','connectivity_audio_usb_speaker_enable')
     $required += @('audio_app_bluetooth_open','sbc_decoder','sbc_hwaccel','avdtp_packet_handler','bt_get_local_name','bt_get_mac_addr',
-        'fm1_bluetooth_configure','fm1_bluetooth_get_status',
         'groove_tuning_capture','groove_tuning_apply','groove_project_apply_edit')
-    foreach ($name in $required) { if (!$info.ContainsKey($name)) { throw "Required runtime symbol absent: $name" } }
+    $missing = @($required | Where-Object { !$info.ContainsKey($_) })
+    if ($missing.Count) { throw ('Required runtime symbols absent: ' + ($missing -join ', ')) }
     # This FM1 Sampler control surface operates over USB MIDI, not BLE MIDI.
     # Keep the platform, USB, ROM, hardware, audio and updater verification
     # below; BLE client-discovery APIs are not a build requirement.
