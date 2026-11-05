@@ -53,7 +53,20 @@ public:
     void setAlgo(int a);
     const std::vector<Entry>& library() const { return lib_; }
     int libraryCursor() const { return libCursor_; }
-    void browse(int delta);                       // PRESETS: moves the cursor, audition after a short pause
+    // PRESETS rotates within the current FM1-SAMPLER directory. Audio loads
+    // immediately upon selection; ENTER is reserved for entering folders.
+    struct BrowserItem { std::string label, path; int entry = -1; bool directory = false; };
+    const std::vector<BrowserItem>& browserItems() const { return browserItems_; }
+    const BrowserItem* browserSelected() const {
+        return browserIndex_ >= 0 && browserIndex_ < (int)browserItems_.size()
+            ? &browserItems_[(size_t)browserIndex_] : nullptr;
+    }
+    const std::string& browserDir() const { return browserDir_; }
+    int browserIndex() const { return browserIndex_; }
+    void browse(int delta);
+    void browserEnter();
+    void browserBack();
+    void browserRoot();
     void loadEntry(int index);                    // at once, on the selected track
     void refreshLibrary();
     void importFile(const std::string& wavPath);  // a file picked from the disk (already copied into the data dir as a WAV)
@@ -195,6 +208,11 @@ private:
     uint32_t repaintAt_ = 0; int repaintCount_ = 0;
     // library
     std::vector<Entry> lib_;
+    void rebuildBrowser(const std::string& preferred = "");
+    void loadBrowserSelection();
+    std::string browserDir_; // Relative to FM1-SAMPLER root
+    std::vector<BrowserItem> browserItems_;
+    int browserIndex_ = -1;
     // Absolute assignment paths survive library rebuilds. Entry indices
     // are UI cursors only; they must never determine what audio gets archived.
     std::array<std::string, kTracks> trackSourcePaths_{};
