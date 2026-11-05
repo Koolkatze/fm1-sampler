@@ -699,6 +699,9 @@ int main() {
             browser.touch(2, x, y, now);
             browser.frame(now);
         };
+        click(351.f, 184.f); // HOME folder icon launches Android's unified picker
+        CHECK(app.wantFile() && !app.wantFile(),
+              "HOME folder icon requests phone file explorer for ZIP packs or audio");
         auto hasText = [&](const std::string& label) {
             for (const auto& op : browser.ops())
                 if (op.type == UiOp::TEXT && op.text.find(label) != std::string::npos) return true;
