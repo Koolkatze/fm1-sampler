@@ -202,8 +202,11 @@ void SamplerApp::loadBrowserSelection() {
 void SamplerApp::browse(int delta) {
     if (!delta || browserItems_.empty()) return;
     const int n = (int)browserItems_.size();
-    const int start = browserIndex_ < 0 ? (delta > 0 ? -1 : 0) : browserIndex_;
-    browserIndex_ = ((start + delta) % n + n) % n;
+    // One MIDI encoder event means exactly one item, even if the firmware
+    // sends a large relative value for a fast detent.
+    const int step = delta > 0 ? 1 : -1;
+    const int start = browserIndex_ < 0 ? (step > 0 ? -1 : 0) : browserIndex_;
+    browserIndex_ = ((start + step) % n + n) % n;
     loadBrowserSelection();
 }
 void SamplerApp::browserEnter() {
