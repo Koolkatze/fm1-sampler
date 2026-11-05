@@ -634,6 +634,13 @@ void SamplerApp::encoder(int i, int delta) {
     if (i == 0) { selectTrack(track_ + (delta > 0 ? 1 : -1)); return; }
     if (i == 6) { browse(delta); return; }
     if (i == 1) { setAlgo(ts_[track_].algo + (delta > 0 ? 1 : -1)); return; }
+    // OCT+ makes K1 the CUE subdivision control BEFORE and DURING PLAY.
+    // Crucially, microphone threshold or the underlying page never steals K1.
+    if (i == 2 && ((held_ & (1u << OCT_UP)) || cueActive_ || page_ == P_CUE)) {
+        setCueDivision(cueDivision_ + (delta > 0 ? 1 : -1));
+        touchedKnob_ = 0; touchedAt_ = nowMs_;
+        return;
+    }
     if (i == 2 && mic_ == 1 && page_ != P_SAVE) { setMicThreshold01(micThr_ + (delta > 0 ? 0.03f : -0.03f)); touchedKnob_ = 0; touchedAt_ = nowMs_; return; }   // K1 = trigger level while the microphone listens
     Knobs k = knobs();
     const int idx = i - 2;
