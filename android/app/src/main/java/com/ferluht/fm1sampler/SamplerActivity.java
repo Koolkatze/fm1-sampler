@@ -60,12 +60,9 @@ public class SamplerActivity extends Activity {
         });
     }
 
-    /** The physical folder icon in HOME is the ONE entry point to explore
-     * the phone's files. ZIP -> PACKS; audio -> SAVED/IMPORTS. No second
-     * in-app import screen is required to find or unpack a ZIP.
-     *
-     * Do not MIME-filter Android's DocumentsUI here: some USB/Drive/file
-     * providers label valid ZIP and audio files as application/octet-stream.
+    /** Explicit external import from EDIT only. HOME LIBRARY uses the
+     * in-app directory navigator and never launches Android DocumentsUI.
+     * Providers may label valid ZIP/audio files as application/octet-stream.
      */
     void pickFile() {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -197,8 +194,7 @@ public class SamplerActivity extends Activity {
         if (result != RESULT_OK || data == null || data.getData() == null) return;
         final Uri uri = data.getData();
         if (code != PICK && code != PICK_PACK) return;
-        // Both the HOME folder picker and the legacy ZIP-specific chooser
-        // route through the same importer. Selecting a ZIP always extracts
+        // Both explicit external import actions route through the same importer. Selecting a ZIP always extracts
         // its complete original directory tree under FM1-SAMPLER/PACKS.
         new Thread(() -> {
             try {
