@@ -27,6 +27,18 @@
 
 namespace {
 constexpr int kBlock = 256;
+std::string safeSampleName(const std::string& name) {
+    std::string out;
+    for (unsigned char ch : name) {
+        if (ch == '/' || ch == '\\' || ch == ':' || ch < 32 || ch == 127) out += '_';
+        else out += (char)ch;
+    }
+    while (!out.empty() && (out.back() == '.' || out.back() == ' ')) out.pop_back();
+    if (out == "." || out == "..") out.clear();
+    if (out.size() > 100) out.resize(100);
+    return out.empty() ? "Loop" : out;
+}
+
 }
 
 struct Session::Impl {
@@ -575,7 +587,9 @@ struct Session::Impl {
         const size_t fade = std::min<size_t>(o.size() / 4, (size_t)sr / 200 * 2);
         for (size_t i = 0; i < fade; i += 2) { const float k = (float)i / fade; o[i] *= k; o[i + 1] *= k; o[o.size() - 2 - i] *= k; o[o.size() - 1 - i] *= k; }
         char name[64]; snprintf(name, sizeof name, "/sample_%lld.wav", (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
-        const std::string path = (dataDir.empty() ? "." : dataDir) + name;
+        const std::string folder = sampleDir.empty() ? dataDir : sampleDir + "/SAVED/Recordings";
+        std::error_code ec; std::filesystem::create_directories(folder, ec);
+        const std::string path = folder + name;
         writeWav16(path, o, sr);
         { std::lock_guard<std::mutex> l(sampleMtx); samplePath = path; pending = true; a_pending = true; }
         a_sampleState = 0;
@@ -1140,10 +1154,26 @@ void Session::saveArrangement(const std::vector<int>& order) {
 
 void Session::setLoopSpeed(float v) { d->tapeSpeed.store(clampf(v, 0.25f, 2.f)); }
 void Session::setLoopSource(int src) { d->post([=] { d->loopSrc = src ? 1 : 0; }); }
-bool Session::saveClip(int t) {
-    if (t < 0 || t >= kTracks || !d->tracks[(size_t)t]->clipHas) return false;
-    std::vector<float> c = *d->tracks[(size_t)t]->clip;   // a copy, written on the worker
-    d->job([this, c = std::move(c)]() mutable { d->finishSample(std::move(c)); d->a_pending = false; });
+bool Session::saveClip(int t, const std::string& name) {
+    if (t < 0 || t >= kTracks || !(d->a_clip_mask.load() & (1u << t))) return false;
+    const std::string label = safeSampleName(name);
+    const std::string folder = d->sampleDir + "/SAVED/Loops";
+    // Capture a shared immutable clip on the audio thread; disk I/O stays on the worker.
+    d->post([this, t, label, folder] {
+        const auto& track = *d->tracks[(size_t)t];
+        if (!track.clipHas || !track.clip || track.clip->empty()) return;
+        auto clip = track.clip;
+        d->job([this, clip, folder, label] {
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            fs::create_directories(folder, ec);
+            if (ec) return;
+            std::string file = folder + "/" + label + ".wav";
+            for (int n = 2; fs::exists(file, ec) && n < 10000; ++n)
+                file = folder + "/" + label + " (" + std::to_string(n) + ").wav";
+            writeWav16(file, *clip, d->sr); // preserve entire loop length, including silence
+        });
+    });
     return true;
 }
 int Session::loopPeaks(int track, float* out, int maxBins) const {
