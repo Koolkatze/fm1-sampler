@@ -141,8 +141,12 @@ final class LibraryBackupArchive {
         for (File file : sorted) {
             String path = checkedPath(relative.isEmpty() ? file.getName() : relative + "/" + file.getName());
             if (found.size() >= MAX_FILES) throw fail("Too many library entries");
-            if (!destination(root, path).getCanonicalPath().equals(file.getAbsolutePath()))
-                throw fail("Library has a symbolic link or an unsafe path");
+            // Android may use a symlink above getFilesDir() (/data/user/0).
+            // Compare against the canonical library root, not the original
+            // Android path, so legitimate app storage is not rejected.
+            String expectedPath = new File(root.getCanonicalPath(), path).getAbsolutePath();
+            if (!destination(root, path).getCanonicalPath().equals(expectedPath))
+                throw fail("Library has an internal symbolic link or unsafe path");
             if (file.isDirectory()) {
                 found.add(new Spec(path, true, 0, ""));
                 scan(root, file, path, found);
