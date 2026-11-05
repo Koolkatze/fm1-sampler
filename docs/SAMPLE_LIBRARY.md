@@ -1,84 +1,111 @@
-# Sample packs, navigation, and safe saves
+# FM1-SAMPLER: library root, imports, navigation and saved projects
 
-This feature branch is based on `feature/scene-launcher-song-mode`.
-It preserves the FM-1 USB MIDI firmware behavior, CUE shortcuts, 12 scenes,
-COMPOSE, SONG mode and the existing self-contained FMP2 project snapshots.
+This change continues from `feature/oneshot-packs-on-scenes`. It does not
+change the FM-1 USB firmware, audio synthesis, COMPOSE, SONG, scenes, CUE,
+or the self-contained FMP2 project file format.
 
-## Library folders
+## Directory tree created on first launch
 
-The app initializes the following paths in app-private storage:
+The application creates a **single FM1-SAMPLER root** inside its Android
+**app-private files directory** (not the public `Documents` folder):
 
 ```
-files/samples/
+FM1-SAMPLER/
+  PROYECTOS/
+    project_1.fm1p
+    project_1.name
+    fm1_scenes.dat
+    project_assets/
+    ... (up to eight complete FMP2 project slots)
   OFFICIAL/
     Bass/
     Drums/
     Keys/
     Pads/
   SAVED/
-    Loops/
-    Recordings/
-    Imports/
-  Your Imported Pack/
-    ... all folders and files from its ZIP ...
+    LOOPS/
+    RECORDINGS/
+    IMPORTS/
+  PACKS/
+    Lofi Dust/
+      ... complete original ZIP folder hierarchy ...
+    Vaporwave/
+      ... complete original ZIP folder hierarchy ...
 ```
 
-- Legacy built-in WAVs are migrated into `OFFICIAL` without deleting them.
-- Previously imported `sample_*.wav` files remain indexed as
-  `SAVED/Recordings` even if they are still physically in the legacy data directory.
-- New microphone recordings save to `SAVED/Recordings`.
-- Saved loops, with a name selected in the Android dialog, go to
-  `SAVED/Loops`. The exact loop audio is preserved (no trimming).
-- Imported individual files go to `SAVED/Imports`. Each filename is unique.
-- An imported ZIP becomes a new pack. All its subfolders and all entries are
-  retained. An entry that is not a playable WAV still appears in the browser
-  and remains on disk. Unsupported formats are never silently dropped.
-- Identical ZIP entry names are automatically disambiguated with ` (2)`,
-  ` (3)`, etc. before extraction. Existing packs are not overwritten.
+All four top-level folders are visible **even while empty**. Existing
+`FM1-SAMPLER` content is not cleared on an app update. Folders are created
+on first launch (Android does not execute application code at install time).
 
-## Touch controls
+## ZIP import
 
-Open the library by tapping the current sample name.
+Tap `+ IMPORT ZIP` in the library and select any ZIP from Android's
+system document picker. The archive may come from Downloads, removable USB,
+Google Drive, or another compatible document provider.
 
-- The archive glyph identifies the top level of packs.
-- A folder glyph identifies a directory; a waveform glyph identifies a WAV.
-- Tap a row to select it. **ENTER >** enters the selected folder at any
-  depth, or loads a selected WAV into the current track.
-- **< BACK** returns to the immediate parent directory. At the archive
-  root it closes the browser.
-- `+ IMPORT ZIP` opens Android's document picker. Importing a pack refreshes
-  the visible browser immediately without restarting the APK.
+The app unpacks the complete archive into
+`FM1-SAMPLER/PACKS/<original ZIP filename>/`. It preserves **every archive
+entry**, subdirectory, non-audio asset, loop, and original audio file.
+Compatible compressed audio files may gain an additional WAV copy, without
+removing their originals. A pack name already in `PACKS` gets a safe
+` (2)` suffix instead of overwriting content.
 
-The UI continues to use the FM1 Sampler paper/ink/orange palette, rectangular
-line drawings, and the original icon primitives.
+The *imported/extracted pack folder* moves logically into the `PACKS`
+library. The source ZIP selected through the Android document picker
+**remains in its original provider/location**: deleting a user file from a
+third-party provider cannot be assumed or performed without that provider's
+permission. No attempt is made to delete the source.
 
-## Audio formats
+Unsafe ZIP paths, corrupt archives or packs exceeding the safety limits
+fail without exposing a partially imported pack.
 
-- Playable library entries are PCM WAV.
-- WAV, AIFF / AIFC PCM, and common Android-decoded audio formats can be imported.
-  Compatible AIFF, FLAC, MP3, OGG, AAC etc. receive a new playable 16-bit WAV;
-  the source file is retained inside ZIP packs.
-- Longer or unsupported audio files remain present in the imported pack even
-  when the sampler cannot play them. No duration, name or musical-phrase filter
-  runs on a user-selected ZIP.
-- ZIP safety validation may reject an unsafe or corrupt archive atomically:
-  a rejected archive is not presented as a successfully imported pack.
+## Loop, recording and project destinations
 
-## Saving loops and projects
+- Complete named loop WAVs: `FM1-SAMPLER/SAVED/LOOPS/`
+- FM-1 Sampler microphone WAVs: `FM1-SAMPLER/SAVED/RECORDINGS/`
+- Individually imported WAVs: `FM1-SAMPLER/SAVED/IMPORTS/`
+- Complete project archives: `FM1-SAMPLER/PROYECTOS/project_N.fm1p`
+- Their human-readable names: `FM1-SAMPLER/PROYECTOS/project_N.name`
+- Official instruments: `FM1-SAMPLER/OFFICIAL/`
+- Each extracted imported pack: `FM1-SAMPLER/PACKS/<pack name>/`
 
-- The deck or editor `SAVE` action and the PROJECT menu `SAVE LOOP` action
-  request the loop name through Android's keyboard.
-- `SAVE PROJECT` opens the eight FMP2 slots; select one and enter a name.
-  The original self-contained FMP2 project archive still stores **all eight
-  samples, recorded clips, COMPOSE, scenes, SONG, settings, and transport**.
-- Custom project names are stored in sidecar `project_N.name` metadata and
-  displayed on the project slot buttons. The FMP2 binary format itself is
-  untouched; existing archived projects remain readable.
-- A project label is committed only when the background save reports success.
+FMP2 projects remain self-contained: eight tracks, sample audio, clips,
+COMPOSE, twelve scenes, SONG order, effects, settings and transport.
 
-## Private storage and updates
+## Navigation
 
-Use `+ IMPORT ZIP` from within the app instead of manually editing Android's
-private data directory. Installing the new debug APK over a compatible prior
-package should preserve private app data, but back up irreplaceable projects
-before installing a preview build.
+Opening the library **always starts at `FM1-SAMPLER /`**. It shows
+`OFFICIAL`, `PACKS`, `PROYECTOS` and `SAVED`.
+
+Tap a row to select it; `ENTER >` opens the selected folder, at any depth,
+or loads a selected WAV. `< BACK` exits one directory level. From the root,
+`< BACK` closes the browser. ZIP contents (including non-playable files)
+remain visible and selectable but only playable WAVs may be loaded.
+
+## Updating from earlier preview builds
+
+Migration runs before the engine opens its files:
+
+- `files/samples/OFFICIAL` -> `FM1-SAMPLER/OFFICIAL`
+- `files/samples/SAVED/{Loops,Recordings,Imports}` ->
+  `FM1-SAMPLER/SAVED/{LOOPS,RECORDINGS,IMPORTS}`
+- `files/samples/<other pack folder>` ->
+  `FM1-SAMPLER/PACKS/<pack folder>`
+- `files/project_*.fm1p`, sidecars, scenes, project assets ->
+  `FM1-SAMPLER/PROYECTOS`
+- `files/sample_*.wav` -> `FM1-SAMPLER/SAVED/RECORDINGS`
+
+Existing target files are never overwritten; conflicting filenames gain
+numbered suffixes. Source files remain available if migration fails.
+
+**Android package separation:** the `.scenes` preview APK can be installed
+beside a production APK. Because they have different Android package IDs,
+its app-private `FM1-SAMPLER` cannot automatically read the production
+app's private recordings and projects. This migration applies to data owned
+by the **same package** being upgraded, not to another app.
+
+**External file manager visibility:** these folders are app-private and
+normally inaccessible from Android's regular file manager on recent Android
+versions. Making a public `Documents/FM1-SAMPLER` folder and allowing
+external edits requires a separate Storage Access Framework export/sync
+implementation and user-granted directory access.
