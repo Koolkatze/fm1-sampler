@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
-<title>FM1-Sampler — Android firmware Workbench</title>
+<title>FM1-Sampler — USB MIDI firmware Workbench</title>
 <style>
 :root{font-family:system-ui,-apple-system,Roboto,sans-serif;background:#10161b;color:#ecf4f2;color-scheme:dark;line-height:1.5}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;padding:18px env(safe-area-inset-right) 28px env(safe-area-inset-left)}
@@ -22,25 +22,25 @@ small,footer{color:#97aead}ul{padding-left:20px;color:#c5d5d5}li+li{margin-top:8
 </head>
 <body>
 <main>
-<p class="eyebrow">M-VAVE FM-1 · ferluht/fm1-sampler · HTTPS</p>
+<p class="eyebrow">M-VAVE FM-1 · Koolkatze/fm1-sampler · HTTPS</p>
 <h1>FM1-Sampler Workbench</h1>
-<p>Mobile-friendly launcher for the original firmware installer. The firmware image has not been modified or rebuilt.</p>
+<p>FM1 Sampler USB MIDI firmware Workbench · OCT− / OCT+ / PLAY/STOP Note On/Off. Embedded firmware release: vFM1-Sampler-OCT-MIDI-preview.1.</p>
 <section aria-label="Firmware Hub compatibility notice" style="border-color:#987347;background:#2b2720">
 <h2 class="warning">Important: do not import the standalone .fwsc into Firmware Hub</h2>
-<p>The extracted <code>FM1-Sampler-v0.37.fwsc</code> includes M-VAVE's vendor update loader, not the verified Felucca update loader that Firmware Hub requires for this custom firmware. Firmware Hub correctly refuses this combination. Renaming the file or changing its metadata cannot make it a verified Felucca package.</p>
-<p>For this particular release, use the <strong>embedded firmware update</strong> in the original Workbench below, which checks the bundled package and its loader against the author's own metadata. Do not attempt an update if the Workbench cannot positively identify your device or if it suggests an unsupported migration. The original author reports no physical FM-1 validation of this release.</p>
+<p>The new <code>FM1-Sampler-OCT-MIDI.fwsc</code> uses the FM1 Sampler project update package, not a verified Felucca loader. Do not upload it to Firmware Hub if Firmware Hub rejects the loader. Never bypass the updater's identity checks.</p>
+<p>Use the <strong>embedded firmware updater</strong> in this release's Workbench. It contains the newly compiled USB MIDI changes and was checked during packaging, but has <strong>not been validated on a physical FM-1</strong>. Back up all device projects, samples and presets. Do not flash if the Workbench cannot positively identify a compatible target.</p>
 </section>
 <section>
 <h2>1. Check MIDI + SysEx permission</h2>
-<p>Use a full Chrome tab on Android. Plug the powered FM-1 into your phone with a USB data/OTG cable and approve Android's USB prompt if shown.</p>
+<p>Open this HTTPS page in Chrome or Edge on a device exposing Web MIDI and SysEx; desktop Chrome/Edge is recommended for firmware updates. Connect the FM-1 by USB data cable, authorize USB access, and grant the browser permission.</p>
 <button class="primary" id="check" type="button">Check Web MIDI permission</button>
 <output id="result" role="status" aria-live="polite">Tap the button to request the required MIDI + SysEx permission.</output>
 </section>
 <section>
 <h2>2. Open the firmware installer</h2>
-<p>Once MIDI is permitted and the FM-1 is visible, open the original Workbench. Back up samples and projects before flashing. Do not disconnect the USB cable during an update.</p>
+<p>Once MIDI and SysEx permissions are granted, open the FM1 Sampler USB-only firmware Workbench. Verify the connected device identity and its compatible updater before flashing. Keep the USB cable attached throughout.</p>
 <a class="button primary" href="./workbench.html">Open Workbench</a>
-<a class="button secondary" href="https://github.com/ferluht/fm1-sampler/releases/tag/v0.37" rel="noopener">Original v0.37 release</a>
+<a class="button secondary" href="https://github.com/Koolkatze/fm1-sampler/releases/tag/vFM1-Sampler-OCT-MIDI-preview.1" rel="noopener">USB MIDI firmware release</a>
 </section>
 <section>
 <h2>If permission is denied</h2>
@@ -52,7 +52,7 @@ small,footer{color:#97aead}ul{padding-left:20px;color:#c5d5d5}li+li{margin-top:8
 <li>Do not flash until the actual Workbench identifies your device. SysEx permission alone does not prove compatibility.</li>
 </ul>
 </section>
-<footer>Community hosting wrapper; not an official M-VAVE service. Workbench source and license notices are included in the original installer. FM1-Sampler v0.37 is host-tested only according to its release notes. HTTPS can resolve local-file origin restrictions but cannot override unsupported USB/MIDI hardware.</footer>
+<footer>Community FM1 Sampler firmware hosting; not an official M-VAVE service. USB MIDI firmware build verified in CI; installation on physical FM-1 not verified. This website does not bypass hardware, browser or loader restrictions.</footer>
 </main>
 <script>
 'use strict';
