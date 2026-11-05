@@ -685,7 +685,6 @@ int main() {
             browser.touch(2, x, y, now);
             browser.frame(now);
         };
-        click(90.f, 34.f);  // open sample library from cassette deck
         auto hasText = [&](const std::string& label) {
             for (const auto& op : browser.ops())
                 if (op.type == UiOp::TEXT && op.text.find(label) != std::string::npos) return true;
@@ -697,6 +696,9 @@ int main() {
                     return op.text;
             return "";
         };
+        CHECK(hasText("ROOT") && hasText("FOLDERS") && hasText("SAMPLES"),
+              "HOME shows the always-visible archive, folder and waveform navigation");
+        click(40.f, 34.f);  // HOME archive icon opens the ROOT browser
         CHECK(hasText("ENTER >") && hasText("< BACK") &&
               hasText("ROOT") && hasText("FOLDERS") && hasText("SAMPLES"),
               "FM1-SAMPLER browser includes ENTER/BACK, archive, folder and waveform icons");
@@ -704,13 +706,13 @@ int main() {
               hasText("SAVED") && hasText("PACKS") && breadcrumb() == "FM1-SAMPLER /",
               "FM1-SAMPLER always opens at its four permanent top-level folders");
         // Alphabetical folder order: OFFICIAL, PACKS, PROYECTOS, SAVED.
-        click(205.f, 165.f); click(660.f, 65.f);
+        click(285.f, 165.f); click(660.f, 65.f);
         CHECK(breadcrumb() == "FM1-SAMPLER / PACKS", "ENTER visits PACKS");
-        click(205.f, 129.f); click(660.f, 65.f);
+        click(285.f, 129.f); click(660.f, 65.f);
         CHECK(breadcrumb() == "FM1-SAMPLER / PACKS/My Imported ZIP" ||
               breadcrumb() == "FM1-SAMPLER / PACKS / My Imported ZIP",
               "ENTER visits the imported ZIP's own folder");
-        click(205.f, 129.f); click(660.f, 65.f);
+        click(285.f, 129.f); click(660.f, 65.f);
         CHECK(breadcrumb().find("/Drums") != std::string::npos, "ENTER visits a nested Drums subfolder");
         click(555.f, 65.f);
         CHECK(breadcrumb().find("My Imported ZIP") != std::string::npos &&
@@ -719,6 +721,24 @@ int main() {
         click(555.f, 65.f); click(555.f, 65.f);
         CHECK(breadcrumb() == "FM1-SAMPLER /",
               "BACK returns from PACKS to the FM1-SAMPLER root");
+        // Side navigation is functional: FOLDERS keeps only directories;
+        // SAMPLES shows all WAVs globally at root; ROOT resets to four folders.
+        click(200.f, 194.f);  // sidebar folder icon
+        CHECK(hasText("OFFICIAL") && hasText("PACKS") && breadcrumb() == "FM1-SAMPLER /",
+              "FOLDERS sidebar lists directories and preserves root");
+        click(200.f, 256.f);  // sidebar waveform icon
+        CHECK(hasText("WAV / ENTER TO LOAD") && !hasText("EMPTY FOLDER"),
+              "SAMPLES sidebar indexes real playable WAVs, not decorative icons");
+        click(200.f, 132.f);  // sidebar archive icon
+        CHECK(hasText("PROYECTOS") && hasText("OFFICIAL") &&
+              hasText("SAVED") && hasText("PACKS") && breadcrumb() == "FM1-SAMPLER /",
+              "ROOT sidebar returns to FM1-SAMPLER top-level directories");
+        click(660.f, 29.f);  // close browser; HOME buttons remain visible
+        CHECK(hasText("ROOT") && hasText("FOLDERS") && hasText("SAMPLES"),
+              "HOME retains category shortcuts after closing the browser");
+        click(115.f, 34.f);  // HOME waveform opens playable samples globally
+        CHECK(hasText("WAV / ENTER TO LOAD"),
+              "HOME waveform button directly opens the global playable samples list");
     }
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL OK", fails);
     return fails ? 1 : 0;
