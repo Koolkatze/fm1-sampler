@@ -584,8 +584,8 @@ int main() {
             fullLoad |= op.text == "LOAD PROJECT";
         }
         CHECK(fullSave && fullLoad, "PROJECT page has distinct SAVE/LOAD COMPLETE PROJECT actions");
-        ui.touch(0, 243.f, 64.f, now + 9);
-        ui.touch(2, 243.f, 64.f, now + 9);
+        ui.touch(0, 80.f, 64.f, now + 9);
+        ui.touch(2, 80.f, 64.f, now + 9);
         ui.frame(now + 10);
         bool slotPicker = false, slot1 = false, slot2 = false;
         for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
