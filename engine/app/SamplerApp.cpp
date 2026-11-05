@@ -546,11 +546,46 @@ std::vector<float> SamplerApp::peaks(int t, int bins) {
     return peaks_[t];
 }
 
+// ---- read-only live diagnostic of inbound physical MIDI ----
+void SamplerApp::clearMidiDebug() {
+    midiRxMessages_ = midiControlMask_ = 0;
+    lastMidiChannel_ = lastMidiData_ = -1;
+    lastMidiController_ = lastMidiPressed_ = false;
+}
+std::string SamplerApp::midiControlStatus() const {
+    if (!midiRxMessages_) return "MIDI RX: NO MESSAGES YET";
+    const auto seen = [this](int bit) { return midiControlMask_ & (1u << bit) ? "OK" : "--"; };
+    return std::string("MIDI OCT-:") + seen(0) + " OCT+:" + seen(1) +
+           " PLAY:" + seen(2) + " K1:" + seen(3);
+}
+std::string SamplerApp::midiLastEvent() const {
+    if (!midiRxMessages_ || lastMidiChannel_ < 0) return "PRESS PHYSICAL FM-1 BUTTONS";
+    std::string msg = std::string("LAST CH") + std::to_string(lastMidiChannel_ + 1) +
+           (lastMidiController_ ? " CC " : " NOTE ") + std::to_string(lastMidiData_);
+    if (!lastMidiController_) msg += lastMidiPressed_ ? " DOWN" : " UP";
+    if (held_ & (1u << OCT_DOWN)) msg += " [OCT- HELD]";
+    else if (held_ & (1u << OCT_UP)) msg += " [OCT+ HELD]";
+    return msg;
+}
+
 // ---- input ----
 void SamplerApp::onMidi(const uint8_t* m, size_t n) {
     if (n < 3) return;
     linkSeen_ = true;
     const int type = m[0] & 0xf0, ch = m[0] & 15, a = m[1], b = m[2];
+    if (type == 0x90 || type == 0x80 || type == 0xb0) {
+        ++midiRxMessages_;
+        lastMidiChannel_ = ch; lastMidiData_ = a;
+        lastMidiController_ = type == 0xb0;
+        lastMidiPressed_ = type == 0x90 && b > 0;
+        // Detect only known control-surface events, not ordinary keys.
+        if (ch == 1 && (type == 0x90 || type == 0x80)) {
+            if (a == OCT_DOWN) midiControlMask_ |= 1u;
+            if (a == OCT_UP) midiControlMask_ |= 2u;
+            if (a == PLAY) midiControlMask_ |= 4u;
+        }
+        if (ch == 0 && type == 0xb0 && a == 18) midiControlMask_ |= 8u;
+    }
     if (ch == 0 && (type == 0x90 || type == 0x80)) keyEvent(a, type == 0x90 && b > 0);
     else if (ch == 1 && (type == 0x90 || type == 0x80)) button(a, type == 0x90 && b > 0);
     else if (ch == 0 && type == 0xb0) {

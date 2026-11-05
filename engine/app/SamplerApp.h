@@ -136,6 +136,11 @@ public:
     void playNote(int note, bool down);
     void keyEvent(int rawNote, bool down);        // FM-1 key: chromatic note from the firmware
     bool linkSeen() const { return linkSeen_; }
+    // Read-only live MIDI monitor. The physical FM-1 buttons are not
+    // emulated by the phone; this only reports what actually arrived.
+    std::string midiControlStatus() const;
+    std::string midiLastEvent() const;
+    void clearMidiDebug();
     std::vector<float> peaks(int t, int bins);    // waveform of a track's sample, cached
     std::string sampleLabel(int t) const { return s_.trackLabel(t); }
     Session& session() { return s_; }
@@ -197,6 +202,10 @@ private:
     int pingId_ = 0, healCursor_ = 0;
     uint64_t lastLed_ = ~0ull; uint32_t ledAt_ = 0;   // the firmware may light / clear a button LED by itself when it is pressed: resend after every button event and every 400 ms
     int knobMsb_ = 0;
+    uint32_t midiRxMessages_ = 0;
+    uint32_t midiControlMask_ = 0; // OCT-, OCT+, PLAY/STOP and K1 seen
+    int lastMidiChannel_ = -1, lastMidiData_ = -1;
+    bool lastMidiController_ = false, lastMidiPressed_ = false;
     int heldNote_[128];
     int keyNotes_[128][3] = {}; int keyCount_[128] = {};
     bool fwDirty_ = true; uint32_t lenAt_ = 0;

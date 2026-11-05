@@ -72,7 +72,7 @@ jobs:
       - name: Publish APK in new GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v0.37-scenes-preview.7
+          TAG: v0.37-scenes-preview.8
         run: |
           cat > release-notes.md <<'EOF'
           ## FM1 Sampler Scenes — composition restoration and strict physical shortcuts
@@ -85,13 +85,13 @@ jobs:
           - On the real FM-1, **PLAY and STOP are the same physical PLAY/STOP key**. The custom physical controller firmware must forward OCT and PLAY MIDI note-on/note-off messages for these shortcuts to work. A firmware which does not forward them cannot be fixed by the APK alone.
           - **Fixed loss of recorded loops when leaving LOOP/SONG:** entering performance takes a copy-on-write snapshot of all eight track clips and the loop transport. EXIT, COMPOSE or hardware HOME restores the original composition's loops and sample assignments, not the currently playing scene.
           - **Normal PLAY/STOP without OCT:** toggles transport immediately on key-down, regardless of the previous combo. OCT released before PLAY means an ordinary transport press, with no repeat or restart latch.
-          - **Improved USB/BLE MIDI discovery:** accept a connected receiver-only MIDI port and single unidentified USB/BLE MIDI output device instead of requiring a fixed FM-1 device name and a transmit port; limited Logcat MIDI RX tracing helps diagnose firmware that emits no physical button messages.
+          - **Improved USB/BLE MIDI discovery:** accept a connected receiver-only MIDI port and a single unidentified MIDI output device. The INFO legend now contains a small read-only incoming MIDI monitor showing whether OCT−, OCT+, PLAY and K1 messages have actually arrived, the most recent channel/event, and the currently held modifier. Separate MIDI callbacks are supported with no simultaneity requirement.
           - Retains the cassette-tape icon with split white/black and orange dot.
           - LOOP MODE C1–B1, SONG MODE, Project scene persistence and the original sample editor remain.
           - Package: `com.ferluht.fm1sampler.scenes`.
-          - Preview version: 0.37.6-scenes-test (versionCode 43).
+          - Preview version: 0.37.7-scenes-test (versionCode 44).
 
-          Validation: host regression tests exercise ordered physical NOTE REPEAT / restart, normal playback after releasing OCT, composition restoration with exact recorded audio, scene/song switching, and both Light/Dark themes. Android compilation runs against the updated Java MIDI transport.
+          Validation: host tests exercise non-simultaneous physical OCT/PLAY MIDI callbacks, strict modifier ordering, diagnostic event rendering, NOTE REPEAT / restart, exact restoration of recorded loops, scene/song switching and both Light/Dark modes. Android compilation uses the updated MIDI receiver.
 
           **Hardware requirement:** For buttons to work, the installed FM-1 firmware must actually transmit MIDI channel 2 Note On/Off (notes 0 for OCT−, 1 for OCT+, 12 for physical PLAY/STOP) and encoder K1 as MIDI CC. The APK cannot create button messages that the device firmware never sends. This Release updates the phone app; it does not flash the physical firmware.
 
@@ -115,7 +115,7 @@ jobs:
             gh release create "$TAG" dist/FM1-Sampler-Scenes-SongMode.apk \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
-              --title "FM1 Sampler Scenes — COMPOSE restoration and MIDI modifiers" \
+              --title "FM1 Sampler Scenes — physical MIDI receiver diagnostics" \
               --notes-file release-notes.md \
               --prerelease
           fi

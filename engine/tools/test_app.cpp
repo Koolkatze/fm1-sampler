@@ -111,10 +111,21 @@ int main() {
           app.onMidi(m, 3);
       };
       const int octaveBefore = app.scale().octave;
+      app.clearMidiDebug();
+      CHECK(app.midiControlStatus() == "MIDI RX: NO MESSAGES YET",
+            "physical MIDI diagnostics report no incoming messages initially");
       s.seek(0.65f); run(0.06);
-      // No timer: verify the audio pointer on the very next audio callback.
+      // Messages arrive separately: OCT- must be remembered without a
+      // simultaneous MIDI callback or an arbitrary time threshold.
       hold(SamplerApp::OCT_DOWN, true);
+      CHECK(app.midiControlStatus().find("OCT-:OK") != std::string::npos &&
+            app.midiLastEvent().find("CH2 NOTE 0 DOWN [OCT- HELD]") != std::string::npos,
+            "MIDI monitor confirms OCT- Note On and remembers modifier is held");
+      run(0.50);
       hold(SamplerApp::PLAY, true); run(0.02);
+      CHECK(app.midiControlStatus().find("PLAY:OK") != std::string::npos &&
+            app.midiLastEvent().find("CH2 NOTE 12 DOWN [OCT- HELD]") != std::string::npos,
+            "MIDI monitor confirms PLAY arrives in a distinct, later callback");
       CHECK(app.status().pos < app.status().loopSamples * 0.16 && app.status().playing,
             "OCT- + PLAY instantly restarts on second key-down (%.1f)", app.status().pos);
       hold(SamplerApp::PLAY, false); hold(SamplerApp::OCT_DOWN, false); run(0.02);
@@ -162,6 +173,8 @@ int main() {
             "while PLAY is held, CUE repeats a short BPM-locked region (%.3f -> %.3f)", cq0, cq1);
       enc(2, -1); run(0.05);
       CHECK(app.knobs()[0].value == "1/16", "K1 changes the subdivision live during CUE");
+      CHECK(app.midiControlStatus().find("K1:OK") != std::string::npos,
+            "MIDI diagnostic recognizes incoming physical K1 CC18");
       hold(SamplerApp::PLAY, false); run(0.15);
       CHECK(app.status().playing, "releasing PLAY returns to the running loop");
       hold(SamplerApp::OCT_UP, false); run(0.04);
@@ -358,15 +371,17 @@ int main() {
         for (bool light : {true, false}) {
             theme::apply(light);
             ui.frame(now + 1);
-            bool restart = false, repeat = false, hide = false;
+            bool restart = false, repeat = false, hide = false, midiStatus = false, last = false;
             for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
                 restart |= op.text == "OCT− + PLAY/STOP: RESTART LOOP";
                 repeat |= op.text.find("NOTE REPEAT") != std::string::npos &&
                           op.text.find("OCT+ + PLAY/STOP") != std::string::npos;
                 hide |= op.text == "HIDE";
+                midiStatus |= op.text.find("MIDI OCT-:") != std::string::npos;
+                last |= op.text.find("LAST CH") != std::string::npos;
             }
-            CHECK(restart && repeat && hide,
-                  "physical shortcuts legend says NOTE REPEAT and shows both commands in %s mode",
+            CHECK(restart && repeat && hide && midiStatus && last,
+                  "physical shortcuts and incoming MIDI diagnostics in %s mode",
                   light ? "light" : "dark");
         }
         theme::apply(true);
