@@ -27,15 +27,28 @@ jobs:
     steps:
       - name: Checkout the fork
         uses: actions/checkout@v4
-      - name: Verify embedded firmware installer exists
+      - name: Fetch the actual compiled FM1 Sampler USB MIDI firmware Workbench
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          test -s firmware/FM1-Sampler-Workbench.html
-          grep -qi '<!doctype html>' firmware/FM1-Sampler-Workbench.html
-      - name: Stage static HTTPS site (without rebuilding firmware)
-        run: |
+          set -euo pipefail
           mkdir -p _site
+          # This verified Release is produced from the FM1 Sampler firmware
+          # sources and embeds the compiled USB-only firmware package.
+          # Never silently deploy the older firmware/FM1-Sampler-Workbench.html.
+          gh release download 'vFM1-Sampler-OCT-MIDI-preview.1' \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern 'FM1-Sampler-Workbench-OCT-MIDI.html' --dir _site
+          cd _site
+          echo 'f8de457c141d3aec280fde29ef6afc37ffce42294bf8eebab71d5d9bacc3baad  FM1-Sampler-Workbench-OCT-MIDI.html' | sha256sum --check --status
+          test -s FM1-Sampler-Workbench-OCT-MIDI.html
+          grep -qi '<!doctype html>' FM1-Sampler-Workbench-OCT-MIDI.html
+          grep -q 'FM1_PACKAGE' FM1-Sampler-Workbench-OCT-MIDI.html
+          mv FM1-Sampler-Workbench-OCT-MIDI.html workbench.html
+      - name: Stage HTTPS Pages entry point
+        run: |
+          set -euo pipefail
           cp docs/pages-index.html _site/index.html
-          cp firmware/FM1-Sampler-Workbench.html _site/workbench.html
           touch _site/.nojekyll
       - name: Configure Pages
         uses: actions/configure-pages@v5
