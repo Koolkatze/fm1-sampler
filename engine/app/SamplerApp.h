@@ -63,6 +63,9 @@ public:
     void transportPlay();
     void transportSet(bool play);                 // phone PLAY / STOP keys
     void cueHold(bool down);                     // momentary CUE from the phone touch controls
+    void restartLoop();                           // long PLAY: restart loop without toggling stop
+    void setCueDivision(int division);            // 0..5 selects 1/1..1/32 on phone or K1
+    int cueDivision() const { return cueDivision_; }
     bool cueActive() const { return cueActive_; }
     bool recordingNow() const { bool r = st_.freeRecording || st_.freeArmed; for (int t = 0; t < kTracks; t++) r |= st_.track_clip_rec[t]; return r; }
     void endRecording();                          // PLAY / STOP while recording: the take ends, the loop keeps playing
@@ -85,7 +88,9 @@ public:
     // Live performance: 12 reusable 8-track scenes on the C1..B1 bank.
     static std::string sceneLabel(int slot);
     bool songMode() const { return songMode_; }
+    bool performanceActive() const { return sceneKeys_; }
     void setSongMode(bool song);
+    void exitPerformanceMode();
     int selectedScene() const { return selectedScene_; }
     void selectScene(int slot, bool trigger = false);
     uint8_t sceneTracks() const { return sceneTracks_; }
@@ -195,7 +200,8 @@ private:
     bool fwDirty_ = true; uint32_t lenAt_ = 0;
     int cueDivision_ = 2;                 // 1/4 default, selectable 1/1..1/32
     bool cueActive_ = false, cueSelect_ = false;
-    uint32_t octUpAt_ = 0;
+    uint32_t octUpAt_ = 0, playDownAt_ = 0;
+    bool playLongFired_ = false, playModified_ = false;
     Page cueReturnPage_ = P_HOME;
     uint32_t held_ = 0;
     ScaleState scale_;
