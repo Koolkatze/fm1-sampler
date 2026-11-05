@@ -7,6 +7,8 @@ on:
       - 'android/app/build.gradle'
       - 'android/app/src/main/java/**'
       - 'engine/**'
+      - 'firmware/app/ctrl.c'
+      - 'firmware/hosttest/ctrl_host.c'
       - '.github/workflows/publish-fm1-library-preview.yml'
   workflow_dispatch:
 
@@ -30,6 +32,12 @@ jobs:
           mkdir -p "$HOME/fm1-sampler"
           ln -s "$GITHUB_WORKSPACE/samples" "$HOME/fm1-sampler/samples"
           ./engine/build/test_app
+      - name: Verify USB MIDI controller octave chord
+        run: |
+          mkdir -p firmware/build/host
+          cc -std=c11 -O2 -DFM1_HOST_TEST -I firmware/sdk/include -I firmware/app -I firmware/app/synth \
+            firmware/hosttest/ctrl_host.c -lm -o firmware/build/host/ctrl_host
+          ./firmware/build/host/ctrl_host
       - name: Install Java 17
         uses: actions/setup-java@v4
         with:
@@ -54,49 +62,37 @@ jobs:
       - name: Stage and check APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.4-preview.apk
-          unzip -t dist/FM1-Sampler-Library-0.38.4-preview.apk | tail -n 1
-          sha256sum dist/FM1-Sampler-Library-0.38.4-preview.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.5-preview.apk
+          unzip -t dist/FM1-Sampler-Library-0.38.5-preview.apk | tail -n 1
+          sha256sum dist/FM1-Sampler-Library-0.38.5-preview.apk
       - name: Publish on GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v0.38-library-preview.5
+          TAG: v0.38-library-preview.6
         run: |
           cat > release-notes.md <<'EOF'
-          ## FM1 Sampler 0.38.4 — PRESETS inline browser and auto-loaded WAVs
+          ## FM1 Sampler 0.38.5 — Restored LIBRARY and NOTE REPEAT triplets
 
-          **Download and install the attached `FM1-Sampler-Library-0.38.4-preview.apk` after backing up your previous projects and loops.**
+          **Installable APK:** `FM1-Sampler-Library-0.38.5-preview.apk` (Android debug prerelease).
 
-          - **HOME LIBRARY icon:** opens the existing FM1-SAMPLER root INSIDE the app. It does not launch Android's file explorer. External imports remain a separate explicit action in the EDIT view.
-          - **HOME:** BACK and ENTER are the only navigation buttons. The read-only icon beside the selected filename identifies root, folder, playable WAV, or other file.
-          - **Physical FM-1 PRESETS knob:** scrolls one item at a time only within the current directory, including folders and files; a selected WAV is loaded immediately as the active track preset without pressing ENTER. ENTER only enters directories; BACK returns one directory level. No separate library browser overlay.
-          - **PROJECT > EXPORT ALL LOOPS:** export all currently recorded tracks as WAV stems plus MASTER.wav to public `Download/FM1-SAMPLER/EXPORTED LOOPS/`, visible in Android Files. MediaStore keeps previous exports; original loops and projects are not altered.
-          - Preserves ENTER and BACK for deeply nested packs and imports. ENTER on a WAV is intentionally a no-op.
-          - On first launch, creates the `FM1-SAMPLER` root inside the application's private files directory.
-          - Opens the library at `FM1-SAMPLER /`, with four permanent folders: `PROYECTOS`, `OFFICIAL`, `SAVED`, and `PACKS`.
-          - `SAVED/LOOPS` holds named loop recordings; `SAVED/RECORDINGS` holds microphone takes; `SAVED/IMPORTS` holds individual audio imports.
-          - `PROYECTOS` holds full, self-contained FMP2 projects and scene/SONG data.
-          - `OFFICIAL` holds the app's bundled Bass, Drums, Keys and Pads instruments.
-          - Every imported ZIP is extracted to `FM1-SAMPLER/PACKS/<pack name>/`, preserving its original folder hierarchy and **all** source files. Compatible compressed audio also gets a playable WAV copy.
-          - The ZIP source selected in Downloads, USB, Google Drive, etc. is retained in its original location; Android does not allow us to silently move/delete another provider's document.
-          - HOME retains `ENTER` and `BACK` controls for unlimited folder depth; PRESETS selects and immediately loads WAVs.
-          - Attempts to migrate older samples, packs, recordings, scenes and FMP2 project files from the **same package** without overwriting existing files.
-          - Preserves eight tracks, USB MIDI control, loop transport, 12 scenes, COMPOSE and SONG mode, tape FX, and complete project saves.
+          - **HOME folder icon LIBRARY:** opens the original in-app library panel (not Android's external document browser). Its four root directories, file-type icons, ENTER/BACK controls and **+ IMPORT ZIP** are restored.
+          - **IMPORT ZIP** opens Android's document picker specifically to select an external ZIP, then extracts the archive under `FM1-SAMPLER/PACKS` without deleting the source ZIP.
+          - **PRESETS knob and library touch selection** share one cursor. Moving to a WAV immediately loads it into the selected track as a preset. ENTER only opens selected folders; BACK goes up one directory.
+          - **OCT+ + OCT- together** (in either press order) instantly shows the NOTE REPEAT rate page. No long press or PLAY is required to open the menu; K1 chooses the rate.
+          - **All six straight and six triplet note divisions:** 1/1, 1/1T, 1/2, 1/2T, 1/4, 1/4T, 1/8, 1/8T, 1/16, 1/16T, 1/32, 1/32T. A triplet repeat lasts 2/3 of the corresponding straight division at the session BPM.
+          - **OCT+ + PLAY** remains momentary NOTE REPEAT; **OCT- + PLAY** remains immediate loop restart. Releasing PLAY returns to the original loop without altering saved audio.
+          - Existing FMP2 project archives and WAV loops remain compatible. Old project setting v2 straight divisions are remapped to their equivalent v3 index on load; no samples or audio data are removed.
+          - **Firmware source:** `firmware/app/ctrl.c` marks both octave buttons as consumed in the menu combination, so releasing them does not shift the keyboard. Host firmware simulation is included in CI. The repository's previously bundled `.fwsc` **has not been rebuilt**, and this APK **does not flash firmware**. A physical FM-1 must run firmware forwarding OCT+ / OCT- USB MIDI Note On/Off to detect the combination.
+          - Separate debugging note: debug-signed GitHub APKs may not share a stable key. **Never uninstall an old version containing irreplaceable project/loop data without a tested backup.** Package ID for this APK is `com.ferluht.fm1sampler.scenes`.
 
-          **Storage clarification:** `FM1-SAMPLER` is an app-private directory. It is the library root *inside FM1 Sampler*, not a public folder in the phone's Files app.
+          **Validation:** Automated engine/navigation/audio tests, FM-1 controller source host simulation, and Android APK compilation. Hardware behavior remains unverified on the actual device.
 
-          **Android package:** `com.ferluht.fm1sampler.scenes` (installs separately from the production package). Files belonging to a different app package are not directly migrated.
-
-          **Update warning:** This is a debug-signed prerelease. GitHub runners may use different signing keys between builds; Android may refuse an in-place update. Do **not** uninstall an older copy with irreplaceable private projects/recordings unless you have backups.
-
-          **Validation:** Automated C++ sampler/scene/song/navigation tests and Android debug APK compilation passed. Physical FM-1 hardware and phone storage migration have not yet been tested on-device. No FM-1 firmware flash is required for these library changes.
-
-          Source: [FM1 Sampler library changes](https://github.com/Koolkatze/fm1-sampler/pull/3).
+          Source: [FM1 Sampler development](https://github.com/Koolkatze/fm1-sampler/pull/3).
           EOF
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.4-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.5-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md --prerelease
           else
-            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.4-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.4 — HOME root, folders and samples browser"               --notes-file release-notes.md               --prerelease
+            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.5-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.5 — LIBRARY restored and triplet NOTE REPEAT"               --notes-file release-notes.md               --prerelease
           fi
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets,isPrerelease             --jq '{url: .url, isPrerelease: .isPrerelease, files: [.assets[].name]}'
