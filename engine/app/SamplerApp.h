@@ -201,6 +201,8 @@ private:
     uint32_t auditionAt_ = 0, previewOffAt_ = 0; int previewNote_ = -1, previewTrack_ = -1;
     bool wantFile_ = false, wantPack_ = false, previewAfterLoad_ = false;
     int dialogRequest_ = 0, pendingProjectSlot_ = -1;
+    int pendingProjectLabelSlot_ = -1;
+    std::string pendingProjectLabel_;
     // loop / recorder
     Session::Status st_{};
     bool loopAny_ = false;
