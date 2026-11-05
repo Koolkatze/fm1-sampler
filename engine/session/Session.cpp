@@ -512,6 +512,15 @@ void Session::noteOn(int t, int note, int vel) { if (t >= 0 && t < kTracks) d->p
 void Session::noteOff(int t, int note) { if (t >= 0 && t < kTracks) d->post([=] { d->liveNote(t, note, 0); }); }
 
 // ---- sampler ----
+void Session::clearSample(int track) {
+    if (track < 0 || track >= kTracks) return;
+    d->post([this, track] {
+        auto& t = *d->tracks[(size_t)track];
+        d->releaseAll(t);
+        d->bury(std::move(t.sampler));
+        { std::lock_guard<std::mutex> lk(t.infoMtx); t.label.clear(); t.peaks.clear(); t.orig.reset(); }
+    });
+}
 void Session::loadSamplePath(const std::string& path, bool kit, int track) {
     if (track < 0 || track >= kTracks || !std::filesystem::exists(path)) return;
     d->a_sampleState = 2;
