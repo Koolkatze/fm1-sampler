@@ -414,16 +414,14 @@ void SamplerApp::endRecording() {
     if (st_.freeArmed || st_.freeRecording) { s_.freeRecord(track_, false); say(st_.freeArmed && !st_.freeRecording ? "CANCELLED" : "LOOP SET"); }
     for (int t = 0; t < kTracks; t++) if (st_.track_clip_rec[t]) s_.clipRecord(t, false);
 }
-void SamplerApp::transportPlay() {   // hardware PLAY follows the selected PROJECT mode
-    if (octDownModifierHeld()) { restartLoop(); return; }
+void SamplerApp::transportPlay() {   // normal transport: modifiers only work through physical MIDI button presses
     if (recordingNow()) { endRecording(); return; }
     if (songMode_) { if (st_.songPlaying) stopSong(); else playSong(); return; }
     s_.play(!st_.playing);
 }
 void SamplerApp::transportSet(bool play) {
-    // This is invoked directly on touchscreen press, with no 1-second timer.
-    // Both OCT- + PLAY and OCT- + STOP trigger the same immediate restart.
-    if (octDownModifierHeld()) { restartLoop(); return; }
+    // The mobile screen has ordinary transport controls only. OCT combinations
+    // are decoded solely from physical/external MIDI button note events.
     if (recordingNow()) { if (!play) endRecording(); return; }
     if (songMode_) { if (play) playSong(); else stopSong(); return; }
     s_.play(play);
@@ -597,7 +595,10 @@ void SamplerApp::button(int b, bool down) {
         return;
     }
     if (b == STOP) {
-        if (down) transportSet(false);  // native touchscreen STOP or optional external MIDI note 14
+        if (down) { // optional external hardware STOP note 14; not native FM-1 firmware
+            if (held_ & (1u << OCT_DOWN)) restartLoop();
+            else transportSet(false);
+        }
         return;
     }
     if (b == PLAY) {
