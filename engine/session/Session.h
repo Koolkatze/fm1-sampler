@@ -53,6 +53,7 @@ public:
     void noteOff(int track, int note);
 
     // ---- sampler (per track) ----
+    void clearSample(int track);
     void loadSamplePath(const std::string& path, bool kit, int track);          // worker thread builds it, then it replaces the track's sampler
     void setMode(int track, int mode);                                         // 0 melodic, 1 one-shot, 2 looped, 3 kit, 4 granular, 5 paulstretch
     void setEnv(int track, float attack, float decay, float sustain, float release);   // seconds, level
