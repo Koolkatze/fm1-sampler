@@ -80,12 +80,12 @@ int main() {
     app.loopSave(); run(1.0);
     int wavs = 0;
     {
-        const std::filesystem::path saved = std::filesystem::path(s.sampleDir()) / "SAVED" / "Loops";
+        const std::filesystem::path saved = std::filesystem::path(s.sampleDir()) / "SAVED" / "LOOPS";
         std::error_code ec;
         for (const auto& file : std::filesystem::directory_iterator(saved, ec))
             if (file.path().extension() == ".wav") ++wavs;
     }
-    CHECK(wavs >= 1, "SAVE wrote the complete named loop into SAVED/Loops (%d files)", wavs);
+    CHECK(wavs >= 1, "SAVE wrote the complete named loop into SAVED/LOOPS (%d files)", wavs);
     app.loopClearTrack(); run(0.3);
     CHECK(!app.status().track_has_clip[0], "clearing one track's loop");
     app.loopClear(); run(0.3);
@@ -630,10 +630,10 @@ int main() {
     enc(2, -1); run(3.0);
     const bool micInSaved = std::any_of(app.library().begin(), app.library().end(),
                                             [](const SamplerApp::Entry& e) {
-                                                return e.pack == "SAVED" && e.folder == "Recordings";
+                                                return e.pack == "SAVED" && e.folder == "RECORDINGS";
                                             });
     CHECK(app.micState() == 0 && micInSaved,
-          "microphone recording is available in SAVED/Recordings (%s)",
+          "microphone recording is available in SAVED/RECORDINGS (%s)",
           app.sampleLabel(0).c_str());
     // import from disk: a WAV dropped into the data dir
     { std::ifstream src(std::string(getenv("HOME")) + "/fm1-sampler/samples/Bass/Fuzz.wav", std::ios::binary); std::ofstream dst("/tmp/fm1sampler_t2/sample_FromDisk.wav", std::ios::binary); dst << src.rdbuf(); }
@@ -672,36 +672,53 @@ int main() {
         { auto k = app.knobs(SamplerApp::P_MIX); k[1].set(0.f); }
         app.selectTrack(1); app.setAlgo(0); app.selectTrack(0); app.setAlgo(0);
     }
-    {   // Selected row + explicit ENTER/BACK controls, independent of the audio loop engine
+    {   // The browser must start at FM1-SAMPLER, expose all permanent directories,
+        // and navigate imported PACKS / pack / arbitrary subfolders with ENTER and BACK.
+        namespace fs = std::filesystem;
+        fs::create_directories(fs::path(s.sampleDir()) / "PACKS" / "My Imported ZIP" / "Drums" / "Kicks");
+        app.refreshLibrary();
         SamplerUI browser(app);
         browser.setSize(860.f, 400.f, 0.f, 0.f);
         browser.frame(now);
-        browser.touch(0, 90.f, 34.f, now);  // open via the deck's sample title
-        browser.frame(now);
+        auto click = [&](float x, float y) {
+            browser.touch(0, x, y, now);
+            browser.touch(2, x, y, now);
+            browser.frame(now);
+        };
+        click(90.f, 34.f);  // open sample library from cassette deck
         auto hasText = [&](const std::string& label) {
             for (const auto& op : browser.ops())
                 if (op.type == UiOp::TEXT && op.text.find(label) != std::string::npos) return true;
             return false;
         };
-        CHECK(hasText("ENTER >") && hasText("< BACK") &&
-              hasText("PACKS") && hasText("FOLDERS") && hasText("SAMPLES"),
-              "library exposes the native-styled archive/folder/wave icons and ENTER/BACK arrows");
         auto breadcrumb = [&]() -> std::string {
             for (const auto& op : browser.ops())
-                if (op.type == UiOp::TEXT && op.text.rfind("PACKS /", 0) == 0)
+                if (op.type == UiOp::TEXT && op.text.rfind("FM1-SAMPLER /", 0) == 0)
                     return op.text;
             return "";
         };
-        const std::string currentFolder = breadcrumb();
-        browser.touch(0, 555.f, 65.f, now); // BACK from currently selected sample folder
-        browser.frame(now);
-        const std::string parentFolder = breadcrumb();
-        CHECK(!parentFolder.empty() && parentFolder != currentFolder,
-              "BACK returns to the exact parent folder without choosing a sample");
-        browser.touch(0, 660.f, 65.f, now); // ENTER the selected child folder
-        browser.frame(now);
-        CHECK(breadcrumb() == currentFolder,
-              "ENTER re-opens the previously selected folder, including nested PROJECT folders");
+        CHECK(hasText("ENTER >") && hasText("< BACK") &&
+              hasText("ROOT") && hasText("FOLDERS") && hasText("SAMPLES"),
+              "FM1-SAMPLER browser includes ENTER/BACK, archive, folder and waveform icons");
+        CHECK(hasText("PROYECTOS") && hasText("OFFICIAL") &&
+              hasText("SAVED") && hasText("PACKS") && breadcrumb() == "FM1-SAMPLER /",
+              "FM1-SAMPLER always opens at its four permanent top-level folders");
+        // Alphabetical folder order: OFFICIAL, PACKS, PROYECTOS, SAVED.
+        click(205.f, 165.f); click(660.f, 65.f);
+        CHECK(breadcrumb() == "FM1-SAMPLER / PACKS", "ENTER visits PACKS");
+        click(205.f, 129.f); click(660.f, 65.f);
+        CHECK(breadcrumb() == "FM1-SAMPLER / PACKS/My Imported ZIP" ||
+              breadcrumb() == "FM1-SAMPLER / PACKS / My Imported ZIP",
+              "ENTER visits the imported ZIP's own folder");
+        click(205.f, 129.f); click(660.f, 65.f);
+        CHECK(breadcrumb().find("/Drums") != std::string::npos, "ENTER visits a nested Drums subfolder");
+        click(555.f, 65.f);
+        CHECK(breadcrumb().find("My Imported ZIP") != std::string::npos &&
+              breadcrumb().find("/Drums") == std::string::npos,
+              "BACK returns precisely one level from a nested pack folder");
+        click(555.f, 65.f); click(555.f, 65.f);
+        CHECK(breadcrumb() == "FM1-SAMPLER /",
+              "BACK returns from PACKS to the FM1-SAMPLER root");
     }
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL OK", fails);
     return fails ? 1 : 0;
