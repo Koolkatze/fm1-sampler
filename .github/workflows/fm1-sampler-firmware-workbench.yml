@@ -55,21 +55,29 @@ jobs:
             throw 'JieLi 2.5.3 cannot be downloaded from the vendor CDN on this runner. No firmware will be released.'
           }
           Write-Host "Installer SHA-256: $((Get-FileHash $installer -Algorithm SHA256).Hash)"
-          $seven = 'C:\Program Files\7-Zip\7z.exe'
-          if (!(Test-Path $seven)) { throw '7-Zip not available on Windows runner.' }
-          $dst = Join-Path $env:RUNNER_TEMP 'jieli-extracted'
-          New-Item -ItemType Directory -Path $dst -Force | Out-Null
-          & $seven x $installer "-o$dst" -y | Out-Host
-          if ($LASTEXITCODE -ne 0) { throw 'The vendor installer is not extractable with 7-Zip. No unverified installer was executed.' }
-          $clang = @(Get-ChildItem -LiteralPath $dst -Recurse -Filter clang.exe -File -ErrorAction SilentlyContinue |
-                     Where-Object { $_.Directory.Name -eq 'bin' -and (Test-Path (Join-Path $_.DirectoryName 'pi32v2-ld.exe')) } |
-                     Select-Object -First 1)
-          if ($clang.Count -ne 1) {
-            throw 'Could not extract a complete pi32/bin JieLi 2.5.3 toolchain. Supply the matching vendor toolchain locally to build; no old firmware will be repackaged.'
+          # The official vendor executable identifies as Inno Setup 2.5.3.
+          # Install on this ephemeral Windows runner, then verify toolchain
+          # files by SHA-256 against firmware/sdk/manifest.json (Build.ps1).
+          $sig = Get-AuthenticodeSignature -FilePath $installer
+          Write-Host "Installer signature: $($sig.Status)"
+          $setup = Start-Process -FilePath $installer -ArgumentList @(
+            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-',
+            '/DIR=C:\JL\pi32'
+          ) -Wait -PassThru
+          if ($setup.ExitCode -ne 0) {
+            throw "Official JieLi 2.5.3 installer failed with code $($setup.ExitCode)."
           }
-          $toolchain = Split-Path -Parent $clang[0].DirectoryName
-          # Build.ps1 verifies the SHA-256 of each of the 22 toolchain files
-          # against firmware/sdk/manifest.json before compiling.
+          $candidates = @(
+            'C:\JL\pi32\bin\clang.exe',
+            'C:\JL\pi32\pi32\bin\clang.exe'
+          )
+          $clang = @($candidates | Where-Object {
+            (Test-Path $_) -and (Test-Path (Join-Path (Split-Path $_ -Parent) 'pi32v2-ld.exe'))
+          } | Select-Object -First 1)
+          if ($clang.Count -ne 1) {
+            throw 'JieLi 2.5.3 installed but no pi32v2 clang/ld files found; no firmware will be published.'
+          }
+          $toolchain = Split-Path -Parent (Split-Path -Parent $clang[0])
           "FM1_PI32_TOOLCHAIN=$toolchain" >> $env:GITHUB_ENV
           Write-Host "Extracted toolchain at $toolchain"
       - name: Build complete flashable FM1 Sampler firmware and Workbench
