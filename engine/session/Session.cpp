@@ -16,12 +16,24 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <functional>
 #include <mutex>
 #include <thread>
 
 namespace {
 constexpr int kBlock = 256;
+std::string safeFileName(const std::string& name) {
+    std::string out;
+    for (unsigned char c : name) if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
+        (c >= 'a' && c <= 'z') || c == '-' || c == '_' || c == ' ' || c >= 128) out += (char)c;
+    while (!out.empty() && out.back() == ' ') out.pop_back();
+    if (out == "." || out == "..") out.clear();
+    if (out.size() > 70) out.resize(70);
+    return out.empty() ? "Untitled" : out;
+}
 }
 
 struct Session::Impl {
@@ -609,11 +621,98 @@ void Session::seek(float f) {
 }
 void Session::setLoopSpeed(float v) { d->tapeSpeed.store(clampf(v, 0.25f, 2.f)); }
 void Session::setLoopSource(int src) { d->post([=] { d->loopSrc = src ? 1 : 0; }); }
-bool Session::saveClip(int t) {
-    if (t < 0 || t >= kTracks || !d->tracks[(size_t)t]->clipHas) return false;
-    std::vector<float> c = d->tracks[(size_t)t]->clip;   // a copy, written on the worker
-    d->job([this, c = std::move(c)]() mutable { d->finishSample(std::move(c)); d->a_pending = false; });
+bool Session::saveClip(int t, const std::string& name) {
+    if (t < 0 || t >= kTracks || !(d->a_clip_mask.load() & (1u << t))) return false;
+    const std::string folder = d->sampleDir + "/SAVED/Loops", label = safeFileName(name);
+    d->post([this, t, folder, label] {
+        const auto& tr = *d->tracks[(size_t)t];
+        if (!tr.clipHas || tr.clip.empty()) return;
+        std::vector<float> audio = tr.clip; // snapshot from audio thread, not UI thread
+        d->job([this, folder, label, audio = std::move(audio)] {
+            namespace fs = std::filesystem;
+            std::error_code ec; fs::create_directories(folder, ec);
+            std::string path = folder + "/" + label + ".wav";
+            for (int n = 2; fs::exists(path, ec) && n < 10000; n++)
+                path = folder + "/" + label + " (" + std::to_string(n) + ").wav";
+            writeWav16(path, audio, d->sr); // preserve the complete loop, including its silence
+        });
+    });
     return true;
+}
+
+void Session::saveProject(const std::string& name, const std::string& appState,
+                          const std::array<std::string, kTracks>& samplePaths) {
+    const std::string folder = d->dataDir + "/projects/" + safeFileName(name);
+    d->post([this, folder, appState, samplePaths] {
+        // Every recorded track and transport value is captured at the same audio block boundary.
+        std::array<std::vector<float>, kTracks> clips;
+        for (int i = 0; i < kTracks; i++) if (d->tracks[(size_t)i]->clipHas)
+            clips[(size_t)i] = d->tracks[(size_t)i]->clip;
+        const float bpm = d->bpm;
+        const int bars = d->loopBars, length = d->loopSamples;
+        const double pos = d->tapePos;
+        const bool playing = d->playing && !d->stopping;
+        d->job([this, folder, appState, samplePaths, clips = std::move(clips),
+                bpm, bars, length, pos, playing]() mutable {
+            namespace fs = std::filesystem;
+            std::error_code ec; fs::create_directories(folder, ec);
+            if (ec) return;
+            for (int i = 0; i < kTracks; i++) {
+                const auto dst = folder + "/sound" + std::to_string(i + 1) + ".wav";
+                if (!samplePaths[(size_t)i].empty() && fs::exists(samplePaths[(size_t)i], ec)) {
+                    if (fs::path(samplePaths[(size_t)i]) != fs::path(dst))
+                        fs::copy_file(samplePaths[(size_t)i], dst, fs::copy_options::overwrite_existing, ec);
+                } else fs::remove(dst, ec);
+                const auto loop = folder + "/loop" + std::to_string(i + 1) + ".wav";
+                if (!clips[(size_t)i].empty()) writeWav16(loop, clips[(size_t)i], d->sr);
+                else fs::remove(loop, ec);
+            }
+            {
+                std::ofstream meta(folder + "/session.meta", std::ios::trunc);
+                meta << "FM1SESSION1 " << d->sr << ' ' << length << ' '
+                     << std::setprecision(10) << bpm << ' ' << bars << ' '
+                     << pos << ' ' << playing << '\n';
+            }
+            // State file is the final completion marker.
+            std::ofstream state(folder + "/project.state", std::ios::trunc);
+            state << appState;
+        });
+    });
+}
+
+void Session::loadProjectClips(const std::string& name) {
+    const std::string folder = d->dataDir + "/projects/" + safeFileName(name);
+    d->job([this, folder] {
+        std::ifstream meta(folder + "/session.meta");
+        std::string magic;
+        int sr = 0, length = 0, bars = 4, playing = 0;
+        float bpm = 120.f; double pos = 0;
+        if (!(meta >> magic >> sr >> length >> bpm >> bars >> pos >> playing) ||
+            magic != "FM1SESSION1" || sr != d->sr || length < 0 || length > d->sr * 180) return;
+        std::array<std::vector<float>, kTracks> clips;
+        for (int i = 0; i < kTracks; i++) {
+            int rate = 0;
+            const auto f = folder + "/loop" + std::to_string(i + 1) + ".wav";
+            if (readWav(f, clips[(size_t)i], rate) && rate == d->sr &&
+                clips[(size_t)i].size() == (size_t)length * 2) continue;
+            clips[(size_t)i].clear();
+        }
+        d->post([this, clips = std::move(clips), length, bpm, bars, pos, playing]() mutable {
+            d->freeRec = d->freeArmed = false; d->a_free = d->a_freeArmed = false;
+            d->scrubActive = d->scrubTail = false;
+            for (int i = 0; i < kTracks; i++) {
+                auto& t = *d->tracks[(size_t)i];
+                t.clipRec = false; t.clip = std::move(clips[(size_t)i]);
+                t.clipHas = !t.clip.empty();
+            }
+            d->loopSamples = length; d->a_loop = length;
+            d->bpm = bpm; d->a_bpm = bpm;
+            d->loopBars = bars; d->a_bars = bars;
+            d->pos = d->tapePos = length > 0 ? std::max(0.0, std::min((double)length - 1, pos)) : 0.0;
+            d->playing = playing && length > 0;
+            d->stopping = false; d->rate = d->playing ? 1.0 : 0.0;
+        });
+    });
 }
 int Session::loopPeaks(int track, float* out, int maxBins) const {
     const int n = std::min(maxBins, kLoopBins);
