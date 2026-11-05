@@ -175,81 +175,50 @@ int main() {
       CHECK(diff < 1.e-6f && app.status().loopSamples == savedLoopLength,
             "CUE never modifies the recorded loop audio or duration (diff %.8f)", diff);
 
-      // Android single-touch operation: tap OCT+ to latch the modifier,
-      // then hold PLAY. K1 on the CUE page chooses the subdivisions.
+      // Hardware-only modifiers: NO added OCT+/OCT- buttons on Android.
+      // The original deck transport and project editor must remain available.
       SamplerUI touchUi(app);
       touchUi.setSize(860.f, 400.f, 0.f, 0.f);
       touchUi.frame(now);
+      bool modifierButton = false;
+      for (const auto& op : touchUi.ops()) if (op.type == UiOp::TEXT)
+          modifierButton |= op.text == "OCT+" || op.text == "OCT-";
+      CHECK(!modifierButton, "deck has no OCT+ or OCT- touch buttons");
+      // Touch where the removed modifier buttons used to be: it must not
+      // synthetically press hardware keys.
       touchUi.touch(0, 294.f, 234.f, now);
       touchUi.touch(2, 294.f, 234.f, now);
-      CHECK(app.cueModifierHeld() && app.page() == SamplerApp::P_CUE,
-            "Android OCT+ button arms CUE rate selection, without playing");
-      CHECK(!app.cueActive(), "arming OCT+ alone does not repeat audio");
+      touchUi.touch(0, 294.f, 265.f, now);
+      touchUi.touch(2, 294.f, 265.f, now);
+      CHECK(!app.cueModifierHeld() && !app.octDownModifierHeld(),
+            "removed touch modifiers cannot arm physical octave keys");
+      touchUi.setEditor(true);
       touchUi.frame(now);
-      touchUi.touch(0, 44.f, 248.f, now);
-      CHECK(app.cueActive(), "Android OCT+ plus held PLAY starts BPM-locked CUE");
-      app.knobs(SamplerApp::P_CUE)[0].set(1.f);
-      run(0.05);
-      CHECK(app.cueDivision() == 5 && app.cueActive(),
-            "Android K1 changes the subdivision live during held PLAY");
-      touchUi.touch(2, 44.f, 248.f, now);
-      run(0.04);
-      CHECK(!app.cueActive() && app.status().playing,
-            "Android releasing PLAY stops CUE but original loop continues");
-      touchUi.frame(now);
-      touchUi.touch(0, 294.f, 234.f, now);
-      touchUi.touch(2, 294.f, 234.f, now);
-      CHECK(!app.cueModifierHeld(), "Android OCT+ modifier can be disarmed");
+      modifierButton = false;
+      for (const auto& op : touchUi.ops()) if (op.type == UiOp::TEXT)
+          modifierButton |= op.text == "OCT+" || op.text == "OCT-";
+      CHECK(!modifierButton, "editor has no OCT+ or OCT- touch buttons");
+      touchUi.touch(0, 365.f, 22.f, now);
+      touchUi.touch(2, 365.f, 22.f, now);
+      CHECK(!app.cueModifierHeld() && !app.octDownModifierHeld(),
+            "former editor modifier area does not arm hardware octave keys");
 
-      // Android OCT- latch: PLAY or STOP immediately resets without a hold.
-      touchUi.frame(now);
-      touchUi.touch(0, 294.f, 265.f, now); touchUi.touch(2, 294.f, 265.f, now);
-      CHECK(app.octDownModifierHeld() && !app.cueModifierHeld(),
-            "Android OCT- latch is exclusive from OCT+ CUE");
-      s.seek(0.72f); run(0.04); touchUi.frame(now);
-      touchUi.touch(0, 44.f, 248.f, now); run(0.02);
-      CHECK(app.status().pos < app.status().loopSamples * 0.16 && app.status().playing,
-            "touch OCT- + PLAY restarts instantly on down");
-      touchUi.touch(2, 44.f, 248.f, now);
-      s.seek(0.72f); run(0.04); touchUi.frame(now);
-      touchUi.touch(0, 108.f, 248.f, now); run(0.02);
-      CHECK(app.status().pos < app.status().loopSamples * 0.16 && app.status().playing,
-            "touch OCT- + STOP restarts instantly on down");
-      touchUi.touch(2, 108.f, 248.f, now);
-      touchUi.frame(now);
-      touchUi.touch(0, 294.f, 265.f, now); touchUi.touch(2, 294.f, 265.f, now);
-      CHECK(!app.octDownModifierHeld(), "OCT- latch switches off");
-      touchUi.frame(now);
-      touchUi.touch(0, 108.f, 248.f, now); run(0.04);
-      CHECK(!app.status().playing, "unmodified STOP still stops");
-      touchUi.touch(2, 108.f, 248.f, now);
-      app.transportSet(true); run(0.12);
-      touchUi.setEditor(true); touchUi.frame(now);
-      touchUi.touch(0, 365.f, 22.f, now);
-      touchUi.touch(2, 365.f, 22.f, now);
-      CHECK(app.cueModifierHeld(), "editor OCT+ toggles the same CUE modifier");
-      touchUi.frame(now);
-      touchUi.touch(0, 25.f, 22.f, now);
-      CHECK(app.cueActive(), "editor OCT+ plus held PLAY repeats the current segment");
-      touchUi.touch(2, 25.f, 22.f, now);
-      run(0.03);
-      CHECK(!app.cueActive() && app.status().playing,
-            "editor releasing PLAY exits CUE without stopping the loop");
-      touchUi.frame(now);
-      touchUi.touch(0, 365.f, 22.f, now);
-      touchUi.touch(2, 365.f, 22.f, now);
-      CHECK(!app.cueModifierHeld(), "editor OCT+ disarms");
-      touchUi.frame(now);
-      touchUi.touch(0, 394.f, 22.f, now); touchUi.touch(2, 394.f, 22.f, now);
-      CHECK(app.octDownModifierHeld(), "editor also provides OCT-");
-      s.seek(0.71f); run(0.04); touchUi.frame(now);
-      touchUi.touch(0, 25.f, 22.f, now); run(0.02);
-      CHECK(app.status().pos < app.status().loopSamples * 0.16 && app.status().playing,
-            "editor OCT- + PLAY restarts instantly");
-      touchUi.touch(2, 25.f, 22.f, now);
-      touchUi.frame(now);
-      touchUi.touch(0, 394.f, 22.f, now); touchUi.touch(2, 394.f, 22.f, now);
-      CHECK(!app.octDownModifierHeld(), "editor OCT- disarms");
+      // Normal phone PLAY and STOP do not initiate an OCT- combo, even if
+      // the physical octave key is held. A real MIDI PLAY/STOP event must
+      // supply the second press to trigger the immediate restart.
+      app.transportSet(true); run(0.05);
+      s.seek(0.67f); run(0.04);
+      hold(SamplerApp::OCT_DOWN, true);
+      app.transportSet(true); run(0.04);
+      CHECK(app.status().pos > app.status().loopSamples * 0.4,
+            "touch PLAY does not trigger the hardware-only OCT- shortcut");
+      hold(SamplerApp::PLAY, true); run(0.02);
+      CHECK(app.status().pos < app.status().loopSamples * 0.16,
+            "physical OCT- + PLAY still restarts immediately");
+      hold(SamplerApp::PLAY, false);
+      hold(SamplerApp::OCT_DOWN, false);
+      run(0.04);
+
       s.seek(0.64f); run(0.03);
       hold(SamplerApp::PLAY, true); run(0.04);
       CHECK(app.status().playing, "PLAY alone no longer has a timed restart");
