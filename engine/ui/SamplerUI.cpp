@@ -291,8 +291,8 @@ void SamplerUI::pageView(Rect r) {
         text(x0, w.y + w.h - 8, 9, kDim, "TRIGGER LEVEL " + num("%.0f DB", 20 * std::log10(app_.micThreshold())), 0, true);
         break; }
     case P::P_CUE: {
-        head = std::string("CUE BEAT REPEAT: ") + kn[0].value;
-        text(w.x + 8, cy - 8, 13, kOrange, "HOLD PLAY FOR CUE", 0, true);
+        head = std::string("NOTE REPEAT: ") + kn[0].value;
+        text(w.x + 8, cy - 8, 13, kOrange, "HOLD OCT+ + PLAY", 0, true);
         text(w.x + 8, cy + 16, 10, kDim, "CHANGE K1 WHILE PLAYING", 0, false);
         break; }
     case P::P_LEN: {   // the loop as bars: one block per bar with its beats, the orange playhead
