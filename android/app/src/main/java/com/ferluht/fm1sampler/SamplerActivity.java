@@ -215,7 +215,10 @@ public class SamplerActivity extends Activity {
                     return;
                 }
                 Native.say(backend.engine, "IMPORTING AUDIO...");
-                File out = AudioImport.importTo(this, uri, StorageLayout.imports(this));
+                File audioFolder = StorageLayout.imports(this);
+                if (!audioFolder.isDirectory() && !audioFolder.mkdirs())
+                    throw new IOException("Cannot create sample imports folder");
+                File out = AudioImport.importTo(this, uri, audioFolder);
                 Native.importFile(backend.engine, out.getAbsolutePath());
                 Native.say(backend.engine, "SAMPLE IMPORTED: " + out.getName());
             } catch (Exception e) {
