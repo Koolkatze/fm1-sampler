@@ -222,14 +222,29 @@ void SamplerApp::browserSelect(int index) {
 }
 void SamplerApp::browserEnter() {
     const BrowserItem* chosen = browserSelected();
+    if (!chosen && browserDir_.empty() && !browserItems_.empty()) {
+        // BACK at the archive root deliberately shows FM1-SAMPLER itself,
+        // without a child selected. ENTER must be able to reopen that root:
+        // use its last highlighted folder (or the first one on first entry).
+        browserIndex_ = std::max(0, std::min(rootLastIndex_, (int)browserItems_.size() - 1));
+        chosen = browserSelected();
+    }
     if (!chosen || !chosen->directory) return; // ENTER never loads an audio file
+    if (browserDir_.empty()) rootLastIndex_ = browserIndex_;
     browserDir_ = chosen->path;
     rebuildBrowser();
     browserTouchedAt_ = nowMs_;
     loadBrowserSelection(); // selecting the first WAV in a directory also loads it
 }
 void SamplerApp::browserBack() {
-    if (browserDir_.empty()) { browserIndex_ = -1; browserTouchedAt_ = nowMs_; return; }
+    if (browserDir_.empty()) {
+        // Keep the root choice for the next ENTER, even though the top-level
+        // archive itself is now highlighted as FM1-SAMPLER.
+        if (browserSelected()) rootLastIndex_ = browserIndex_;
+        browserIndex_ = -1;
+        browserTouchedAt_ = nowMs_;
+        return;
+    }
     const std::string prior = browserDir_;
     const size_t slash = browserDir_.find_last_of('/');
     browserDir_ = slash == std::string::npos ? "" : browserDir_.substr(0, slash);
