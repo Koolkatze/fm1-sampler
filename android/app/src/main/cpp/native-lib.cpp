@@ -170,6 +170,23 @@ FN(void, importFile)(JNIEnv* env, jclass, jlong h, jstring path) {
     { std::lock_guard<std::mutex> l(e.surfaceMtx); e.app->importFile(c); }
     env->ReleaseStringUTFChars(path, c);
 }
+FN(jboolean, wantPack)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    return e.app->wantPack();
+}
+FN(jint, takeDialogRequest)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    return e.app->takeDialogRequest();
+}
+FN(void, submitName)(JNIEnv* env, jclass, jlong h, jint kind, jstring name) {
+    auto& e = *E(h); const char* c = env->GetStringUTFChars(name, nullptr);
+    { std::lock_guard<std::mutex> l(e.surfaceMtx); e.app->submitName((int)kind, c); }
+    env->ReleaseStringUTFChars(name, c);
+}
+FN(void, refreshLibrary)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    e.app->refreshLibrary();
+}
 FN(void, say)(JNIEnv* env, jclass, jlong h, jstring msg) {
     auto& e = *E(h); const char* c = env->GetStringUTFChars(msg, nullptr);
     { std::lock_guard<std::mutex> l(e.surfaceMtx); e.app->say(c); }
