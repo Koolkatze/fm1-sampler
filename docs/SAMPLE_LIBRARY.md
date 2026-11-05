@@ -110,6 +110,20 @@ Non-audio files imported as part of ZIP packs remain visible without being
 mistaken for playable WAV samples. External file imports remain available
 from the separate EDIT action, not from directory navigation.
 
+## FIX: ENTER after returning to FM1-SAMPLER root (0.38.9)
+
+If the navigator is at `FM1-SAMPLER` itself because the user pressed
+**BACK** at the root, the in-app cursor is intentionally unselected. In
+older builds **ENTER** did nothing in this state, looking frozen.
+
+**ENTER now reopens the last selected root folder** (for example
+`PACKS`), or the first root folder if none has been visited. This works
+identically from the HOME inline ENTER and the LIBRARY overlay ENTER and
+needs no intervening turn of the physical PRESETS encoder. BACK still
+returns to the parent and PRESETS still selects one item per detent;
+choosing a WAV still immediately loads that file without ENTER.
+Repeated BACK → ENTER navigation at root remains possible.
+
 ## HOME LIBRARY overlay restored (0.38.5)
 
 The **LIBRARY** folder icon on the cassette HOME page opens the in-app
