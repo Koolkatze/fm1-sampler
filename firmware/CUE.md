@@ -27,7 +27,7 @@ simultaneous MIDI event or minimum hold duration is necessary.
 - Physical PLAY/STOP press/release: channel 2, note 12, Note On/Off.
 - Physical K1: channel 1, relative MIDI CC 18.
 
-The panel firmware forwards events over whichever of USB or BLE MIDI is ready.
+The FM1 Sampler firmware forwards these panel events exclusively over **USB MIDI**. It does not send these events over Bluetooth.
 An unmodified FM1 Sampler firmware that handles OCT locally **without sending
 these events** cannot activate physical combinations in the Android app.
 The APK's INFO panel can now show whether each message has actually arrived.
@@ -36,7 +36,7 @@ The INFO panel is diagnostic only; it does not emulate physical buttons.
 ## Source, validation and building the firmware
 
 - Firmware implementation: `firmware/app/ctrl.c`.
-- Physical button and USB/BLE validation:
+- Physical button and USB-only validation:
   `firmware/hosttest/ctrl_host.c`.
 - CI test: `.github/workflows/fm1-panel-midi-tests.yml`.
 
