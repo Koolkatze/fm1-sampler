@@ -434,6 +434,7 @@ struct FullProjectSettings {
     uint8_t sceneTrackMask = 0xff, performance = 0, songMode = 0, reserved = 0;
     uint32_t songSize = 0;
     std::array<int32_t, 64> songOrder{};
+    std::array<std::array<char, 96>, SamplerApp::kTracks> sampleNames{};
 };
 static_assert(std::is_trivially_copyable_v<FullProjectSettings>);
 }
@@ -455,6 +456,9 @@ bool SamplerApp::saveFullProject(int slot) {
     for (uint32_t i = 0; i < m.songSize; ++i) m.songOrder[i] = songOrder_[i];
     std::array<std::string, kTracks> sources{};
     for (int i = 0; i < kTracks; ++i) {
+        const std::string label = s_.trackLabel(i);
+        std::snprintf(m.sampleNames[(size_t)i].data(),
+                      m.sampleNames[(size_t)i].size(), "%s", label.c_str());
         const int index = ts_[(size_t)i].entry;
         if (index >= 0 && index < (int)lib_.size())
             sources[(size_t)i] = lib_[(size_t)index].path;
@@ -520,11 +524,14 @@ void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
         if (path.empty()) {
             s_.clearSample(i); continue;
         }
-        const std::string title = "P" + std::to_string(project.slot + 1) +
-                                  " TRACK " + std::to_string(i + 1);
+        const auto& stored = m.sampleNames[(size_t)i];
+        const auto end = std::find(stored.begin(), stored.end(), '\0');
+        std::string title(stored.begin(), end);
+        if (title.empty()) title = "P" + std::to_string(project.slot + 1) +
+                                   " TRACK " + std::to_string(i + 1);
         lib_.push_back({title, "Project", path, ts_[(size_t)i].algo == 3});
         ts_[(size_t)i].entry = (int)lib_.size() - 1;
-        s_.loadSamplePath(path, ts_[(size_t)i].algo == 3, i);
+        s_.loadSamplePath(path, ts_[(size_t)i].algo == 3, i, title);
     }
     libCursor_ = std::max(0, ts_[(size_t)track_].entry);
     applyFx();

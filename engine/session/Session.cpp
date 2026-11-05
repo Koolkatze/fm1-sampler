@@ -499,16 +499,16 @@ struct Session::Impl {
 
     // ---- samples ----
     static std::string baseName(const std::string& p) { size_t s = p.find_last_of("/\\"); return p.substr(s == std::string::npos ? 0 : s + 1); }
-    void installNew(const std::string& path, int track, bool kit) {
+    void installNew(const std::string& path, int track, bool kit, const std::string& displayName = "") {
         auto sm = std::make_unique<Sampler>(sr);
         if (!sm->load(path)) { a_sampleFails++; a_sampleState = 0; return; }
         auto holder = std::make_shared<std::unique_ptr<Sampler>>(std::move(sm));
-        post([this, holder, track, kit] {
+        post([this, holder, track, kit, displayName] {
             Track& t = *tracks[track];
             releaseAll(t);
             std::swap(t.sampler, *holder);
             applyModeParams(t);
-            { std::lock_guard<std::mutex> l(t.infoMtx); t.label = t.sampler->label(); t.peaks = t.sampler->peaks(); t.orig = t.sampler->original(); }
+            { std::lock_guard<std::mutex> l(t.infoMtx); t.label = displayName.empty() ? t.sampler->label() : displayName; t.peaks = t.sampler->peaks(); t.orig = t.sampler->original(); }
             (void)kit;
             bury(std::move(*holder));
             a_sampleTrack = track; a_sampleVersion++; a_sampleState = 0;
@@ -916,10 +916,13 @@ void Session::noteOn(int t, int note, int vel) { if (t >= 0 && t < kTracks) d->p
 void Session::noteOff(int t, int note) { if (t >= 0 && t < kTracks) d->post([=] { d->liveNote(t, note, 0); }); }
 
 // ---- sampler ----
-void Session::loadSamplePath(const std::string& path, bool kit, int track) {
+void Session::loadSamplePath(const std::string& path, bool kit, int track,
+                             const std::string& displayName) {
     if (track < 0 || track >= kTracks || !std::filesystem::exists(path)) return;
     d->a_sampleState = 2;
-    d->job([this, path, track, kit] { d->installNew(path, track, kit); });
+    d->job([this, path, track, kit, displayName] {
+        d->installNew(path, track, kit, displayName);
+    });
 }
 void Session::setMode(int t, int m) { if (t >= 0 && t < kTracks) d->post([=] { if (d->tracks[(size_t)t]->sampler) d->tracks[(size_t)t]->sampler->setMode(m); }); }
 void Session::setEnv(int t, float a, float dc, float s, float r) { if (t >= 0 && t < kTracks) d->post([=] { if (d->tracks[(size_t)t]->sampler) d->tracks[(size_t)t]->sampler->setEnv(a, dc, s, r); }); }
