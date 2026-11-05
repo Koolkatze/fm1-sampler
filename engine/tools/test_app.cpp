@@ -672,6 +672,27 @@ int main() {
         { auto k = app.knobs(SamplerApp::P_MIX); k[1].set(0.f); }
         app.selectTrack(1); app.setAlgo(0); app.selectTrack(0); app.setAlgo(0);
     }
+    {   // Selected row + explicit ENTER/BACK controls, independent of the audio loop engine
+        SamplerUI browser(app);
+        browser.setSize(860.f, 400.f, 0.f, 0.f);
+        browser.frame(now);
+        browser.touch(0, 90.f, 34.f, now);  // open via the deck's sample title
+        browser.frame(now);
+        auto hasText = [&](const std::string& label) {
+            for (const auto& op : browser.ops())
+                if (op.type == UiOp::TEXT && op.text.find(label) != std::string::npos) return true;
+            return false;
+        };
+        CHECK(hasText("ENTER >") && hasText("< BACK") &&
+              hasText("PACKS") && hasText("FOLDERS") && hasText("SAMPLES"),
+              "library exposes the native-styled archive/folder/wave icons and ENTER/BACK arrows");
+        browser.touch(0, 555.f, 65.f, now); // BACK from currently selected sample folder
+        browser.frame(now);
+        CHECK(hasText("PACKS /"), "BACK returns to the parent archive level");
+        browser.touch(0, 660.f, 65.f, now); // ENTER the selected folder
+        browser.frame(now);
+        CHECK(hasText("PACKS / Keys"), "ENTER re-opens a selected directory without loading a sound");
+    }
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL OK", fails);
     return fails ? 1 : 0;
 }
