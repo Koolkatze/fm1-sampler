@@ -170,6 +170,20 @@ FN(void, importFile)(JNIEnv* env, jclass, jlong h, jstring path) {
     { std::lock_guard<std::mutex> l(e.surfaceMtx); e.app->importFile(c); }
     env->ReleaseStringUTFChars(path, c);
 }
+FN(jboolean, wantLoopExport)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    return e.app->wantLoopExport();
+}
+FN(jboolean, exportLoops)(JNIEnv* env, jclass, jlong h, jstring directory) {
+    auto& e = *E(h);
+    const char* path = env->GetStringUTFChars(directory, nullptr);
+    const bool started = e.session.exportLoops(path);
+    env->ReleaseStringUTFChars(directory, path);
+    return started;
+}
+FN(jint, loopExportStatus)(JNIEnv*, jclass, jlong h) {
+    return E(h)->session.loopExportStatus();
+}
 FN(jboolean, wantPack)(JNIEnv*, jclass, jlong h) {
     auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
     return e.app->wantPack();
