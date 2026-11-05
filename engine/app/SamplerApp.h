@@ -31,7 +31,7 @@ public:
         std::function<void(float)> set;      // absolute 0..1 (touch)
     };
     using Knobs = std::array<Knob, 4>;
-    struct Entry { std::string label, group, path; bool kit; };
+    struct Entry { std::string label, group, path; bool kit = false; std::string pack, folder; };
     struct ScaleState { int scale = 3, root = 0, octave = 0, mode = 0; };
 
     SamplerApp(Session& s, Send send);
@@ -59,6 +59,13 @@ public:
     void importFile(const std::string& wavPath);  // a file picked from the disk (already copied into the data dir as a WAV)
     bool wantFile() { bool w = wantFile_; wantFile_ = false; return w; }   // the UI asked for the disk picker: Java polls this
     void requestFile() { wantFile_ = true; }
+    void requestPack() { wantPack_ = true; }
+    bool wantPack() { bool w = wantPack_; wantPack_ = false; return w; }
+    void requestName(int kind) { dialogRequest_ = kind; } // 1 loop, 2 save project, 3 open project
+    int takeDialogRequest() { int k = dialogRequest_; dialogRequest_ = 0; return k; }
+    void submitName(int kind, const std::string& name);
+    void saveProject(const std::string& name);
+    void openProject(const std::string& name);
     // looper and recorder
     void transportPlay();
     void transportSet(bool play);                 // phone PLAY / STOP keys
@@ -70,7 +77,7 @@ public:
     void scrub(int phase /*0 down 1 move 2 up*/, float fraction) { if (phase == 0) s_.scrubBegin(fraction); else if (phase == 1) s_.scrubMove(fraction); else s_.scrubEnd(); }   // phone timeline
     void autoTune();                              // MELODIC / ONE-SHOT: detect the pitch of the sample and tune the keys to it (again: reset)
     bool tuned(int t) const { return ts_[t].tuned; }
-    void loopSave();
+    void loopSave(const std::string& name = "");
     void loopClear();                             // every loop of every track (phone PROJECT menu)
     void loopClearTrack();                        // the loop of the selected track
     void micSample();                             // toggle: record the microphone into a new sample for the selected track
@@ -94,6 +101,7 @@ public:
         float vol = 0.8f, pan = 0.5f, sendR = 0.3f, sendD = 0.2f;
         int scSrc = 0; float scThr = 0.5f, scRatio = 0.4f;   // sidechain: source (0 off, 1..8 = track), threshold and ratio knobs
         int entry = -1;
+        std::string samplePath;
         float root = 60.f; bool tuned = false;   // auto-tune: the detected pitch of the sample
     };
     const TrackState& state(int t) const { return ts_[t]; }
@@ -148,7 +156,9 @@ private:
     std::vector<Entry> lib_;
     int libCursor_ = 0, loadedCursor_ = -1;
     uint32_t auditionAt_ = 0, previewOffAt_ = 0; int previewNote_ = -1, previewTrack_ = -1;
-    bool wantFile_ = false, previewAfterLoad_ = false;
+    bool wantFile_ = false, wantPack_ = false, previewAfterLoad_ = false;
+    int dialogRequest_ = 0;
+    bool restoringProject_ = false;
     // loop / recorder
     Session::Status st_{};
     bool loopAny_ = false;
