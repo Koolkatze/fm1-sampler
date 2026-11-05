@@ -9,6 +9,9 @@ import java.util.Arrays;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
+import java.io.IOException;
+import java.io.InputStream;
+import java.util.Locale;
 import android.os.Bundle;
 import android.view.View;
 import android.view.WindowManager;
@@ -57,12 +60,19 @@ public class SamplerActivity extends Activity {
         });
     }
 
+    /** The physical folder icon in HOME is the ONE entry point to explore
+     * the phone's files. ZIP -> PACKS; audio -> SAVED/IMPORTS. No second
+     * in-app import screen is required to find or unpack a ZIP.
+     *
+     * Do not MIME-filter Android's DocumentsUI here: some USB/Drive/file
+     * providers label valid ZIP and audio files as application/octet-stream.
+     */
     void pickFile() {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("*/*");
-        i.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"audio/*", "application/ogg"});
-        try { startActivityForResult(i, PICK); } catch (Exception e) { Native.say(backend.engine, "NO FILE PICKER ON THIS PHONE"); }
+        try { startActivityForResult(i, PICK); }
+        catch (Exception e) { Native.say(backend.engine, "NO FILE PICKER ON THIS PHONE"); }
     }
 
     void pickPack() {
@@ -73,6 +83,35 @@ public class SamplerActivity extends Activity {
             new String[]{"application/zip", "application/x-zip-compressed", "application/octet-stream"});
         try { startActivityForResult(i, PICK_PACK); }
         catch (Exception e) { Native.say(backend.engine, "NO ZIP PICKER"); }
+    }
+
+    /** Detect ZIPs by filename, MIME or PK header, without trusting the
+     * provider's MIME type. All reads use the granted document URI. */
+    static boolean isZipDocument(android.content.Context ctx, Uri uri) throws IOException {
+        String name = AudioImport.displayName(ctx, uri);
+        if (name != null && name.toLowerCase(Locale.ROOT).endsWith(".zip")) return true;
+        String mime = ctx.getContentResolver().getType(uri);
+        if (mime != null) {
+            String type = mime.toLowerCase(Locale.ROOT);
+            if (type.equals("application/zip") ||
+                type.equals("application/x-zip-compressed") ||
+                type.equals("application/x-zip")) return true;
+        }
+        try (InputStream in = ctx.getContentResolver().openInputStream(uri)) {
+            if (in == null) throw new IOException("Cannot open selected document");
+            byte[] sig = new byte[4];
+            int n = 0;
+            while (n < sig.length) {
+                int m = in.read(sig, n, sig.length - n);
+                if (m < 0) break;
+                if (m == 0) continue;
+                n += m;
+            }
+            return n == 4 && sig[0] == 0x50 && sig[1] == 0x4b &&
+                   ((sig[2] == 3 && sig[3] == 4) ||
+                    (sig[2] == 5 && sig[3] == 6) ||
+                    (sig[2] == 7 && sig[3] == 8));
+        }
     }
 
     /** Export a consistent audio-thread snapshot; publish completed WAVs
@@ -157,33 +196,33 @@ public class SamplerActivity extends Activity {
         super.onActivityResult(code, result, data);
         if (result != RESULT_OK || data == null || data.getData() == null) return;
         final Uri uri = data.getData();
-        if (code == PICK_PACK) {
-            Native.say(backend.engine, "IMPORTING PACK...");
-            new Thread(() -> {
-                try {
-                    File out = PackImport.importZip(this, uri, StorageLayout.root(this));
-                    Native.refreshLibrary(backend.engine);
-                    Native.say(backend.engine, "PACK: " + out.getName());
-                } catch (Exception e) {
-                    android.util.Log.w("fm1sampler", "pack import", e);
-                    Native.say(backend.engine, "PACK IMPORT FAILED");
-                }
-            }, "pack-import").start();
-            return;
-        }
-        if (code != PICK) return;
-        Native.say(backend.engine, "READING THE FILE...");
+        if (code != PICK && code != PICK_PACK) return;
+        // Both the HOME folder picker and the legacy ZIP-specific chooser
+        // route through the same importer. Selecting a ZIP always extracts
+        // its complete original directory tree under FM1-SAMPLER/PACKS.
         new Thread(() -> {
             try {
-                File folder = StorageLayout.imports(this);
-                folder.mkdirs();
-                File out = AudioImport.importTo(this, uri, folder);
+                boolean zip = isZipDocument(this, uri);
+                if (code == PICK_PACK && !zip) {
+                    Native.say(backend.engine, "PLEASE SELECT A ZIP FILE");
+                    return;
+                }
+                if (zip) {
+                    Native.say(backend.engine, "UNPACKING ZIP TO PACKS...");
+                    File pack = PackImport.importZip(this, uri, StorageLayout.root(this));
+                    Native.refreshLibrary(backend.engine);
+                    Native.say(backend.engine, "PACK IMPORTED: " + pack.getName());
+                    return;
+                }
+                Native.say(backend.engine, "IMPORTING AUDIO...");
+                File out = AudioImport.importTo(this, uri, StorageLayout.imports(this));
                 Native.importFile(backend.engine, out.getAbsolutePath());
+                Native.say(backend.engine, "SAMPLE IMPORTED: " + out.getName());
             } catch (Exception e) {
-                android.util.Log.w("fm1sampler", "import: " + e);
-                Native.say(backend.engine, "CANNOT READ THIS FILE");
+                android.util.Log.w("fm1sampler", "HOME file import", e);
+                Native.say(backend.engine, "IMPORT FAILED - SOURCE UNCHANGED");
             }
-        }, "import").start();
+        }, "fm1-home-file-import").start();
     }
 
     @Override public void onRequestPermissionsResult(int code, String[] perms, int[] res) {
