@@ -666,7 +666,11 @@ void SamplerUI::deck(Rect r) {
     const uint32_t micCol = mic == 1 || mic == 2 ? kOrange : kPaper;
     icon(4, mx, 56, kPaper);  tap({mx - 32, 28, 64, 56}, [this] { setLight(!theme::light); });
     icon(5, mx, 120, micCol); tap({mx - 32, 92, 64, 56}, [this] { app_.micSample(); });
-    icon(6, mx, 184, kPaper); tap({mx - 32, 156, 64, 56}, [this] { app_.requestFile(); });
+    // HOME folder icon opens Android DocumentsUI for any ZIP pack or
+    // supported individual audio file; its ZIP import preserves all subfolders.
+    icon(6, mx, 184, kPaper);
+    text(mx, 211, 8.5f, kDim, "IMPORT", 1, true);
+    tap({mx - 32, 156, 64, 56}, [this] { app_.requestFile(); });
     icon(7, mx, 248, projectOpen_ ? kOrange : kPaper); tap({mx - 32, 220, 64, 56}, [this] { projectOpen_ = true; });
     // the sample of this track, its page and the four knobs of the page
     sampleView({x0, 14, w0, 118});
