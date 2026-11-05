@@ -38,6 +38,12 @@ final class AudioImport {
         for (int i = 2; out.exists(); i++) out = new File(dir, base + " (" + i + ").wav");
         Pcm p = null;
         try (InputStream in = c.getContentResolver().openInputStream(uri)) { if (in != null) p = readWav(in); }
+        if (p == null && (displayName(c, uri).toLowerCase().endsWith(".aif") ||
+                          displayName(c, uri).toLowerCase().endsWith(".aiff"))) {
+            try (InputStream in = c.getContentResolver().openInputStream(uri)) {
+                if (in != null) p = readAiff(in);
+            }
+        }
         if (p == null) p = decode(c, uri);
         if (p == null || p.data.length == 0) throw new IOException("no audio in the file");
         writeWav(out, p);
@@ -76,6 +82,77 @@ final class AudioImport {
             s[i] = (short) Math.max(-32768, Math.min(32767, Math.round(v * 32767f)));
         }
         Pcm p = new Pcm(); p.data = s; p.channels = ch; p.rate = rate; return p;
+    }
+
+    private static int be16(byte[] b, int p) {
+        return ((b[p] & 255) << 8) | (b[p + 1] & 255);
+    }
+    private static int be32(byte[] b, int p) {
+        return (b[p] & 255) << 24 | (b[p + 1] & 255) << 16 |
+               (b[p + 2] & 255) << 8 | (b[p + 3] & 255);
+    }
+    /** Uncompressed AIFF / AIFC PCM, 8/16/24/32-bit, plus AIFC float32.
+     * Allows lo-fi packs supplied as AIFF to play without discarding the original.
+     */
+    static Pcm readAiff(InputStream in) throws IOException {
+        byte[] data = readAll(in, 64 << 20);
+        if (data.length < 54 ||
+            !new String(data, 0, 4, "US-ASCII").equals("FORM")) return null;
+        String type = new String(data, 8, 4, "US-ASCII");
+        if (!type.equals("AIFF") && !type.equals("AIFC")) return null;
+        int ch = 0, rate = 0, bits = 0, frames = 0, audio = -1, length = 0;
+        String compression = "NONE";
+        for (int at = 12; at + 8 <= data.length;) {
+            int size = be32(data, at + 4);
+            if (size < 0 || (long)at + 8 + size > data.length) break;
+            String id = new String(data, at, 4, "US-ASCII");
+            if (id.equals("COMM") && size >= 18) {
+                ch = be16(data, at + 8);
+                frames = be32(data, at + 10);
+                bits = be16(data, at + 14);
+                int exponent = be16(data, at + 16);
+                double mantissa = 0;
+                for (int j = 0; j < 8; j++) mantissa = mantissa * 256 + (data[at + 18 + j] & 255);
+                double hz = Math.scalb(mantissa, (exponent & 32767) - 16383 - 63);
+                if (!Double.isFinite(hz) || hz < 8000 || hz > 192000) return null;
+                rate = (int)Math.round(hz);
+                if (type.equals("AIFC") && size >= 22)
+                    compression = new String(data, at + 26, 4, "US-ASCII");
+            } else if (id.equals("SSND") && size >= 8) {
+                int offset = be32(data, at + 8);
+                if (offset < 0 || offset > size - 8) return null;
+                audio = at + 16 + offset;
+                length = size - 8 - offset;
+            }
+            at += 8 + size + (size & 1);
+        }
+        if (ch < 1 || ch > 2 || rate <= 0 || frames < 0 || audio < 0 ||
+            (bits != 8 && bits != 16 && bits != 24 && bits != 32) ||
+            !(compression.equals("NONE") || compression.equals("sowt") ||
+              compression.equals("fl32") || compression.equals("FL32"))) return null;
+        if (frames > MAX_SECONDS * rate) throw new IOException("AIFF exceeds sampler length limit");
+        int width = bits / 8;
+        int samples = Math.min(frames * ch, length / width);
+        if (samples == 0) return null;
+        short[] pcm = new short[samples];
+        final boolean little = compression.equals("sowt");
+        final boolean floating = compression.equals("fl32") || compression.equals("FL32");
+        for (int i = 0; i < samples; i++) {
+            int at = audio + i * width, raw = 0;
+            for (int j = 0; j < width; j++) {
+                int byteAt = little ? (at + width - 1 - j) : (at + j);
+                raw = (raw << 8) | (data[byteAt] & 255);
+            }
+            float v;
+            if (floating) v = Float.intBitsToFloat(raw);
+            else {
+                final int shift = 32 - bits;
+                v = ((raw << shift) >> shift) / (float)Math.scalb(1.0, bits - 1);
+            }
+            pcm[i] = (short)Math.max(-32768, Math.min(32767, Math.round(v * 32767f)));
+        }
+        Pcm out = new Pcm(); out.channels = ch; out.rate = rate; out.data = pcm;
+        return out;
     }
 
     private static byte[] readAll(InputStream in, int max) throws IOException {
