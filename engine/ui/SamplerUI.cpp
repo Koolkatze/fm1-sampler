@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 
 using namespace theme;
 
@@ -122,7 +123,7 @@ void SamplerUI::topBar(Rect r) {
     text(rc.x + 28, cy, 9.5f, recOn ? ON_ACCENT : TEXT, app_.loopExists() ? "OVERDUB" : "REC", 0, true);
     tap(rc, [this] { app_.loopRecord(); });
     x += 94;
-    button({x, 6, 56, r.h - 12}, "SAVE", false, [this] { app_.loopSave(); }, 11);
+    button({x, 6, 56, r.h - 12}, "SAVE", false, [this] { app_.requestName(1); }, 11);
     x += 62;
     button({x, 6, 56, r.h - 12}, "CLEAR", false, [this] { app_.loopClear(); }, 11);
     x += 62;
@@ -556,6 +557,23 @@ void SamplerUI::icon(int kind, float cx, float cy, uint32_t c) {
         break; }
     case 6: rrect({cx - 10, cy - 8.7f, 7.3f, 5}, 0, c); rrect({cx - 10, cy - 4.7f, 20, 14}, 0, c); break;   // folder: a file from the disk
     case 7: rrect({cx - 10, cy - 9.3f, 20, 3.4f}, 0, c); rrect({cx - 10, cy - 1.7f, 20, 3.4f}, 0, c); rrect({cx - 10, cy + 6, 13.3f, 3.4f}, 0, c); break;   // project
+    case 8:  // archive: three file drawer fronts
+        for (int i = 0; i < 3; ++i) {
+            rrect({cx - 11, cy - 11 + i * 8.f, 22, 6}, 0, c);
+            rrect({cx - 3, cy - 8 + i * 8.f, 6, 1.5f}, 0, kBg);
+        }
+        break;
+    case 9:  // folder: same visual language as the file-load icon
+        rrect({cx - 10, cy - 8.7f, 7.3f, 5}, 0, c);
+        rrect({cx - 10, cy - 4.7f, 20, 14}, 0, c);
+        break;
+    case 10: { // waveform: solid vertical bars
+        const float heights[] = {5, 12, 18, 9, 22, 12, 17, 10, 6};
+        for (int i = 0; i < 9; ++i)
+            rrect({cx - 11 + i * 2.7f, cy - heights[i] / 2.f, 2, heights[i]}, 0, c);
+        break;
+    }
+
     }
 }
 
@@ -573,7 +591,7 @@ void SamplerUI::deck(Rect r) {
     const int mic = app_.micState();
     if (mic == 1) title = "Listening"; else if (mic == 2) title = "Recording"; else if (mic == 3) title = "Saving";
     text(M + 27, 34, 29, kPaper, fit(title, mx - M - 52, 29), 0, true);
-    tap({M + 24, 8, mx - M - 40, 52}, [this] { sheetOpen_ = true; sheetScroll_ = std::max(0.f, (float)app_.libraryCursor() * 34.f - 100.f); app_.refreshLibrary(); });
+    tap({M + 24, 8, mx - M - 40, 52}, [this] { openLibrary(); });
     {
         float lsec = 0, psec = 0;
         if (hasLoop) { lsec = (float)(st_.loopSamples / app_.session().sampleRate()); psec = loopPos() * lsec; } else if (st_.freeRecording) psec = lsec = st_.freeSeconds;
@@ -763,7 +781,7 @@ void SamplerUI::sampleArea(Rect r) {
         text(nm.x + 10, nm.y + nm.h / 2 + 9, 9, DIM, lib[(size_t)cur].group + "  " + std::to_string(cur + 1) + "/" + std::to_string(lib.size()), 0, false);
     }
     text(nm.x + nm.w - 10, nm.y + nm.h / 2, 9.5f, ACCENT, "LIBRARY", 2, true);
-    tap(nm, [this] { sheetOpen_ = true; sheetScroll_ = std::max(0.f, (float)app_.libraryCursor() * 34.f - 100.f); app_.refreshLibrary(); });
+    tap(nm, [this] { openLibrary(); });
     // microphone and disk
     Rect br{r.x, lr.y + lr.h + 8, r.w, 38};
     const int ms = app_.micState();
@@ -801,40 +819,183 @@ void SamplerUI::pagePanel(Rect r) {
     }
 }
 
+void SamplerUI::openLibrary() {
+    app_.refreshLibrary();
+    browseDir_.clear();
+    const auto& lib = app_.library();
+    const int idx = app_.libraryCursor();
+    if (idx >= 0 && idx < (int)lib.size()) {
+        const auto& e = lib[(size_t)idx];
+        browseDir_ = e.pack;
+        if (!e.folder.empty()) browseDir_ += "/" + e.folder;
+    }
+    sheetOpen_ = true;
+    buildBrowserRows();
+    if (idx >= 0 && idx < (int)lib.size())
+        for (int i = 0; i < (int)browseRows_.size(); ++i)
+            if (browseRows_[(size_t)i].entry == idx) { browseSelected_ = i; break; }
+    sheetScroll_ = std::max(0.f, (float)browseSelected_ * 36.f - 110.f);
+}
+
+void SamplerUI::buildBrowserRows() {
+    namespace fs = std::filesystem;
+    browseRows_.clear();
+    browseSelected_ = 0;
+    sheetScroll_ = 0;
+    const fs::path root(app_.session().sampleDir());
+    const auto& lib = app_.library();
+    std::error_code ec;
+    const fs::path current = root / browseDir_;
+    if (browseDir_.empty()) {
+        // Permanent groups must always be navigable, including before the first import.
+        browseRows_.push_back({"OFFICIAL", "OFFICIAL", -1, true});
+        browseRows_.push_back({"SAVED", "SAVED", -1, true});
+        if (fs::is_directory(root, ec)) {
+            for (auto& item : fs::directory_iterator(root, fs::directory_options::skip_permission_denied, ec)) {
+                if (!item.is_directory(ec)) continue;
+                const std::string name = item.path().filename().string();
+                if (name != "OFFICIAL" && name != "SAVED")
+                    browseRows_.push_back({name, name, -1, true});
+            }
+        }
+        if (std::any_of(lib.begin(), lib.end(), [](const SamplerApp::Entry& e) { return e.pack == "PROJECT"; }))
+            browseRows_.push_back({"PROJECT", "PROJECT", -1, true});
+    } else if (browseDir_ == "PROJECT") {
+        browseRows_.push_back({"Embedded", "PROJECT/Embedded", -1, true});
+    } else {
+        if (fs::is_directory(current, ec)) {
+            for (auto& item : fs::directory_iterator(current, fs::directory_options::skip_permission_denied, ec)) {
+                if (!item.is_directory(ec)) continue;
+                const fs::path rel = item.path().lexically_relative(root);
+                browseRows_.push_back({item.path().filename().string(), rel.generic_string(), -1, true});
+            }
+            for (auto& item : fs::directory_iterator(current, fs::directory_options::skip_permission_denied, ec)) {
+                if (!item.is_regular_file(ec)) continue;
+                const auto abs = item.path().string();
+                const auto match = std::find_if(lib.begin(), lib.end(),
+                    [&](const SamplerApp::Entry& e) { return e.path == abs; });
+                const int entry = match == lib.end() ? -1 : (int)(match - lib.begin());
+                // Show even non-audio files; nothing from a user ZIP is hidden or discarded.
+                browseRows_.push_back({item.path().filename().string(), abs, entry, false});
+            }
+        }
+        // Backwards-compatible recordings imported before OFFICIAL/SAVED migration,
+        // and temporary embedded project audio, may live outside samples/.
+        for (int i = 0; i < (int)lib.size(); ++i) {
+            const auto& e = lib[(size_t)i];
+            if (e.pack + "/" + e.folder != browseDir_) continue;
+            const fs::path file(e.path);
+            if (file.parent_path() == current) continue;
+            browseRows_.push_back({e.label + ".wav", e.path, i, false});
+        }
+    }
+    std::sort(browseRows_.begin(), browseRows_.end(), [](const BrowserRow& x, const BrowserRow& y) {
+        if (x.directory != y.directory) return x.directory;
+        return x.label < y.label;
+    });
+}
+
+void SamplerUI::browserBack() {
+    if (browseDir_.empty()) { sheetOpen_ = false; return; }
+    const std::string previous = browseDir_;
+    const size_t slash = browseDir_.find_last_of('/');
+    browseDir_ = slash == std::string::npos ? "" : browseDir_.substr(0, slash);
+    buildBrowserRows();
+    const std::string last = previous.substr(slash == std::string::npos ? 0 : slash + 1);
+    for (int i = 0; i < (int)browseRows_.size(); ++i)
+        if (browseRows_[(size_t)i].directory && browseRows_[(size_t)i].label == last)
+            { browseSelected_ = i; break; }
+    sheetScroll_ = std::max(0.f, (float)browseSelected_ * 36.f - 108.f);
+}
+
+void SamplerUI::browserEnter() {
+    if (browseRows_.empty() || browseSelected_ < 0 || browseSelected_ >= (int)browseRows_.size()) return;
+    const BrowserRow selected = browseRows_[(size_t)browseSelected_];
+    if (selected.directory) {
+        browseDir_ = selected.path;
+        buildBrowserRows();
+        return;
+    }
+    if (selected.entry < 0) {
+        app_.say("FILE PRESERVED - NOT A PLAYABLE WAV");
+        return;
+    }
+    app_.loadEntry(selected.entry);
+    sheetOpen_ = false;
+}
+
 void SamplerUI::librarySheet() {
-    rrect({0, 0, W_, H_}, 0, theme::withAlpha(BG, 200));
+    rrect({0, 0, W_, H_}, 0, theme::withAlpha(BG, 215));
     tap({0, 0, W_, H_}, [this] { sheetOpen_ = false; });
-    const Rect box{W_ * 0.22f, 24, W_ * 0.56f, H_ - 48};
+    const Rect box{W_ * 0.17f, 12, W_ * 0.66f, H_ - 24};
     rrect(box, R_CARD, SURFACE); stroke(box, R_CARD, ACCENT, 1);
     tap(box, [] {});
-    text(box.x + 14, box.y + 20, T_TITLE, TEXT, "SAMPLE LIBRARY", 0, true);
-    button({box.x + box.w - 70, box.y + 6, 60, 28}, "CLOSE", false, [this] { sheetOpen_ = false; }, 10);
-    sheetList_ = {box.x + 6, box.y + 44, box.w - 12, box.h - 52};
-    const auto& lib = app_.library();
-    // rows: a header per group, then its entries
-    struct Row { bool head; std::string text; int entry; };
-    std::vector<Row> rows;
-    std::string g;
-    for (int i = 0; i < (int)lib.size(); i++) { if (lib[(size_t)i].group != g) { g = lib[(size_t)i].group; rows.push_back({true, g, -1}); } rows.push_back({false, lib[(size_t)i].label, i}); }
-    const float rh = 34;
-    sheetScroll_ = std::min(std::max(0.f, sheetScroll_), std::max(0.f, rows.size() * rh - sheetList_.h));
+    text(box.x + 15, box.y + 20, 14, TEXT, "SAMPLE LIBRARY", 0, true);
+    button({box.x + box.w - 70, box.y + 5, 60, 26}, "CLOSE", false,
+           [this] { sheetOpen_ = false; }, 9);
+    const float top = box.y + 46;
+    // Archive / folder / waveform indicators; arrows handle navigation exclusively.
+    const bool archive = browseDir_.empty();
+    const bool wav = !archive && std::any_of(browseRows_.begin(), browseRows_.end(),
+                                           [](const BrowserRow& r) { return !r.directory && r.entry >= 0; });
+    for (int mode = 0; mode < 3; ++mode) {
+        const float cx = box.x + 26 + mode * 88.f;
+        const bool selected = mode == 0 ? archive : mode == 1 ? !archive && !wav : wav;
+        icon(8 + mode, cx, top + 9, selected ? ACCENT : DIM);
+        text(cx + 15, top + 9, 9, selected ? ACCENT : TEXT,
+             mode == 0 ? "PACKS" : mode == 1 ? "FOLDERS" : "SAMPLES", 0, true);
+    }
+    const Rect back{box.x + box.w - 198, top - 6, 88, 30};
+    const Rect enter{box.x + box.w - 102, top - 6, 92, 30};
+    button(back, "< BACK", false, [this] { browserBack(); }, 11);
+    button(enter, "ENTER >", false, [this] { browserEnter(); }, 11, true);
+    const std::string crumb = browseDir_.empty() ? "PACKS /" : "PACKS / " + browseDir_;
+    text(box.x + 15, top + 40, 10, DIM, fit(crumb, box.w - 30, 10), 0, true);
+
+    sheetList_ = {box.x + 8, top + 53, box.w - 16, box.h - 53 - 85};
+    const float rh = 36.f;
+    sheetScroll_ = std::min(std::max(0.f, sheetScroll_),
+                            std::max(0.f, (float)browseRows_.size() * rh - sheetList_.h));
     clip(sheetList_);
-    for (size_t i = 0; i < rows.size(); i++) {
+    for (int i = 0; i < (int)browseRows_.size(); ++i) {
+        const auto& row = browseRows_[(size_t)i];
         const float y = sheetList_.y + i * rh - sheetScroll_;
         if (y + rh < sheetList_.y || y > sheetList_.y + sheetList_.h) continue;
-        if (rows[i].head) { text(sheetList_.x + 8, y + rh / 2, T_CAPTION, DIM, rows[i].text, 0, true); line(sheetList_.x, y + rh - 3, sheetList_.x + sheetList_.w, y + rh - 3, OUTLINE, 1); continue; }
-        const bool cur = rows[i].entry == app_.libraryCursor();
-        if (cur) { rrect({sheetList_.x, y + 1, sheetList_.w, rh - 2}, R_CONTROL, RAISED); stroke({sheetList_.x, y + 1, sheetList_.w, rh - 2}, R_CONTROL, ACCENT, 1); }
-        text(sheetList_.x + 14, y + rh / 2, T_BODY + 1, cur ? ACCENT : TEXT, fit(rows[i].text, sheetList_.w - 30, T_BODY + 1), 0, cur);
+        const bool selected = i == browseSelected_;
+        if (selected) {
+            rrect({sheetList_.x, y + 1, sheetList_.w, rh - 2}, R_CONTROL, RAISED);
+            stroke({sheetList_.x, y + 1, sheetList_.w, rh - 2}, R_CONTROL, ACCENT, 1.1f);
+        }
+        icon(row.directory ? browseDir_.empty() ? 8 : 9 : 10,
+             sheetList_.x + 20, y + rh / 2, selected ? ACCENT : TEXT);
+        text(sheetList_.x + 42, y + 13, 11, selected ? ACCENT : TEXT,
+             fit(row.label, sheetList_.w - 70, 11), 0, selected);
+        text(sheetList_.x + 42, y + 29, 8.3f, DIM,
+             row.directory ? "FOLDER / ENTER >" : row.entry >= 0 ? "WAV / ENTER TO LOAD" : "ORIGINAL FILE (PRESERVED)", 0, false);
     }
     endClip();
-    hit(sheetList_, [this](float, float y) { sheetLastY_ = y; sheetMoved_ = 0; },
-        [this](float, float y) { sheetScroll_ -= y - sheetLastY_; sheetMoved_ += std::fabs(y - sheetLastY_); sheetLastY_ = y; },
-        [this, rows, rh]() {
+    if (browseRows_.empty())
+        text(sheetList_.x + sheetList_.w / 2, sheetList_.y + 33, 10, DIM,
+             "EMPTY FOLDER", 1, false);
+    hit(sheetList_,
+        [this](float, float y) { sheetLastY_ = y; sheetMoved_ = 0; },
+        [this](float, float y) {
+            sheetScroll_ -= y - sheetLastY_;
+            sheetMoved_ += std::fabs(y - sheetLastY_);
+            sheetLastY_ = y;
+        },
+        [this, rh] {
             if (sheetMoved_ > 8) return;
-            const int idx = (int)((sheetLastY_ - sheetList_.y + sheetScroll_) / rh);
-            if (idx >= 0 && idx < (int)rows.size() && !rows[(size_t)idx].head) { app_.loadEntry(rows[(size_t)idx].entry); sheetOpen_ = false; }
+            const int index = (int)((sheetLastY_ - sheetList_.y + sheetScroll_) / rh);
+            if (index >= 0 && index < (int)browseRows_.size()) browseSelected_ = index;
         });
+
+    button({box.x + 15, box.y + box.h - 37, 135, 28}, "+ IMPORT ZIP", false,
+           [this] { app_.requestPack(); }, 10, true);
+    text(box.x + 163, box.y + box.h - 22, 9, DIM,
+         browseRows_.empty() ? "0 FILES" :
+         std::to_string(browseSelected_ + 1) + "/" + std::to_string(browseRows_.size()) +
+             "  -  ARROWS TO OPEN / GO BACK", 0, false);
 }
 
 // PROJECT: original loop actions on the left; scene / song sequencer on the
@@ -899,8 +1060,8 @@ void SamplerUI::projectSheet() {
             y += step;
         };
         const std::string tn = "TRACK " + std::to_string(t + 1);
-        row("SAVE LOOP OF " + tn, "into the sample library (USER)", hasClip, false,
-            [this] { app_.loopSave(); });
+        row("SAVE LOOP OF " + tn, "choose a name / SAVED / Loops", hasClip, false,
+            [this] { app_.requestName(1); });
         row("CLEAR LOOP OF " + tn, "the other tracks keep theirs", hasClip, false,
             [this] { app_.loopClearTrack(); });
         const bool armed = clearArmed_ && now_ < clearArmed_;
@@ -1079,7 +1240,7 @@ void SamplerUI::projectSlotsSheet() {
         rrect(r, R_CONTROL, armed ? RAISED : SURFACE);
         stroke(r, R_CONTROL, armed ? ACCENT : exists ? TEXT : OUTLINE, armed ? 2.f : 1.f);
         text(r.x + r.w / 2, r.y + 21, 12, exists ? TEXT : DIM,
-             "PROJECT " + std::to_string(slot + 1), 1, true);
+             fit(app_.projectName(slot), r.w - 8, 12), 1, true);
         text(r.x + r.w / 2, r.y + 44, 9, armed ? ACCENT : DIM,
              armed ? "CONFIRM" : exists ? "SAVED" : "EMPTY", 1, true);
         tap(r, [this, slot, exists, armed, saving] {
@@ -1091,7 +1252,10 @@ void SamplerUI::projectSlotsSheet() {
                 app_.say(saving ? "TAP AGAIN TO OVERWRITE" : "TAP AGAIN TO LOAD");
                 return;
             }
-            if (saving ? app_.saveFullProject(slot) : app_.loadFullProject(slot)) {
+            if (saving) {
+                app_.requestSaveProjectName(slot);
+                projectSlotsMode_ = 0;
+            } else if (app_.loadFullProject(slot)) {
                 projectSlotsMode_ = 0;
             }
             projectConfirmSlot_ = -1;
