@@ -60,6 +60,8 @@ private:
     Hit active_{};
     bool haveActive_ = false;
     uint32_t now_ = 0;
+    uint32_t playHeldAt_ = 0;
+    bool playHeld_ = false, playLongFired_ = false;
     Session::Status st_{};
     bool linkMidi_ = false, linkAudio_ = false, sheetOpen_ = false, editor_ = false, projectOpen_ = false;
     float sheetScroll_ = 0, sheetLastY_ = 0, sheetMoved_ = 0;
