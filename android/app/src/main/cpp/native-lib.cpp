@@ -186,6 +186,7 @@ FN(void, submitName)(JNIEnv* env, jclass, jlong h, jint kind, jstring name) {
 FN(void, refreshLibrary)(JNIEnv*, jclass, jlong h) {
     auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
     e.app->refreshLibrary();
+    e.ui->refreshBrowserAfterImport();
 }
 FN(void, say)(JNIEnv* env, jclass, jlong h, jstring msg) {
     auto& e = *E(h); const char* c = env->GetStringUTFChars(msg, nullptr);
