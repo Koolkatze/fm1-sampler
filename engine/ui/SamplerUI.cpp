@@ -30,8 +30,7 @@ SamplerUI::SamplerUI(SamplerApp& app) : app_(app) {
         fclose(help);
     }
     syncColors();
-    buildBrowserRows();
-    browseSelected_ = -1; // show the ROOT archive until a file/folder is selected
+    // Navigation lives in SamplerApp so MIDI PRESETS and the phone share one cursor.
 }
 void SamplerUI::setShortcutHelpVisible(bool on) {
     shortcutHelpVisible_ = on;
@@ -90,7 +89,6 @@ void SamplerUI::frame(uint32_t now) {
     const float tb = 44, left = 176, right = 252;
     if (!editor_) {   // the cassette deck fills the screen; the old sample / page editor stays one tap away (EDIT)
         deck({0, 0, W_, H_});
-        if (sheetOpen_) librarySheet();
         if (projectOpen_) {
             projectSheet();
             if (projectSlotsMode_) projectSlotsSheet();
@@ -101,7 +99,6 @@ void SamplerUI::frame(uint32_t now) {
     trackList({MARGIN, tb + MARGIN, left - MARGIN, H_ - tb - 2 * MARGIN});
     sampleArea({left + MARGIN, tb + MARGIN, W_ - left - right - 2 * MARGIN, H_ - tb - 2 * MARGIN});
     pagePanel({W_ - right, tb + MARGIN, right - MARGIN, H_ - tb - 2 * MARGIN});
-    if (sheetOpen_) librarySheet();
 }
 
 void SamplerUI::topBar(Rect r) {
@@ -587,26 +584,23 @@ void SamplerUI::deck(Rect r) {
     // One grid: margin M, three zones (tape and transport on the left, tools in the middle, sample and knobs on the right, timeline below).
     // Every icon sits on a 64 px pitch; the bottom icon of the tools column stands on the transport row.
     const float M = 24, zr = W_ - M, x0 = 440, w0 = zr - x0, mx = 351;
-    // HOME has ONLY two navigation buttons. The adjacent archive/folder/WAV
-    // glyph is a read-only indicator of the current location or selected item.
-    // BACK and ENTER remain to the LEFT of that indicator and filename.
-    button({M - 5, 9, 48, 36}, "BACK", false, [this] { browserBack(); }, 10);
-    button({M + 47, 9, 52, 36}, "ENTER", false, [this] { browserEnter(); }, 10, true);
-    const BrowserRow* selected = browseSelected_ >= 0 &&
-        browseSelected_ < (int)browseRows_.size() ? &browseRows_[(size_t)browseSelected_] : nullptr;
-    const int kind = selected ? (selected->directory ? 9 : 10) :
-                     browseDir_.empty() ? 8 : 9;
+    // Inline browser: NO Android file picker or modal directory window.
+    // PRESETS selects within this folder and a selected WAV loads right away;
+    // ENTER enters folders only, BACK returns one level.
+    button({M - 5, 9, 48, 36}, "BACK", false, [this] { app_.browserBack(); }, 10);
+    button({M + 47, 9, 52, 36}, "ENTER", false, [this] { app_.browserEnter(); }, 10, true);
+    const SamplerApp::BrowserItem* selected = app_.browserSelected();
+    const std::string& directory = app_.browserDir();
+    const int kind = selected ? (selected->directory ? 9 : selected->entry >= 0 ? 10 : 7) :
+                     directory.empty() ? 8 : 9;
     const std::string name = selected ? selected->label :
-                             browseDir_.empty() ? "FM1-SAMPLER" :
-                             std::filesystem::path(browseDir_).filename().string();
+                             directory.empty() ? "FM1-SAMPLER" :
+                             std::filesystem::path(directory).filename().string();
     icon(kind, M + 119, 26, kOrange);
     text(M + 136, 27, 18, kPaper, fit(name, mx - (M + 141), 18), 0, true);
-    // Tapping a filename opens the full list so the user can choose a
-    // different sample or folder. Glyphs never intercept touch input.
-    tap({M + 132, 8, mx - M - 141, 40}, [this] { openLibrary(); });
     {
-        const std::string route = browseDir_.empty() ? "FM1-SAMPLER /" :
-                                  "FM1-SAMPLER / " + browseDir_;
+        const std::string route = directory.empty() ? "FM1-SAMPLER /" :
+                                  "FM1-SAMPLER / " + directory;
         text(M, 61, 9.2f, kDim, fit(route, mx - M - 55, 9.2f), 0, false);
         text(mx - 18, 61, 10, kOrange, "T" + std::to_string(t + 1), 2, true);
         tap({mx - 49, 45, 45, 30}, [this, t] {
@@ -666,11 +660,11 @@ void SamplerUI::deck(Rect r) {
     const uint32_t micCol = mic == 1 || mic == 2 ? kOrange : kPaper;
     icon(4, mx, 56, kPaper);  tap({mx - 32, 28, 64, 56}, [this] { setLight(!theme::light); });
     icon(5, mx, 120, micCol); tap({mx - 32, 92, 64, 56}, [this] { app_.micSample(); });
-    // HOME folder icon opens Android DocumentsUI for any ZIP pack or
-    // supported individual audio file; its ZIP import preserves all subfolders.
+    // HOME folder icon returns to the library's internal root; external
+    // imports remain available separately in the EDIT screen.
     icon(6, mx, 184, kPaper);
-    text(mx, 211, 8.5f, kDim, "IMPORT", 1, true);
-    tap({mx - 32, 156, 64, 56}, [this] { app_.requestFile(); });
+    text(mx, 211, 8.5f, kDim, "LIBRARY", 1, true);
+    tap({mx - 32, 156, 64, 56}, [this] { app_.browserRoot(); });
     icon(7, mx, 248, projectOpen_ ? kOrange : kPaper); tap({mx - 32, 220, 64, 56}, [this] { projectOpen_ = true; });
     // the sample of this track, its page and the four knobs of the page
     sampleView({x0, 14, w0, 118});
@@ -838,10 +832,9 @@ void SamplerUI::pagePanel(Rect r) {
 }
 
 void SamplerUI::openLibrary() {
-    // Keep the current folder instead of losing the user's navigation state.
     app_.refreshLibrary();
-    sheetOpen_ = true;
-    buildBrowserRows();
+    app_.browserRoot();
+    sheetOpen_ = false; // never open a separate browser overlay
 }
 
 void SamplerUI::buildBrowserRows() {
@@ -892,42 +885,8 @@ void SamplerUI::buildBrowserRows() {
     });
 }
 
-void SamplerUI::browserBack() {
-    if (browseDir_.empty()) {
-        if (sheetOpen_) sheetOpen_ = false;
-        else browseSelected_ = -1; // ROOT/archivador
-        return;
-    }
-    const std::string previous = browseDir_;
-    const size_t slash = browseDir_.find_last_of('/');
-    browseDir_ = slash == std::string::npos ? "" : browseDir_.substr(0, slash);
-    buildBrowserRows();
-    const std::string last = previous.substr(slash == std::string::npos ? 0 : slash + 1);
-    for (int i = 0; i < (int)browseRows_.size(); ++i)
-        if (browseRows_[(size_t)i].directory && browseRows_[(size_t)i].label == last)
-            { browseSelected_ = i; break; }
-    sheetScroll_ = std::max(0.f, (float)browseSelected_ * 36.f - 108.f);
-}
-
-void SamplerUI::browserEnter() {
-    if (browseSelected_ < 0 || browseRows_.empty()) {
-        if (!sheetOpen_) openLibrary(); // choose the first destination from the list
-        return;
-    }
-    if (browseSelected_ >= (int)browseRows_.size()) return;
-    const BrowserRow selected = browseRows_[(size_t)browseSelected_];
-    if (selected.directory) {
-        browseDir_ = selected.path;
-        buildBrowserRows();
-        return;
-    }
-    if (selected.entry < 0) {
-        app_.say("FILE PRESERVED - NOT A PLAYABLE WAV");
-        return;
-    }
-    app_.loadEntry(selected.entry);
-    sheetOpen_ = false;
-}
+void SamplerUI::browserBack() { app_.browserBack(); }
+void SamplerUI::browserEnter() { app_.browserEnter(); }
 
 void SamplerUI::librarySheet() {
     rrect({0, 0, W_, H_}, 0, theme::withAlpha(BG, 215));
