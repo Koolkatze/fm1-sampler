@@ -686,11 +686,19 @@ int main() {
         { auto k = app.knobs(SamplerApp::P_MIX); k[1].set(0.f); }
         app.selectTrack(1); app.setAlgo(0); app.selectTrack(0); app.setAlgo(0);
     }
-    {   // The browser must start at FM1-SAMPLER, expose all permanent directories,
-        // and navigate imported PACKS / pack / arbitrary subfolders with ENTER and BACK.
+    {   // Navigation stays on HOME: PRESETS selects a row in its current folder
+        // and loads its WAV immediately. ENTER navigates into folders only;
+        // BACK returns one level. Android's document picker never opens.
         namespace fs = std::filesystem;
-        fs::create_directories(fs::path(s.sampleDir()) / "PACKS" / "My Imported ZIP" / "Drums" / "Kicks");
+        const fs::path root(s.sampleDir());
+        const fs::path nested = root / "PACKS" / "My Imported ZIP" / "Drums" / "Kicks";
+        fs::create_directories(nested);
+        fs::copy_file(root / "Bass" / "Fuzz.wav", nested / "01_fuzz.wav",
+                      fs::copy_options::overwrite_existing);
+        fs::copy_file(root / "Bass" / "Fuzz.wav", nested / "02_fuzz.wav",
+                      fs::copy_options::overwrite_existing);
         app.refreshLibrary();
+        app.browserRoot();
         SamplerUI browser(app);
         browser.setSize(860.f, 400.f, 0.f, 0.f);
         browser.frame(now);
@@ -699,66 +707,63 @@ int main() {
             browser.touch(2, x, y, now);
             browser.frame(now);
         };
-        click(351.f, 184.f); // HOME folder icon launches Android's unified picker
-        CHECK(app.wantFile() && !app.wantFile(),
-              "HOME folder icon requests phone file explorer for ZIP packs or audio");
         auto hasText = [&](const std::string& label) {
             for (const auto& op : browser.ops())
                 if (op.type == UiOp::TEXT && op.text.find(label) != std::string::npos) return true;
             return false;
         };
-        auto breadcrumb = [&]() -> std::string {
-            // HOME also displays the library path. The browser sheet is
-            // drawn later and its breadcrumb is the last matching text.
-            std::string crumb;
-            for (const auto& op : browser.ops())
-                if (op.type == UiOp::TEXT && op.text.rfind("FM1-SAMPLER /", 0) == 0)
-                    crumb = op.text;
-            return crumb;
-        };
-        CHECK(hasText("BACK") && hasText("ENTER") &&
-              hasText("FM1-SAMPLER") && !hasText("FOLDERS") && !hasText("SAMPLES"),
-              "HOME has BACK/ENTER and one file-type indicator, not category buttons");
-        click(143.f, 26.f);  // the root archive icon is read-only
-        CHECK(!hasText("+ IMPORT ZIP"), "file-type icon has no touch action");
-        click(220.f, 26.f);  // selecting the filename opens the browser
-        CHECK(hasText("ENTER >") && hasText("< BACK"),
-              "browser navigation buttons sit left of the file names");
-        CHECK(hasText("PROYECTOS") && hasText("OFFICIAL") &&
-              hasText("SAVED") && hasText("PACKS") && breadcrumb() == "FM1-SAMPLER /",
-              "FM1-SAMPLER opens with all four directories");
-        // Alphabetical folder order: OFFICIAL, PACKS, PROYECTOS, SAVED.
-        click(285.f, 165.f); click(200.f, 165.f);
-        CHECK(breadcrumb() == "FM1-SAMPLER / PACKS", "ENTER visits PACKS");
-        click(285.f, 129.f); click(200.f, 165.f);
-        CHECK(breadcrumb() == "FM1-SAMPLER / PACKS/My Imported ZIP" ||
-              breadcrumb() == "FM1-SAMPLER / PACKS / My Imported ZIP",
-              "ENTER visits the imported ZIP's own folder");
-        click(285.f, 129.f); click(200.f, 165.f);
-        CHECK(breadcrumb().find("/Drums") != std::string::npos,
-              "ENTER visits nested Drums subfolder");
-        click(200.f, 126.f);
-        CHECK(breadcrumb().find("My Imported ZIP") != std::string::npos &&
-              breadcrumb().find("/Drums") == std::string::npos,
-              "BACK returns exactly one level from nested folder");
-        click(200.f, 126.f); click(200.f, 126.f);
-        CHECK(breadcrumb() == "FM1-SAMPLER /",
-              "BACK returns from PACKS to FM1-SAMPLER root");
-        click(660.f, 29.f); // close the library
-        CHECK(hasText("BACK") && hasText("ENTER") && !hasText("+ IMPORT ZIP"),
-              "HOME navigation stays available without modal category tabs");
-        click(40.f, 26.f); // HOME BACK at root selects archive/root
-        CHECK(hasText("FM1-SAMPLER"), "HOME BACK exposes library root");
-        click(91.f, 26.f); // HOME ENTER from root opens folder selector
-        CHECK(hasText("+ IMPORT ZIP"), "HOME ENTER opens the actual directory list");
-        click(660.f, 29.f);
-        // PROJECT menu exposes EXPORT LOOP alongside SAVE/LOAD PROJECT.
+        CHECK(hasText("BACK") && hasText("ENTER") && hasText("FM1-SAMPLER") &&
+              !hasText("+ IMPORT ZIP"),
+              "HOME shows only inline BACK/ENTER and a filename, no modal browser");
+        click(351.f, 184.f);
+        CHECK(app.browserDir().empty() && !app.wantFile(),
+              "HOME LIBRARY icon resets internal root without Android DocumentsUI");
+        app.browserBack(); // deselect to show the archive root itself
+        enc(6, 1); // first item: OFFICIAL
+        CHECK(app.browserSelected() && app.browserSelected()->label == "OFFICIAL",
+              "PRESETS turns to the next directory entry");
+        enc(6, 1); // second item: PACKS
+        CHECK(app.browserSelected() && app.browserSelected()->label == "PACKS",
+              "PRESETS moves row by row within root, including folders");
+        click(91.f, 26.f); // ENTER -> PACKS
+        CHECK(app.browserDir() == "PACKS" && hasText("My Imported ZIP"),
+              "ENTER visits selected folder, showing its name in HOME");
+        click(91.f, 26.f); // ENTER -> pack
+        CHECK(app.browserDir() == "PACKS/My Imported ZIP",
+              "ENTER visits imported ZIP's own subdirectory");
+        click(91.f, 26.f); // ENTER -> Drums
+        CHECK(app.browserDir() == "PACKS/My Imported ZIP/Drums",
+              "ENTER visits nested Drums folder");
+        click(91.f, 26.f); // ENTER -> Kicks; auto-select first WAV
+        app.selectTrack(4);
+        run(1.0);
+        browser.frame(now);
+        CHECK(app.browserDir() == "PACKS/My Imported ZIP/Drums/Kicks" &&
+              app.browserSelected() && app.browserSelected()->label == "01_fuzz.wav" &&
+              app.sampleLabel(4) == "01_fuzz",
+              "first WAV is loaded as preset upon selection; no ENTER required");
+        enc(6, 1); // PRESETS selects next WAV; must load without ENTER
+        run(1.0); browser.frame(now);
+        CHECK(app.browserSelected() && app.browserSelected()->label == "02_fuzz.wav" &&
+              app.sampleLabel(4) == "02_fuzz",
+              "PRESETS auto-loads next WAV immediately without pressing ENTER");
+        click(91.f, 26.f); // ENTER over WAV does not change folder or sample
+        CHECK(app.browserDir() == "PACKS/My Imported ZIP/Drums/Kicks" &&
+              app.sampleLabel(4) == "02_fuzz",
+              "ENTER on an audio file has no action (already loaded)");
+        click(40.f, 26.f); // BACK highlights Kicks in its parent
+        CHECK(app.browserDir() == "PACKS/My Imported ZIP/Drums" &&
+              app.browserSelected() && app.browserSelected()->label == "Kicks",
+              "BACK returns one level and highlights previous folder");
+        click(40.f, 26.f); click(40.f, 26.f); click(40.f, 26.f);
+        CHECK(app.browserDir().empty() && hasText("FM1-SAMPLER"),
+              "BACK returns all the way to internal FM1-SAMPLER root");
         click(351.f, 248.f);
         CHECK(hasText("SAVE PROJECT") && hasText("LOAD PROJECT") &&
-              hasText("EXPORT ALL LOOPS"), "PROJECT has three independent save/load/export actions");
+              hasText("EXPORT ALL LOOPS"), "PROJECT retains saving and exporting actions");
         click(351.f, 67.f);
         CHECK(app.wantLoopExport() && !app.wantLoopExport(),
-              "EXPORT ALL LOOPS sends exactly one request to Android's shared-download exporter");
+              "EXPORT ALL LOOPS still requests Android's public download export");
     }
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL OK", fails);
     return fails ? 1 : 0;
