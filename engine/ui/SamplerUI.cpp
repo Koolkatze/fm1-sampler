@@ -820,21 +820,12 @@ void SamplerUI::pagePanel(Rect r) {
 }
 
 void SamplerUI::openLibrary() {
+    // The library always begins at its single top-level FM1-SAMPLER folder.
+    // ENTER and BACK handle every level; the active sample doesn't change it.
     app_.refreshLibrary();
     browseDir_.clear();
-    const auto& lib = app_.library();
-    const int idx = app_.libraryCursor();
-    if (idx >= 0 && idx < (int)lib.size()) {
-        const auto& e = lib[(size_t)idx];
-        browseDir_ = e.pack;
-        if (!e.folder.empty()) browseDir_ += "/" + e.folder;
-    }
     sheetOpen_ = true;
     buildBrowserRows();
-    if (idx >= 0 && idx < (int)lib.size())
-        for (int i = 0; i < (int)browseRows_.size(); ++i)
-            if (browseRows_[(size_t)i].entry == idx) { browseSelected_ = i; break; }
-    sheetScroll_ = std::max(0.f, (float)browseSelected_ * 36.f - 110.f);
 }
 
 void SamplerUI::buildBrowserRows() {
@@ -847,22 +838,16 @@ void SamplerUI::buildBrowserRows() {
     std::error_code ec;
     const fs::path current = root / browseDir_;
     if (browseDir_.empty()) {
-        // Permanent groups must always be navigable, including before the first import.
-        browseRows_.push_back({"OFFICIAL", "OFFICIAL", -1, true});
-        browseRows_.push_back({"SAVED", "SAVED", -1, true});
-        if (fs::is_directory(root, ec)) {
-            for (auto& item : fs::directory_iterator(root, fs::directory_options::skip_permission_denied, ec)) {
-                if (!item.is_directory(ec)) continue;
-                const std::string name = item.path().filename().string();
-                if (name != "OFFICIAL" && name != "SAVED")
-                    browseRows_.push_back({name, name, -1, true});
-            }
-        }
-        if (std::any_of(lib.begin(), lib.end(), [](const SamplerApp::Entry& e) { return e.pack == "PROJECT"; }))
-            browseRows_.push_back({"PROJECT", "PROJECT", -1, true});
-    } else if (browseDir_ == "PROJECT") {
-        browseRows_.push_back({"Embedded", "PROJECT/Embedded", -1, true});
+        // Exactly four permanent top-level folders in FM1-SAMPLER.
+        for (const char* name : {"PROYECTOS", "OFFICIAL", "SAVED", "PACKS"})
+            browseRows_.push_back({name, name, -1, true});
     } else {
+        if (browseDir_ == "PROYECTOS" &&
+            std::any_of(lib.begin(), lib.end(), [](const SamplerApp::Entry& e) {
+                return e.pack == "PROYECTOS" && e.folder == "Embedded";
+            }))
+            browseRows_.push_back({"Embedded", "PROYECTOS/Embedded", -1, true});
+
         if (fs::is_directory(current, ec)) {
             for (auto& item : fs::directory_iterator(current, fs::directory_options::skip_permission_denied, ec)) {
                 if (!item.is_directory(ec)) continue;
@@ -879,8 +864,8 @@ void SamplerUI::buildBrowserRows() {
                 browseRows_.push_back({item.path().filename().string(), abs, entry, false});
             }
         }
-        // Backwards-compatible recordings imported before OFFICIAL/SAVED migration,
-        // and temporary embedded project audio, may live outside samples/.
+        // Backwards-compatible files and temporary embedded project audio may
+        // live outside FM1-SAMPLER until they are migrated.
         for (int i = 0; i < (int)lib.size(); ++i) {
             const auto& e = lib[(size_t)i];
             if (e.pack + "/" + e.folder != browseDir_) continue;
@@ -930,7 +915,7 @@ void SamplerUI::librarySheet() {
     const Rect box{W_ * 0.17f, 12, W_ * 0.66f, H_ - 24};
     rrect(box, R_CARD, SURFACE); stroke(box, R_CARD, ACCENT, 1);
     tap(box, [] {});
-    text(box.x + 15, box.y + 20, 14, TEXT, "SAMPLE LIBRARY", 0, true);
+    text(box.x + 15, box.y + 20, 14, TEXT, "FM1-SAMPLER", 0, true);
     button({box.x + box.w - 70, box.y + 5, 60, 26}, "CLOSE", false,
            [this] { sheetOpen_ = false; }, 9);
     const float top = box.y + 46;
@@ -943,13 +928,13 @@ void SamplerUI::librarySheet() {
         const bool selected = mode == 0 ? archive : mode == 1 ? !archive && !wav : wav;
         icon(8 + mode, cx, top + 9, selected ? ACCENT : DIM);
         text(cx + 15, top + 9, 9, selected ? ACCENT : TEXT,
-             mode == 0 ? "PACKS" : mode == 1 ? "FOLDERS" : "SAMPLES", 0, true);
+             mode == 0 ? "ROOT" : mode == 1 ? "FOLDERS" : "SAMPLES", 0, true);
     }
     const Rect back{box.x + box.w - 198, top - 6, 88, 30};
     const Rect enter{box.x + box.w - 102, top - 6, 92, 30};
     button(back, "< BACK", false, [this] { browserBack(); }, 11);
     button(enter, "ENTER >", false, [this] { browserEnter(); }, 11, true);
-    const std::string crumb = browseDir_.empty() ? "PACKS /" : "PACKS / " + browseDir_;
+    const std::string crumb = browseDir_.empty() ? "FM1-SAMPLER /" : "FM1-SAMPLER / " + browseDir_;
     text(box.x + 15, top + 40, 10, DIM, fit(crumb, box.w - 30, 10), 0, true);
 
     sheetList_ = {box.x + 8, top + 53, box.w - 16, box.h - 53 - 85};
