@@ -1,30 +1,60 @@
-# FM-1 Sampler: loop restart and tempo-synchronised CUE
+# FM1 Sampler: physical RESTART LOOP and NOTE REPEAT
 
-These controls apply to the FM-1 Sampler phone audio engine and its matching **FM-1 control-surface firmware**. They do not modify Urban-1.
+This page describes the **FM1 Sampler** control-surface firmware at
+`firmware/app/ctrl.c`, together with the matching FM1 Sampler Android APK.
+It does not describe another firmware.
 
-| Physical controls | Action |
-|---|---|
-| OCT− (tap alone) | Shift keyboard down one octave (unchanged) |
-| OCT+ (tap alone) | Shift keyboard up one octave (unchanged) |
-| Hold OCT−, then press PLAY | Start playback of the loop at its beginning, even if playback was already running |
-| Hold OCT+ for 2 seconds | Open the CUE division page; no octave shift |
-| Hold OCT+, press and **hold** PLAY | Repeat the section from the current playhead at the selected division |
-| While holding OCT+ and PLAY, turn K1 | Change the repeat rate live |
-| Release PLAY | End CUE and return to the uninterrupted underlying loop transport |
-| Release OCT+ | Close the division selector and restore the previous page |
+## Physical FM-1 controls
 
-## Android app (no FM-1 firmware change required)
+| Action | Behaviour |
+| --- | --- |
+| Tap OCT− by itself | Shift keyboard down one octave |
+| Tap OCT+ by itself | Shift keyboard up one octave |
+| **Hold OCT− first, then press PLAY/STOP** | **RESTART LOOP**, immediately on PLAY/STOP press |
+| **Hold OCT+ first, then press and hold PLAY/STOP** | **NOTE REPEAT** from the current position at BPM-synced division |
+| Turn K1 while holding the NOTE REPEAT combination | Choose 1/1, 1/2, 1/4, 1/8, 1/16, or 1/32 in real time |
+| Release PLAY/STOP | End NOTE REPEAT; the original recorded loop is unchanged |
+| Release OCT first, then press PLAY/STOP again | Normal play/stop; previous modifier cannot latch |
 
-The Android APK contains the native C++ sampler engine and CUE. Open the **CUE** page from the phone's editor or from the cassette deck's page notches, select a division with K1, then **touch and hold the CUE transport button** in the cassette deck to repeat. Release the touch to return to the main tape transport. This works entirely on the phone, with no physical FM-1 connected. The GitHub Actions debug APK is a separately installable application (`com.ferluht.fm1sampler.cue`) to avoid replacing an existing installed sampler.
+The OCT key's MIDI Note On may arrive long before the PLAY/STOP Note On.
+The Android software remembers whether an OCT modifier is held. No single
+simultaneous MIDI event or minimum hold duration is necessary.
 
-The K1 divisions are **1/1**, **1/2**, **1/4**, **1/8**, **1/16**, and **1/32**. The default is **1/4** (one quarter note). Length is calculated from the session BPM in common time: 1/1 = four beats, 1/2 = two beats, 1/4 = one beat, etc. The repeated audio begins where the playhead was when PLAY was pressed; no global loop content is altered. The original transport keeps running in the background, so releasing CUE resumes at the position it would have reached without the effect (slip-style).
+## MIDI wire contract
 
-The repeat is non-destructive; it does not write repeated material into a clip. Audio transitions use short crossfades. K1 changes the rate without rearming PLAY.
+- Physical OCT− press/release: channel 2, note 0, Note On/Off.
+- Physical OCT+ press/release: channel 2, note 1, Note On/Off.
+- Physical PLAY/STOP press/release: channel 2, note 12, Note On/Off.
+- Physical K1: channel 1, relative MIDI CC 18.
 
-### Compatibility and build
+The panel firmware forwards events over whichever of USB or BLE MIDI is ready.
+An unmodified FM1 Sampler firmware that handles OCT locally **without sending
+these events** cannot activate physical combinations in the Android app.
+The APK's INFO panel can now show whether each message has actually arrived.
+The INFO panel is diagnostic only; it does not emulate physical buttons.
 
-**The APK alone is insufficient for physical OCT commands.** The actual firmware installed on the FM-1 must transmit the following channel 2 note messages: OCT− Note 0 On/Off, OCT+ Note 1 On/Off, PLAY/STOP Note 12 On/Off. The updated `firmware/app/ctrl.c` transmits these independently over supported USB/BLE MIDI outputs. It deliberately retains the existing octave-change behaviour for a standalone tap while preventing an OCT modifier from changing the octave after a combo.
+## Source, validation and building the firmware
 
-**Important:** The checked-in `.fwsc` file is a *previous prebuilt image*, **not** an artifact of these changes. Do not flash it expecting octave forwarding. Rebuild the exact source using the matching JieLi Windows SDK/toolchain; verify its firmware package and updater before flashing. Flashing will replace the currently installed firmware (including Blackhole, if present) and may affect its sounds/projects. Back up first.
+- Firmware implementation: `firmware/app/ctrl.c`.
+- Physical button and USB/BLE validation:
+  `firmware/hosttest/ctrl_host.c`.
+- CI test: `.github/workflows/fm1-panel-midi-tests.yml`.
 
-The host test in `engine/tools/test_app.cpp` covers restart, long-hold page access, all-speed selection, live changes, release, and octave preservation. The CI host test compiles this engine; a separate Windows JieLi SDK toolchain is needed to package the device firmware.
+The test compiles and simulates the panel logic on Linux. Passing these
+tests does **not** create a flashable firmware image or prove operation on
+the physical device.
+
+To build for FM-1 hardware, the firmware project requires the matching
+JieLi Windows PI32v2 toolchain 2.5.3 and matching SDK as documented in
+`firmware/README.md`. The supported firmware build command is:
+
+```powershell
+$env:FM1_PI32_TOOLCHAIN = 'C:\JL\pi32'
+.\sdk\Build.ps1 -FirmwareOnly -Toolchain $env:FM1_PI32_TOOLCHAIN
+```
+
+**Do not flash a previously committed prebuilt `.fwsc` expecting these
+changes**: the source has been modified but the bundled firmware image
+has not been regenerated. Before flashing a newly built firmware, verify
+that it matches the FM-1 board and installer/updater and back up device
+data. The matching FM1 Sampler image must be tested on hardware.
