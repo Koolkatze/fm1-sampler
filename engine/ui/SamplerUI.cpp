@@ -586,7 +586,7 @@ void SamplerUI::deck(Rect r) {
         rrect(help, R_CONTROL, theme::SURFACE);
         stroke(help, R_CONTROL, theme::OUTLINE, 1);
         text(help.x + 7, help.y + 9, 9, kPaper,
-             "OCT- + PLAY/STOP    RESTART LOOP", 0, true);
+             "OCT− + PLAY/STOP: RESTART LOOP", 0, true);
         text(help.x + 7, help.y + 23, 8.6f, kDim,
              "OCT+ + PLAY/STOP    NOTE REPEAT  (K1: 1/1-1/32)", 0, true);
         const Rect hide{help.x + help.w - 39, help.y + 1, 38, 15};

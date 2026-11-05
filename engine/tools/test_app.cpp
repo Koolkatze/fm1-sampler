@@ -306,7 +306,7 @@ int main() {
             ui.frame(now + 1);
             bool restart = false, repeat = false, hide = false;
             for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
-                restart |= op.text == "OCT- + PLAY/STOP    RESTART LOOP";
+                restart |= op.text == "OCT− + PLAY/STOP: RESTART LOOP";
                 repeat |= op.text.find("NOTE REPEAT") != std::string::npos &&
                           op.text.find("OCT+ + PLAY/STOP") != std::string::npos;
                 hide |= op.text == "HIDE";

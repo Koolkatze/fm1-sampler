@@ -71,14 +71,14 @@ jobs:
       - name: Publish APK in new GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v0.37-scenes-preview.5
+          TAG: v0.37-scenes-preview.6
         run: |
           cat > release-notes.md <<'EOF'
           ## FM1 Sampler Scenes — NOTE REPEAT + physical shortcuts reference
 
           **Install the attached `FM1-Sampler-Scenes-SongMode.apk` on Android.**
 
-          - **Compact shortcut help on the phone's main deck:** two informative lines show OCT− + PLAY/STOP (RESTART LOOP), and OCT+ + PLAY/STOP (NOTE REPEAT, K1=1/1..1/32). Use the small HIDE/INFO control to collapse/reopen; the preference persists between app launches. The guide adopts the existing Light/Dark palette and does not trigger any audio action. There are **no new OCT buttons on the phone**.
+          - **Compact shortcut help on the phone's main deck:** the exact label **OCT− + PLAY/STOP: RESTART LOOP** is shown above OCT+ + PLAY/STOP (NOTE REPEAT, K1=1/1..1/32). Use the small HIDE/INFO control to collapse/reopen; the preference persists between app launches. The guide adopts the existing Light/Dark palette and does not trigger any audio action. There are **no new OCT buttons on the phone**.
           - **Physical OCT− + PLAY/STOP:** restart the loop immediately on the second button press, including when the loop was stopped; no one-second hold is required.
           - **Physical OCT+ + held PLAY/STOP:** momentary BPM-synced NOTE REPEAT from the current position. While holding, physical K1 selects 1/1, 1/2, 1/4, 1/8, 1/16 or 1/32. Releasing PLAY/STOP returns to the unchanged recorded loop.
           - On the real FM-1, **PLAY and STOP are the same physical PLAY/STOP key**. The custom physical controller firmware must forward OCT and PLAY MIDI note-on/note-off messages for these shortcuts to work. A firmware which does not forward them cannot be fixed by the APK alone.
@@ -86,7 +86,7 @@ jobs:
           - Retains the cassette-tape icon with split white/black and orange dot.
           - LOOP MODE C1–B1, SONG MODE, Project scene persistence and the original sample editor remain.
           - Package: `com.ferluht.fm1sampler.scenes`.
-          - Preview version: 0.37.4-scenes-test (versionCode 41).
+          - Preview version: 0.37.5-scenes-test (versionCode 42).
 
           Validation: host regression tests passed for physical CUE, K1 live rate, immediate OCT− restart, no synthetic phone octave buttons, scene switching and Song Mode. The APK was rebuilt with those sources.
 
@@ -110,7 +110,7 @@ jobs:
             gh release create "$TAG" dist/FM1-Sampler-Scenes-SongMode.apk \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
-              --title "FM1 Sampler Scenes — NOTE REPEAT and physical shortcuts help" \
+              --title "FM1 Sampler Scenes — NOTE REPEAT and restart shortcut" \
               --notes-file release-notes.md \
               --prerelease
           fi
