@@ -112,12 +112,24 @@ int main() {
       };
       const int octaveBefore = app.scale().octave;
       s.seek(0.65f); run(0.06);
+      // No timer: verify the audio pointer on the very next audio callback.
       hold(SamplerApp::OCT_DOWN, true);
-      hold(SamplerApp::PLAY, true); run(0.08);
-      hold(SamplerApp::PLAY, false);
-      hold(SamplerApp::OCT_DOWN, false); run(0.08);
-      CHECK(app.status().pos < app.status().loopSamples * 0.4 && app.status().playing,
-            "OCT- + PLAY starts the playing loop from zero (pos %.1f)", app.status().pos);
+      hold(SamplerApp::PLAY, true); run(0.02);
+      CHECK(app.status().pos < app.status().loopSamples * 0.16 && app.status().playing,
+            "OCT- + PLAY instantly restarts on second key-down (%.1f)", app.status().pos);
+      hold(SamplerApp::PLAY, false); hold(SamplerApp::OCT_DOWN, false); run(0.02);
+      CHECK(app.status().playing, "combo PLAY release does not toggle transport");
+      s.seek(0.72f); run(0.04);
+      hold(SamplerApp::OCT_DOWN, true); hold(SamplerApp::STOP, true); run(0.02);
+      CHECK(app.status().pos < app.status().loopSamples * 0.16 && app.status().playing,
+            "OCT- + STOP instantly restarts, not stops (%.1f)", app.status().pos);
+      hold(SamplerApp::STOP, false); hold(SamplerApp::OCT_DOWN, false);
+      s.seek(0.72f); run(0.04);
+      hold(SamplerApp::PLAY, true); hold(SamplerApp::OCT_DOWN, true); run(0.02);
+      CHECK(app.status().pos < app.status().loopSamples * 0.16 && app.status().playing,
+            "PLAY then OCT- also restarts on second key-down");
+      hold(SamplerApp::OCT_DOWN, false); hold(SamplerApp::PLAY, false); run(0.02);
+      CHECK(app.status().playing, "reverse combo release does not stop");
       CHECK(app.scale().octave == octaveBefore, "OCT modifier does not shift the app's octave");
       const auto originalPage = app.page();
       hold(SamplerApp::OCT_UP, true); run(2.15);
@@ -168,8 +180,8 @@ int main() {
       SamplerUI touchUi(app);
       touchUi.setSize(860.f, 400.f, 0.f, 0.f);
       touchUi.frame(now);
-      touchUi.touch(0, 294.f, 248.f, now);
-      touchUi.touch(2, 294.f, 248.f, now);
+      touchUi.touch(0, 294.f, 234.f, now);
+      touchUi.touch(2, 294.f, 234.f, now);
       CHECK(app.cueModifierHeld() && app.page() == SamplerApp::P_CUE,
             "Android OCT+ button arms CUE rate selection, without playing");
       CHECK(!app.cueActive(), "arming OCT+ alone does not repeat audio");
@@ -185,18 +197,33 @@ int main() {
       CHECK(!app.cueActive() && app.status().playing,
             "Android releasing PLAY stops CUE but original loop continues");
       touchUi.frame(now);
-      touchUi.touch(0, 294.f, 248.f, now);
-      touchUi.touch(2, 294.f, 248.f, now);
+      touchUi.touch(0, 294.f, 234.f, now);
+      touchUi.touch(2, 294.f, 234.f, now);
       CHECK(!app.cueModifierHeld(), "Android OCT+ modifier can be disarmed");
 
-      s.seek(0.7f); run(0.05);
+      // Android OCT- latch: PLAY or STOP immediately resets without a hold.
       touchUi.frame(now);
-      touchUi.touch(0, 44.f, 248.f, now);
-      touchUi.frame(now + 1100);
-      touchUi.touch(2, 44.f, 248.f, now + 1100);
-      run(0.05);
-      CHECK(app.status().pos < app.status().loopSamples * 0.3 && app.status().playing,
-            "Android holding PLAY for one second restarts the loop");
+      touchUi.touch(0, 294.f, 265.f, now); touchUi.touch(2, 294.f, 265.f, now);
+      CHECK(app.octDownModifierHeld() && !app.cueModifierHeld(),
+            "Android OCT- latch is exclusive from OCT+ CUE");
+      s.seek(0.72f); run(0.04); touchUi.frame(now);
+      touchUi.touch(0, 44.f, 248.f, now); run(0.02);
+      CHECK(app.status().pos < app.status().loopSamples * 0.16 && app.status().playing,
+            "touch OCT- + PLAY restarts instantly on down");
+      touchUi.touch(2, 44.f, 248.f, now);
+      s.seek(0.72f); run(0.04); touchUi.frame(now);
+      touchUi.touch(0, 108.f, 248.f, now); run(0.02);
+      CHECK(app.status().pos < app.status().loopSamples * 0.16 && app.status().playing,
+            "touch OCT- + STOP restarts instantly on down");
+      touchUi.touch(2, 108.f, 248.f, now);
+      touchUi.frame(now);
+      touchUi.touch(0, 294.f, 265.f, now); touchUi.touch(2, 294.f, 265.f, now);
+      CHECK(!app.octDownModifierHeld(), "OCT- latch switches off");
+      touchUi.frame(now);
+      touchUi.touch(0, 108.f, 248.f, now); run(0.04);
+      CHECK(!app.status().playing, "unmodified STOP still stops");
+      touchUi.touch(2, 108.f, 248.f, now);
+      app.transportSet(true); run(0.12);
       touchUi.setEditor(true); touchUi.frame(now);
       touchUi.touch(0, 365.f, 22.f, now);
       touchUi.touch(2, 365.f, 22.f, now);
@@ -212,12 +239,22 @@ int main() {
       touchUi.touch(0, 365.f, 22.f, now);
       touchUi.touch(2, 365.f, 22.f, now);
       CHECK(!app.cueModifierHeld(), "editor OCT+ disarms");
-      // The hardware also differentiates a short tap from a timed 1s hold.
-      s.seek(0.7f); run(0.04);
-      hold(SamplerApp::PLAY, true); run(1.05);
-      hold(SamplerApp::PLAY, false); run(0.05);
-      CHECK(app.status().pos < app.status().loopSamples * 0.3 && app.status().playing,
-            "physical PLAY held one second restarts rather than stopping the loop");
+      touchUi.frame(now);
+      touchUi.touch(0, 394.f, 22.f, now); touchUi.touch(2, 394.f, 22.f, now);
+      CHECK(app.octDownModifierHeld(), "editor also provides OCT-");
+      s.seek(0.71f); run(0.04); touchUi.frame(now);
+      touchUi.touch(0, 25.f, 22.f, now); run(0.02);
+      CHECK(app.status().pos < app.status().loopSamples * 0.16 && app.status().playing,
+            "editor OCT- + PLAY restarts instantly");
+      touchUi.touch(2, 25.f, 22.f, now);
+      touchUi.frame(now);
+      touchUi.touch(0, 394.f, 22.f, now); touchUi.touch(2, 394.f, 22.f, now);
+      CHECK(!app.octDownModifierHeld(), "editor OCT- disarms");
+      s.seek(0.64f); run(0.03);
+      hold(SamplerApp::PLAY, true); run(0.04);
+      CHECK(app.status().playing, "PLAY alone no longer has a timed restart");
+      hold(SamplerApp::PLAY, false); run(0.04);
+      CHECK(!app.status().playing, "PLAY alone retains normal transport on release");
       app.loopClear(); run(0.3); }
     {   // Live C1/D1 scenes, independent track groups, ordered song, persistence and light/dark UI.
         app.selectTrack(0); app.loopClear(); run(0.2);
