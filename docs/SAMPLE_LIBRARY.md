@@ -37,6 +37,28 @@ All four top-level folders are visible **even while empty**. Existing
 `FM1-SAMPLER` content is not cleared on an app update. Folders are created
 on first launch (Android does not execute application code at install time).
 
+## Importar ZIP desde el icono de carpeta de HOME (0.38.3)
+
+Pulsa el **icono de carpeta** de HOME (junto al micrófono y al icono
+de proyectos). Abre directamente el **explorador de documentos de Android**
+para elegir cualquier archivo accesible en Descargas, almacenamiento del
+teléfono, USB o proveedor compatible.
+
+- Si seleccionas un **.zip**, la aplicación lo identifica por extensión,
+  tipo de contenido o firma `PK` y lo descomprime automáticamente en
+  `FM1-SAMPLER/PACKS/<nombre del ZIP>/`, conservando **todas** las
+  carpetas internas, samples, loops y archivos adicionales.
+- Si seleccionas un **archivo de audio individual**, se importa en
+  `FM1-SAMPLER/SAVED/IMPORTS/` y se carga en la pista seleccionada.
+- El archivo de origen seleccionado mediante Android **se conserva**;
+  importar nunca borra ni mueve el original fuera de Descargas/USB/Drive.
+- **No se requiere buscar otro botón de importar ZIP** en el navegador
+  interno de la biblioteca. El acceso principal es la carpeta de HOME.
+
+En PROYECTO, **EXPORT ALL LOOPS** tiene una finalidad distinta: publica
+las pistas grabadas y su mezcla maestra en
+`Downloads/FM1-SAMPLER/EXPORTED LOOPS/`, accesible desde Files.
+
 ## ZIP import
 
 Tap `+ IMPORT ZIP` in the library and select any ZIP from Android's
