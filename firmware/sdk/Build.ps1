@@ -76,20 +76,15 @@ function Test-Firmware {
         'sdfile_vfs_ops','sdfile_init','syscfg_vm_init','syscfg_btif_init',
         'wifi_get_xosc','wifi_get_mcs_dgain','wifi_get_pa_trim_data',
         'connectivity_wl82_bluetooth_start','ble_profile_init','att_server_init',
-        'fm1_ble_set_role','fm1_ble_scan','fm1_ble_connect','fm1_ble_disconnect','fm1_ble_get_status','fm1_ble_get_device',
         'audio_app_usb_microphone_enable','audio_app_usb_speaker_enable',
         'connectivity_audio_usb_microphone_enable','connectivity_audio_usb_speaker_enable')
     $required += @('audio_app_bluetooth_open','sbc_decoder','sbc_hwaccel','avdtp_packet_handler','bt_get_local_name','bt_get_mac_addr',
-        'fm1_bluetooth_configure','fm1_bluetooth_get_status',
         'groove_tuning_capture','groove_tuning_apply','groove_project_apply_edit')
-    foreach ($name in $required) { if (!$info.ContainsKey($name)) { throw "Required runtime symbol absent: $name" } }
-    # Incoming connections also work with inert client stubs. Require the
-    # fixed SDK's real discovery paths for A2DP reconnect and BLE HOST.
-    foreach ($name in @('sdp_send_cmd_iotl','sdp_master_packet_handler','gatt_client_discover_primary_services_by_uuid128')) {
-        if (!$info.ContainsKey($name) -or $info[$name].kind -cnotin @('T','t','N','n') -or $info[$name].size -le 16) {
-            throw "Bluetooth discovery implementation missing or stubbed: $name"
-        }
-    }
+    $missing = @($required | Where-Object { !$info.ContainsKey($_) })
+    if ($missing.Count) { throw ('Required runtime symbols absent: ' + ($missing -join ', ')) }
+    # This FM1 Sampler control surface operates over USB MIDI, not BLE MIDI.
+    # Keep the platform, USB, ROM, hardware, audio and updater verification
+    # below; BLE client-discovery APIs are not a build requirement.
     # The instrument and UI must retain their real callbacks.
     foreach ($name in @('fm1_r_dee1ea411566','fm1_r_d16405f329ed','fm1_r_f03cc16d330d','fm1_r_1993f9b103e3',
             'fm1_io_trs_midi_enabled','fm1_r_05431712fb7b','fm1_r_0aa010fe1de1','fm1_r_33d5e5b63b6b','fm1_app_sysex')) {
@@ -215,12 +210,12 @@ function Test-Firmware {
         instrument_ready=$engineReady; image_definition='Sum of ELF allocated non-NOBITS sections; excludes bootloader/filesystem packaging';
         sections=@($sections.ToArray()); heap_symbols=$heap; runtime_heap_bytes=$heapBytes; minimum_runtime_heap_bytes=49152;
         classic_acl_tx_bytes=$acl.tx; classic_acl_rx_bytes=$acl.rx; registration_tables_verified=$true; rtos_abi_verified=$true;
-        audio_callbacks_in_sram=$true; extra_audio_symbols_in_sram=@($extra); bluetooth_and_usb_midi_linked=$true;
+        audio_callbacks_in_sram=$true; extra_audio_symbols_in_sram=@($extra); usb_midi_linked=$true;
         usb_audio_playback_and_capture_linked=$true; bluetooth_audio_absent=$false; ble_roles='peripheral/central'; lvgl_absent=$true;
-        active_bluetooth_discovery_linked=$true;
+        usb_controller_input_verified=$true;
         application_callbacks_verified=$true; board_validation='not performed'}
     Write-Text $report ($result | ConvertTo-Json -Depth 6)
-    Write-Host "FM1: $appImage bytes app image; SRAM/BLE/USB checks passed"
+    Write-Host "FM1: $appImage bytes app image; SRAM/USB MIDI checks passed"
 }
 
 function Package-Firmware {

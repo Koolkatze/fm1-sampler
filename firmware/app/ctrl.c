@@ -126,6 +126,9 @@ static unsigned key_notes(unsigned key, uint8_t *out)   /* notes sounded by one 
 static uint8_t held_notes[KEYS][3], held_count[KEYS];
 
 /* ---- MIDI out ------------------------------------------------------------ */
+/* FM1 Sampler is a USB-MIDI panel: OCT-/OCT+/PLAY Note On/Off and
+ * the K1 encoder are sent as separate events on the USB MIDI port.
+ * The Android receiver maintains modifier state until Note Off. */
 static int midi3(uint8_t status, uint8_t a, uint8_t b)
 {
     uint8_t m[3] = {status, a, b};
@@ -367,7 +370,10 @@ void groove_screen_control(void)
         if (!(kdiff >> i & 1U)) continue;
         if (keys >> i & 1U) key_down(i); else key_up(i);
     }
-    /* Other buttons: notes 0..13 on channel 2, including OCT modifiers. */
+    /* Physical OCT-/OCT+/PLAY: MIDI channel 2 notes 0/1/12.
+     * Each press transmits Note On, each release transmits Note Off.
+     * The receiving phone keeps the modifier state between the messages;
+     * no simultaneous event is necessary. */
     uint32_t forwarded = c.buttons & ((1UL << BUTTONS) - 1U);
     uint32_t bdiff = forwarded ^ sent_buttons;
     for (unsigned i = 0; i < BUTTONS && bdiff; ++i)

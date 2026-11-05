@@ -117,11 +117,33 @@ if ($PackageJson) {
     if ($package.build_id -cnotmatch '^[0-9a-f]{64}$') { throw 'Firmware source identifier is invalid.' }
     $notices += 'FM-1 V15 recovery firmware: https://www.m-vave.com/download (PC Firmware / FM-1 V15). Distributed by M-VAVE under Apache-2.0. Retain applicable licenses and notices; components with separate licenses retain their terms. See THIRD_PARTY.md.'
 }
-$compiled = Build-Simulator
-$wasm = [IO.File]::ReadAllBytes($compiled.file)
-$simulation = [ordered]@{schema=1;release_version=$releaseVersion;sha256=(Hash $compiled.file);source_sha256=$compiled.source_sha256;
-    sample_bank='synthesized-demo';data=[Convert]::ToBase64String($wasm)} | ConvertTo-Json -Compress
+# USB-MIDI firmware distribution needs the verified browser updater, not
+# the obsolete WebAssembly synthesizer (which depends on removed
+# groove_screen_* functions). Do not change the physical FM1 Sampler app
+# or silently include a nonfunctional performance simulator.
+if ($PackageJson) {
+    $compiled = $null
+    $wasm = [byte[]]@()
+    $simulation = [ordered]@{schema=1;release_version=$releaseVersion;
+        sample_bank='not-included';sha256=('0' * 64);data=''} | ConvertTo-Json -Compress
+} else {
+    $compiled = Build-Simulator
+    $wasm = [IO.File]::ReadAllBytes($compiled.file)
+    $simulation = [ordered]@{schema=1;release_version=$releaseVersion;sha256=(Hash $compiled.file);source_sha256=$compiled.source_sha256;
+        sample_bank='synthesized-demo';data=[Convert]::ToBase64String($wasm)} | ConvertTo-Json -Compress
+}
 $web = [IO.File]::ReadAllText((Join-Path $root 'sdk/Update.html.in'))
+if ($PackageJson) {
+    # Keep only the firmware update and help tabs visible. Still bundle and
+    # validate the original USB SysEx updater, device identity and loader.
+    $web = $web.Replace("const pages=['sim','library','update','manual'];",
+                        "const pages=['update','manual'];")
+    $web = $web.Replace("  const chapters=[...document.querySelectorAll('.manual-chapter')];",
+                        "  showPage('update');" + [Environment]::NewLine + "  const chapters=[...document.querySelectorAll('.manual-chapter')];")
+    $web = $web.Replace('<main>',
+                        '<style>#mode-sim,#mode-library,#tab-sim,#tab-library{display:none!important}</style><main>')
+    $web = $web.Replace('<h2>更新固件</h2>', '<h2>FM1 Sampler · USB MIDI firmware</h2>')
+}
 if ($LocalPreview) {
     $web = [regex]::Replace($web, '<a\b[^>]*href="/\*FM1_SOURCE_URL\*/"[^>]*>(.*?)</a>', '<span>$1 (local preview)</span>')
 }
@@ -131,7 +153,7 @@ $replacements = @{
     '/*FM1_SIMULATOR*/'=('const FM1_SIMULATOR = ' + $simulation + ';')
     '/*FM1_I18N*/'=[IO.File]::ReadAllText((Join-Path $root 'sdk/I18n.js'))
     '/*FM1_SCRIPT*/'=[IO.File]::ReadAllText((Join-Path $root 'sdk/WebUpdate.js'))
-    '/*FM1_SIM_SCRIPT*/'=[IO.File]::ReadAllText((Join-Path $root 'sdk/Simulator.js'))
+    '/*FM1_SIM_SCRIPT*/'=$(if ($PackageJson) { '// Firmware update only; audio simulator excluded.' } else { [IO.File]::ReadAllText((Join-Path $root 'sdk/Simulator.js')) })
     '/*FM1_SAMPLE_SCRIPT*/'=[IO.File]::ReadAllText((Join-Path $root 'sdk/Samples.js'))
 }
 foreach ($file in @('THIRD_PARTY.md','LICENSE.md')) {
@@ -148,6 +170,6 @@ if ($PackageJson) {
     $hash = Hash $output
     [IO.File]::WriteAllText((Join-Path (Split-Path $output) 'SHA256SUMS.txt'), "$hash  $([IO.Path]::GetFileName($output))`n", $utf8)
     Write-Host "Integrated FM1 workbench: $output"
-    [pscustomobject]@{file=$output;sha256=$hash;simulator_sha256=(Hash $compiled.file);
-        simulator_source_sha256=$compiled.source_sha256;simulator_bytes=$wasm.Length}
+    [pscustomobject]@{file=$output;sha256=$hash;simulator_sha256=$null;
+        simulator_source_sha256=$null;simulator_bytes=0;flash_only=$true}
 } else { Write-Host 'Preview: build/preview/index.html' }

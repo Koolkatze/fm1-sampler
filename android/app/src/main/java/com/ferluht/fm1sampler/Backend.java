@@ -27,6 +27,7 @@ public class Backend {
     MidiDevice device;
     volatile MidiInputPort toFm1;
     MidiOutputPort fromFm1;
+    int loggedIncomingEvents = 0;
     volatile boolean running;
     Thread ticker;
     boolean audioStarted, micStarted, micWanted;
@@ -72,7 +73,7 @@ public class Backend {
                 try {
                     byte[] out = Native.tick(engine, SystemClock.uptimeMillis() - t0);
                     send(out);
-                    Native.uiLink(engine, toFm1 != null, usbAudioId != 0);
+                    Native.uiLink(engine, fromFm1 != null, usbAudioId != 0);
                     if (Native.wantFile(engine)) { Runnable r = onFileRequest; if (r != null) main.post(r); }
                     if (Native.audioDead(engine) && SystemClock.uptimeMillis() - lastRestart > 700) {   // the system closed the stream (USB plugged / unplugged)
                         lastRestart = SystemClock.uptimeMillis();
@@ -121,30 +122,83 @@ public class Backend {
     }
 
     // ---- MIDI ----
+    // Android calls the device's OUTPUT port "output", because it emits
+    // MIDI FROM the FM-1. That is the port required to receive physical
+    // OCT+/OCT-/PLAY messages. The device INPUT (phone -> FM-1) is optional.
     boolean connecting;
     synchronized void connectMidi() {
-        if (toFm1 != null || midi == null || connecting) return;
+        if (device != null || midi == null || connecting || !running) return;
         MidiDeviceInfo pick = null;
+        int bestScore = -1, candidates = 0;
         for (MidiDeviceInfo i : midi.getDevices()) {
-            String n = String.valueOf(i.getProperties().getString(MidiDeviceInfo.PROPERTY_NAME)).toLowerCase();
-            if (n.contains("fm") || n.contains("m-vave") || n.contains("mvave")) pick = i;
+            if (i.getOutputPortCount() <= 0) {
+                Log.d(TAG, "MIDI device without output (cannot receive panel buttons): " +
+                           i.getProperties().getString(MidiDeviceInfo.PROPERTY_NAME));
+                continue;
+            }
+            candidates++;
+            android.os.Bundle props = i.getProperties();
+            String label = String.valueOf(props.getString(MidiDeviceInfo.PROPERTY_NAME)) + " " +
+                           String.valueOf(props.getString(MidiDeviceInfo.PROPERTY_MANUFACTURER)) + " " +
+                           String.valueOf(props.getString(MidiDeviceInfo.PROPERTY_PRODUCT));
+            String name = label.toLowerCase(java.util.Locale.ROOT);
+            int score = 0;
+            if (name.contains("fm-1") || name.contains("fm1") ||
+                name.contains("m-vave") || name.contains("mvave")) score = 100;
+            else if (name.contains("jieli") || name.contains("blackhole")) score = 60;
+            if (score > bestScore) { pick = i; bestScore = score; }
         }
-        if (pick == null) return;
-        connecting = true;   // openDevice is asynchronous and the device callback fires once per port: open it once
-        midi.openDevice(pick, d -> {
+        if (pick == null || (bestScore == 0 && candidates != 1)) {
+            if (candidates > 1 && bestScore == 0)
+                Log.w(TAG, "Several unidentified MIDI outputs; cannot safely select FM-1");
+            return;
+        }
+        final MidiDeviceInfo selected = pick;
+        connecting = true;
+        midi.openDevice(selected, d -> {
             synchronized (Backend.this) {
                 connecting = false;
-                if (d == null || toFm1 != null) { if (d != null) try { d.close(); } catch (Exception ignored) { } return; }
+                if (d == null || device != null || !running) {
+                    if (d != null) try { d.close(); } catch (Exception ignored) { }
+                    return;
+                }
                 try {
-                    MidiInputPort in = d.openInputPort(0);
-                    MidiOutputPort outp = d.openOutputPort(0);
-                    if (in == null) { d.close(); return; }
-                    device = d; fromFm1 = outp; toFm1 = in;
-                    if (outp != null) outp.connect(new MidiReceiver() {
-                        @Override public void onSend(byte[] data, int off, int count, long ts) { try { Native.midiIn(engine, data, off, count); } catch (Throwable t) { Log.w(TAG, "midiIn: " + t); } }
+                    MidiOutputPort rx = d.openOutputPort(0);
+                    if (rx == null) {
+                        Log.w(TAG, "FM-1 MIDI output port unavailable: OCT/PLAY cannot be detected");
+                        d.close();
+                        return;
+                    }
+                    MidiInputPort tx = d.openInputPort(0); // SysEx/LED updates optional
+                    device = d;
+                    fromFm1 = rx; toFm1 = tx;
+                    loggedIncomingEvents = 0;
+                    rx.connect(new MidiReceiver() {
+                        @Override public void onSend(byte[] data, int off, int count, long ts) {
+                            try {
+                                // A bounded MIDI input trace lets us diagnose firmware
+                                // that does not forward button note-on/off events.
+                                if (loggedIncomingEvents < 24 && count > 0) {
+                                    StringBuilder sb = new StringBuilder();
+                                    int until = Math.min(off + count, off + 12);
+                                    for (int k = off; k < until; ++k)
+                                        sb.append(String.format(java.util.Locale.ROOT, "%02X ", data[k] & 255));
+                                    Log.i(TAG, "FM-1 MIDI RX: " + sb.toString());
+                                    loggedIncomingEvents++;
+                                }
+                                Native.midiIn(engine, data, off, count);
+                            } catch (Throwable t) { Log.w(TAG, "midiIn: " + t); }
+                        }
                     });
-                    Log.i(TAG, "FM-1 MIDI connected");
-                } catch (Throwable t) { Log.w(TAG, "open ports: " + t); }
+                    Log.i(TAG, "FM-1 MIDI RX connected; inputPortCount=" +
+                               selected.getInputPortCount() + " outputPortCount=" +
+                               selected.getOutputPortCount() +
+                               "; commands require channel 2 notes 0/1/12 on this firmware");
+                } catch (Throwable t) {
+                    Log.w(TAG, "open ports: " + t);
+                    try { d.close(); } catch (Exception ignored) { }
+                    device = null; fromFm1 = null; toFm1 = null;
+                }
             }
         }, main);
     }

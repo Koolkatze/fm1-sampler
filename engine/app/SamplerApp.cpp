@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <type_traits>
 
 namespace {
 constexpr uint16_t rgb(int r, int g, int b) { return (uint16_t)((r >> 3) << 11 | (g >> 2) << 5 | (b >> 3)); }
@@ -14,7 +16,7 @@ void setPalette(bool light) {
     if (light) { BLACK = rgb(241, 239, 233); PAPER = rgb(17, 17, 17); DIM = rgb(154, 150, 140); BAR = rgb(214, 211, 201); ACCENT = rgb(255, 90, 10); }
     else { BLACK = rgb(0, 0, 0); PAPER = rgb(255, 255, 255); DIM = rgb(106, 106, 106); BAR = rgb(42, 42, 42); ACCENT = rgb(255, 106, 31); }
 }
-const char* kPage[] = {"SAMPLE", "FX", "ENVELOPE", "LFO", "ARP", "TAPE", "MIXER", "KEY", "LOOP", "LENGTH", "CUE"};
+const char* kPage[] = {"SAMPLE", "FX", "ENVELOPE", "LFO", "ARP", "TAPE", "MIXER", "KEY", "LOOP", "LENGTH", "NOTE REPEAT"};
 const char* kAlgo[] = {"MELODIC", "ONE-SHOT", "LOOPED", "KIT/SLICE", "GRANULAR", "PAULSTRETCH"};
 const char* kScaleName[] = {"CHROM", "MIX", "MAJ", "MIN", "HMIN", "PHRYG", "MIN+", "OFF"};
 const char* kNote[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
@@ -62,11 +64,11 @@ SamplerApp::SamplerApp(Session& s, Send send) : s_(s), send_(std::move(send)) {
     s_.setLoopSource(loopSrc_);
     // a first session to play with: keys on 1, a drum kit on 2, bass on 3
     auto first = [&](const char* group, int track) {
-        for (size_t i = 0; i < lib_.size(); i++) if (lib_[i].group == group) { ts_[track].entry = (int)i; if (group == std::string("Drums")) ts_[track].algo = 3; s_.loadSamplePath(lib_[i].path, lib_[i].kit, track); return; }
+        for (size_t i = 0; i < lib_.size(); i++) if (lib_[i].group == group) { ts_[track].entry = (int)i; if (group == std::string("Drums")) ts_[track].algo = 3; trackSourcePaths_[track] = lib_[i].path; trackSourceNames_[track] = lib_[i].label; s_.loadSamplePath(lib_[i].path, lib_[i].kit, track); return; }
     };
     // the default project: Tape Key, Acoustic bass, Shiny, Trap Kit
     auto byLabel = [&](const char* label, int track) {
-        for (size_t i = 0; i < lib_.size(); i++) if (lib_[i].label == label) { ts_[track].entry = (int)i; if (lib_[i].kit) ts_[track].algo = 3; s_.loadSamplePath(lib_[i].path, lib_[i].kit, track); return; }
+        for (size_t i = 0; i < lib_.size(); i++) if (lib_[i].label == label) { ts_[track].entry = (int)i; if (lib_[i].kit) ts_[track].algo = 3; trackSourcePaths_[track] = lib_[i].path; trackSourceNames_[track] = lib_[i].label; s_.loadSamplePath(lib_[i].path, lib_[i].kit, track); return; }
     };
     byLabel("Tape Key", 0); byLabel("Acoustic", 1); byLabel("Shiny", 2); byLabel("TrapKit", 3); (void)first;
     for (int t = 0; t < kTracks; t++) applyMix(t);
@@ -87,6 +89,23 @@ void SamplerApp::refreshLibrary() {
         if (nm.rfind("sample_", 0) == 0) nm = nm.substr(7);
         lib_.push_back({nm, "User", p, false});
     }
+    // Project-embedded WAVs are deliberately outside the regular sample
+    // library. Re-insert them into the browser whenever it refreshes; then
+    // resolve each track's entry from the stable source path, never an old
+    // index which might now refer to another sample.
+    for (int t = 0; t < kTracks; ++t) {
+        const auto& path = trackSourcePaths_[(size_t)t];
+        if (path.empty()) { ts_[(size_t)t].entry = -1; continue; }
+        auto it = std::find_if(lib_.begin(), lib_.end(),
+                               [&](const Entry& e) { return e.path == path; });
+        if (it == lib_.end() && std::filesystem::exists(path)) {
+            auto name = trackSourceNames_[(size_t)t];
+            if (name.empty()) name = std::filesystem::path(path).stem().string();
+            lib_.push_back({name, "Project", path, ts_[(size_t)t].algo == 3});
+            it = lib_.end() - 1;
+        }
+        ts_[(size_t)t].entry = it == lib_.end() ? -1 : (int)(it - lib_.begin());
+    }
     if (libCursor_ >= (int)lib_.size()) libCursor_ = 0;
 }
 void SamplerApp::browse(int d) {
@@ -98,8 +117,10 @@ void SamplerApp::loadEntry(int i) {
     if (i < 0 || i >= (int)lib_.size()) return;
     libCursor_ = i; auditionAt_ = 0;
     const Entry& e = lib_[(size_t)i];
+    trackSourcePaths_[(size_t)track_] = e.path;
+    trackSourceNames_[(size_t)track_] = e.label;
     TrackState& t = ts_[track_];
-    t.entry = i; t.start = 0.f; t.end = 1.f;
+    t.entry = i; t.tuned = false; t.start = 0.f; t.end = 1.f;
     if (e.kit) t.algo = 3; else if (t.algo == 3) t.algo = 0;
     previewAfterLoad_ = true;
     s_.loadSamplePath(e.path, e.kit, track_);
@@ -317,18 +338,263 @@ SamplerApp::Knobs SamplerApp::knobs(Page p) {
     return k;
 }
 
+// ---- live scene launcher and arrangement ----
+std::string SamplerApp::sceneLabel(int slot) {
+    static const char* notes[12] = {"C1", "C#1", "D1", "D#1", "E1", "F1",
+                                    "F#1", "G1", "G#1", "A1", "A#1", "B1"};
+    return slot >= 0 && slot < Session::kScenes ? notes[slot] : "--";
+}
+void SamplerApp::setSongMode(bool song) {
+    if (song == songMode_ && sceneKeys_) return;
+    if (recordingNow()) { say("FINISH RECORDING FIRST"); return; }
+    if (!sceneKeys_) s_.beginPerformanceMode(); // one COW snapshot for LOOP and SONG
+    if (st_.songPlaying) s_.stopSong();
+    if (!song) s_.cancelSceneLaunch();
+    songMode_ = song;
+    sceneKeys_ = true;
+    say(songMode_ ? "SONG MODE" : "LOOP MODE: C1-B1");
+}
+void SamplerApp::exitPerformanceMode() {
+    // The old code only cancelled playback; scene activation had already
+    // replaced all 8 clip pointers. Restore the edit workspace instead.
+    if (sceneKeys_) s_.restoreComposition();
+    else if (st_.songPlaying) s_.stopSong();
+    else s_.cancelSceneLaunch();
+    songMode_ = false;
+    sceneKeys_ = false;
+    if (cueActive_) cueHold(false);
+    say("COMPOSITION MODE");
+}
+void SamplerApp::selectScene(int slot, bool trigger) {
+    if (slot < 0 || slot >= Session::kScenes) return;
+    selectedScene_ = slot;
+    sceneTracks_ = sceneSaved(slot) ? st_.sceneTracks[slot] : 0xff;
+    if (!trigger || songMode_) return;
+    if (recordingNow()) { say("FINISH RECORDING FIRST"); return; }
+    if (!sceneSaved(slot)) { say("EMPTY PAD " + sceneLabel(slot)); return; }
+    s_.launchScene(slot);
+    say("SCENE " + sceneLabel(slot) + " QUEUED");
+}
+void SamplerApp::toggleSceneTrack(int t) {
+    if (t >= 0 && t < kTracks) sceneTracks_ ^= (uint8_t)(1u << t);
+}
+void SamplerApp::saveScene() {
+    if (recordingNow()) { say("END RECORDING FIRST"); return; }
+    if (!loopAny_ || st_.loopSamples <= 0) { say("RECORD A LOOP FIRST"); return; }
+    bool usable = false;
+    for (int t = 0; t < kTracks; ++t) if ((sceneTracks_ & (1u << t)) && st_.track_has_clip[t]) usable = true;
+    if (!usable) { say("SELECT A RECORDED TRACK"); return; }
+    s_.captureScene(selectedScene_, sceneTracks_);
+    say("SAVED TO " + sceneLabel(selectedScene_));
+}
+void SamplerApp::deleteScene() {
+    s_.clearScene(selectedScene_);
+    for (int& x : songOrder_) if (x == selectedScene_) x = -1;
+    songOrder_.erase(std::remove(songOrder_.begin(), songOrder_.end(), -1), songOrder_.end());
+    songSelected_ = songOrder_.empty() ? -1 : std::min(songSelected_, (int)songOrder_.size() - 1);
+    s_.saveArrangement(songOrder_);
+    say("SCENE DELETED");
+}
+void SamplerApp::selectSongStep(int step) {
+    if (step >= 0 && step < (int)songOrder_.size()) {
+        songSelected_ = step;
+        selectedScene_ = songOrder_[(size_t)step];
+        sceneTracks_ = st_.sceneTracks[selectedScene_];
+    }
+}
+void SamplerApp::songAdd() {
+    if (!sceneSaved(selectedScene_)) { say("SAVE THIS SCENE FIRST"); return; }
+    if (songOrder_.size() >= 64) { say("SONG LIMIT: 64 SCENES"); return; }
+    const int at = std::min((int)songOrder_.size(), songSelected_ + 1);
+    songOrder_.insert(songOrder_.begin() + at, selectedScene_);
+    songSelected_ = at;
+    s_.saveArrangement(songOrder_);
+    say(sceneLabel(selectedScene_) + " ADDED");
+}
+void SamplerApp::songRemove() {
+    if (songSelected_ < 0 || songSelected_ >= (int)songOrder_.size()) return;
+    songOrder_.erase(songOrder_.begin() + songSelected_);
+    songSelected_ = songOrder_.empty() ? -1 : std::min(songSelected_, (int)songOrder_.size() - 1);
+    s_.saveArrangement(songOrder_);
+}
+void SamplerApp::songMove(int direction) {
+    const int to = songSelected_ + direction;
+    if (songSelected_ < 0 || to < 0 || to >= (int)songOrder_.size()) return;
+    std::swap(songOrder_[(size_t)songSelected_], songOrder_[(size_t)to]);
+    songSelected_ = to;
+    s_.saveArrangement(songOrder_);
+}
+void SamplerApp::playSong() {
+    if (recordingNow()) { say("END RECORDING FIRST"); return; }
+    if (songOrder_.empty()) { say("ADD SCENES TO THE SONG"); return; }
+    s_.startSong(songOrder_);
+    say("SONG FROM THE START");
+}
+void SamplerApp::stopSong() {
+    s_.stopSong();
+    say("SONG STOPPED");
+}
+
+
+// ---- full project: all UI/music parameters and embedded sample source paths ----
+// The engine writes an atomic FMP2 archive on its worker and captures all
+// loop/scene buffers on one audio callback. This app section contains only
+// trivially-copyable musical state, never pointers or MIDI connection handles.
+namespace {
+struct FullProjectSettings {
+    uint32_t magic = 0x32505041;  // APP2
+    uint32_t version = 2, bytes = sizeof(FullProjectSettings);
+    std::array<SamplerApp::TrackState, SamplerApp::kTracks> tracks{};
+    SamplerApp::ScaleState scale{};
+    float reverbSize = .7f, reverbWet = .35f, delayTime = .4f, delayFeedback = .45f;
+    float exciter = 0.f, lofi = 0.f, wobble = 0.f, loopSpeed = 2.f / 3.f, micThreshold = .452f;
+    int32_t loopSource = 1, selectedTrack = 0, page = 0;
+    int32_t selectedScene = 0, selectedSongStep = -1, cueDivision = 2;
+    uint8_t sceneTrackMask = 0xff, performance = 0, songMode = 0, reserved = 0;
+    uint32_t songSize = 0;
+    std::array<int32_t, 64> songOrder{};
+    std::array<std::array<char, 96>, SamplerApp::kTracks> sampleNames{};
+};
+static_assert(std::is_trivially_copyable_v<FullProjectSettings>);
+}
+bool SamplerApp::fullProjectExists(int slot) const { return s_.projectExists(slot); }
+bool SamplerApp::saveFullProject(int slot) {
+    if (recordingNow() || mic_ != 0) { say("FINISH RECORDING FIRST"); return false; }
+    if (slot < 0 || slot >= Session::kProjectSlots) return false;
+    FullProjectSettings m{};
+    m.tracks = ts_; m.scale = scale_;
+    m.reverbSize = reverbSize_; m.reverbWet = reverbDw_;
+    m.delayTime = delayTime_; m.delayFeedback = delayFb_;
+    m.exciter = exciter_; m.lofi = lofi_; m.wobble = wobble_;
+    m.loopSpeed = loopSpeed_; m.micThreshold = micThr_; m.loopSource = loopSrc_;
+    m.selectedTrack = track_; m.page = (int)page_;
+    m.selectedScene = selectedScene_; m.selectedSongStep = songSelected_;
+    m.cueDivision = cueDivision_;
+    m.sceneTrackMask = sceneTracks_; m.performance = sceneKeys_; m.songMode = songMode_;
+    m.songSize = (uint32_t)std::min<size_t>(64, songOrder_.size());
+    for (uint32_t i = 0; i < m.songSize; ++i) m.songOrder[i] = songOrder_[i];
+    std::array<std::string, kTracks> sources{};
+    for (int i = 0; i < kTracks; ++i) {
+        const std::string label = s_.trackLabel(i);
+        std::snprintf(m.sampleNames[(size_t)i].data(),
+                      m.sampleNames[(size_t)i].size(), "%s", label.c_str());
+        sources[(size_t)i] = trackSourcePaths_[(size_t)i];
+        if (sources[(size_t)i].empty() && hasSample(i)) {
+            say("SAMPLE SOURCE MISSING ON TRACK " + std::to_string(i + 1));
+            return false; // never silently save a project without its sound
+        }
+        if (!sources[(size_t)i].empty() && !std::filesystem::exists(sources[(size_t)i])) {
+            say("SAMPLE FILE MISSING ON TRACK " + std::to_string(i + 1));
+            return false;
+        }
+    }
+    std::vector<uint8_t> bytes(sizeof(m));
+    std::memcpy(bytes.data(), &m, bytes.size());
+    if (!s_.saveProject(slot, std::move(bytes), sources)) {
+        say("PROJECT BUSY OR INVALID"); return false;
+    }
+    say("SAVING PROJECT " + std::to_string(slot + 1));
+    return true;
+}
+bool SamplerApp::loadFullProject(int slot) {
+    if (recordingNow() || mic_ != 0) { say("FINISH RECORDING FIRST"); return false; }
+    if (!s_.loadProject(slot)) { say("EMPTY PROJECT OR BUSY"); return false; }
+    say("LOADING PROJECT " + std::to_string(slot + 1));
+    return true;
+}
+void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
+    if (project.appState.size() != sizeof(FullProjectSettings)) {
+        say("PROJECT SETTINGS INCOMPATIBLE"); return;
+    }
+    FullProjectSettings m{};
+    std::memcpy(&m, project.appState.data(), sizeof(m));
+    if (m.magic != 0x32505041 || m.version != 2 || m.bytes != sizeof(m) ||
+        m.songSize > 64 || m.selectedTrack < 0 || m.selectedTrack >= kTracks ||
+        m.page < 0 || m.page >= kPages || m.selectedScene < 0 ||
+        m.selectedScene >= Session::kScenes || m.selectedSongStep < -1 ||
+        m.selectedSongStep >= (int)m.songSize || m.cueDivision < 0 || m.cueDivision > 5 ||
+        m.performance > 1 || m.songMode > 1) {
+        say("PROJECT SETTINGS CORRUPT"); return;
+    }
+    // These scene/transport flags match the engine snapshot restored on the
+    // same audio callback. Changing COMPOSE/LOOP/SONG here must not restart it.
+    ts_ = m.tracks; scale_ = m.scale;
+    reverbSize_ = m.reverbSize; reverbDw_ = m.reverbWet;
+    delayTime_ = m.delayTime; delayFb_ = m.delayFeedback;
+    exciter_ = m.exciter; lofi_ = m.lofi; wobble_ = m.wobble;
+    loopSpeed_ = m.loopSpeed; micThr_ = m.micThreshold; loopSrc_ = m.loopSource;
+    track_ = m.selectedTrack; page_ = (Page)m.page;
+    selectedScene_ = m.selectedScene; songSelected_ = m.selectedSongStep;
+    sceneTracks_ = m.sceneTrackMask; cueDivision_ = m.cueDivision;
+    sceneKeys_ = m.performance; songMode_ = m.songMode;
+    songOrder_.clear();
+    for (uint32_t i = 0; i < m.songSize; ++i) songOrder_.push_back(m.songOrder[i]);
+    scenesLoaded_ = true;
+    cueActive_ = cueSelect_ = playModified_ = false;
+    held_ = 0; mic_ = 0; micTrack_ = 0;
+    auditionAt_ = 0; previewNote_ = -1; previewAfterLoad_ = false; commitAt_ = 0;
+    pending_.clear(); pendingBytes_ = 0; needClear_ = true; fwDirty_ = true;
+    // Install stable paths *before* rebuilding the browser so future
+    // refreshes/secondary saves cannot accidentally pick a different WAV.
+    for (int i = 0; i < kTracks; ++i) {
+        const std::string& path = project.samplePaths[(size_t)i];
+        const auto& stored = m.sampleNames[(size_t)i];
+        const auto end = std::find(stored.begin(), stored.end(), '\0');
+        std::string title(stored.begin(), end);
+        if (title.empty() && !path.empty())
+            title = "P" + std::to_string(project.slot + 1) +
+                    " TRACK " + std::to_string(i + 1);
+        trackSourcePaths_[(size_t)i] = path;
+        trackSourceNames_[(size_t)i] = title;
+    }
+    refreshLibrary();
+    for (int i = 0; i < kTracks; ++i) {
+        const auto& path = trackSourcePaths_[(size_t)i];
+        if (path.empty()) s_.clearSample(i);
+        else s_.loadSamplePath(path, ts_[(size_t)i].algo == 3, i,
+                               trackSourceNames_[(size_t)i]);
+    }
+    libCursor_ = std::max(0, ts_[(size_t)track_].entry);
+    applyFx();
+    s_.setLoopSource(loopSrc_);
+    s_.setLoopSpeed(loopSpeedOf(loopSpeed_));
+    s_.setMicThreshold(micThrOf(micThr_));
+    for (int t = 0; t < kTracks; ++t) applyAll(t);
+    say("PROJECT " + std::to_string(project.slot + 1) + " RESTORED");
+}
+
 // ---- looper, recorder ----
 void SamplerApp::endRecording() {
     if (st_.freeArmed || st_.freeRecording) { s_.freeRecord(track_, false); say(st_.freeArmed && !st_.freeRecording ? "CANCELLED" : "LOOP SET"); }
     for (int t = 0; t < kTracks; t++) if (st_.track_clip_rec[t]) s_.clipRecord(t, false);
 }
-void SamplerApp::transportPlay() {   // while recording the first press ends the recording (the loop plays on), the next one stops the tape
+void SamplerApp::transportPlay() {   // normal transport: modifiers only work through physical MIDI button presses
     if (recordingNow()) { endRecording(); return; }
+    if (songMode_) { if (st_.songPlaying) stopSong(); else playSong(); return; }
     s_.play(!st_.playing);
 }
 void SamplerApp::transportSet(bool play) {
+    // The mobile screen has ordinary transport controls only. OCT combinations
+    // are decoded solely from physical/external MIDI button note events.
     if (recordingNow()) { if (!play) endRecording(); return; }
+    if (songMode_) { if (play) playSong(); else stopSong(); return; }
     s_.play(play);
+}
+void SamplerApp::restartLoop() {
+    if (recordingNow()) { say("FINISH RECORDING FIRST"); return; }
+    if (songMode_ && !songOrder_.empty()) {
+        playSong();  // restart the full arrangement on long PLAY in SONG mode
+        return;
+    }
+    if (st_.loopSamples <= 0) { say("NO LOOP TO RESTART"); return; }
+    cueHold(false);
+    s_.seek(0.f);
+    s_.play(true);
+    say("LOOP FROM START");
+}
+void SamplerApp::setCueDivision(int division) {
+    cueDivision_ = std::max(0, std::min(5, division));
+    if (cueActive_) s_.setCue(true, cueDivision_);
 }
 void SamplerApp::cueHold(bool down) {
     if (!down) {
@@ -336,13 +602,14 @@ void SamplerApp::cueHold(bool down) {
         return;
     }
     if (recordingNow()) { say("FINISH RECORDING FIRST"); return; }
-    if (!loopAny_ || st_.loopSamples <= 0) { say("NO LOOP FOR CUE"); return; }
+    if (!loopAny_ || st_.loopSamples <= 0) { say("NO LOOP FOR NOTE REPEAT"); return; }
     if (!cueActive_) {
         cueActive_ = true;
         s_.setCue(true, cueDivision_);
     }
 }
 void SamplerApp::loopRecord() {
+    if (st_.songPlaying) { say("STOP SONG BEFORE RECORDING"); return; }
     if (st_.freeArmed || st_.freeRecording) { s_.freeRecord(track_, false); say("LOOP SET"); return; }
     if (!loopAny_ && !st_.track_clip_rec[track_]) {   // a clean looper: arm the first take, it starts with the first note (or sound) and sets the loop length
         s_.freeRecord(track_, true);
@@ -389,8 +656,16 @@ std::string SamplerApp::loopText() const {
     if (!loopAny_) return "LOOP EMPTY";
     return fmt("LOOP %.0fBPM ", st_.bpm) + std::to_string(st_.loopBars) + (st_.loopBars == 1 ? " BAR" : " BARS");
 }
-void SamplerApp::keyEvent(int raw, bool down) {   // a key of the FM-1 (chromatic note 53+key): octave shift, chords in CHORD mode
+void SamplerApp::keyEvent(int raw, bool down) {   // MIDI scene bank in LOOP mode; ordinary keyboard elsewhere
     if (raw < 0 || raw > 127) return;
+    if (sceneKeys_ && !songMode_) {
+        // Ableton labels MIDI 36..47 as C1..B1. Also accept scientific C1
+        // (24..35), while the physical FM-1 first 12 keys arrive as 53..64.
+        const int slot = raw >= 36 && raw <= 47 ? raw - 36 :
+                         raw >= 24 && raw <= 35 ? raw - 24 :
+                         raw >= 53 && raw <= 64 ? raw - 53 : -1;
+        if (slot >= 0) { if (down) selectScene(slot, true); return; }
+    }
     if (down) {
         if (keyCount_[raw]) keyEvent(raw, false);
         const bool kit = ts_[track_].algo == 3;   // KIT: every key is a pad (note 60 + key), whatever the tonality or octave
@@ -420,11 +695,46 @@ std::vector<float> SamplerApp::peaks(int t, int bins) {
     return peaks_[t];
 }
 
+// ---- read-only live diagnostic of inbound physical MIDI ----
+void SamplerApp::clearMidiDebug() {
+    midiRxMessages_ = midiControlMask_ = 0;
+    lastMidiChannel_ = lastMidiData_ = -1;
+    lastMidiController_ = lastMidiPressed_ = false;
+}
+std::string SamplerApp::midiControlStatus() const {
+    if (!midiRxMessages_) return "MIDI RX: NO MESSAGES YET";
+    const auto seen = [this](int bit) { return midiControlMask_ & (1u << bit) ? "OK" : "--"; };
+    return std::string("MIDI OCT-:") + seen(0) + " OCT+:" + seen(1) +
+           " PLAY:" + seen(2) + " K1:" + seen(3);
+}
+std::string SamplerApp::midiLastEvent() const {
+    if (!midiRxMessages_ || lastMidiChannel_ < 0) return "PRESS PHYSICAL FM-1 BUTTONS";
+    std::string msg = std::string("LAST CH") + std::to_string(lastMidiChannel_ + 1) +
+           (lastMidiController_ ? " CC " : " NOTE ") + std::to_string(lastMidiData_);
+    if (!lastMidiController_) msg += lastMidiPressed_ ? " DOWN" : " UP";
+    if (held_ & (1u << OCT_DOWN)) msg += " [OCT- HELD]";
+    else if (held_ & (1u << OCT_UP)) msg += " [OCT+ HELD]";
+    return msg;
+}
+
 // ---- input ----
 void SamplerApp::onMidi(const uint8_t* m, size_t n) {
     if (n < 3) return;
     linkSeen_ = true;
     const int type = m[0] & 0xf0, ch = m[0] & 15, a = m[1], b = m[2];
+    if (type == 0x90 || type == 0x80 || type == 0xb0) {
+        ++midiRxMessages_;
+        lastMidiChannel_ = ch; lastMidiData_ = a;
+        lastMidiController_ = type == 0xb0;
+        lastMidiPressed_ = type == 0x90 && b > 0;
+        // Detect only known control-surface events, not ordinary keys.
+        if (ch == 1 && (type == 0x90 || type == 0x80)) {
+            if (a == OCT_DOWN) midiControlMask_ |= 1u;
+            if (a == OCT_UP) midiControlMask_ |= 2u;
+            if (a == PLAY) midiControlMask_ |= 4u;
+        }
+        if (ch == 0 && type == 0xb0 && a == 18) midiControlMask_ |= 8u;
+    }
     if (ch == 0 && (type == 0x90 || type == 0x80)) keyEvent(a, type == 0x90 && b > 0);
     else if (ch == 1 && (type == 0x90 || type == 0x80)) button(a, type == 0x90 && b > 0);
     else if (ch == 0 && type == 0xb0) {
@@ -450,8 +760,12 @@ void SamplerApp::onSysex(const uint8_t* m, size_t n) {
     else if (m[6] == 0x42) needClear_ = true;     // the firmware had its own screen up: repaint everything
 }
 void SamplerApp::button(int b, bool down) {
-    lastLed_ = ~0ull;   // the firmware's own LED handling must not win: the active page stays lit, the others go dark
-    if (down) held_ |= 1u << b; else held_ &= ~(1u << b);
+    if (b < OCT_DOWN || b > STOP) return; // ignore unknown vendor notes safely
+    const uint32_t mask = 1u << b;
+    const bool wasDown = !!(held_ & mask);
+    if (wasDown == down) return; // duplicate MIDI Note On/Off must not toggle transport
+    lastLed_ = ~0ull;
+    if (down) held_ |= mask; else held_ &= ~mask;
     if (b == OCT_UP) {
         if (down) {
             octUpAt_ = nowMs_;
@@ -463,9 +777,35 @@ void SamplerApp::button(int b, bool down) {
         }
         return;   // octave changes arrive separately as EV_SCALE on short standalone taps
     }
-    if (b == OCT_DOWN) return;
-    if (b == PLAY && !down && cueActive_) {
-        cueHold(false);    // gate: release PLAY to return to the normal loop
+    if (b == OCT_DOWN) {
+        // Modifier only: never trigger an action by pressing OCT- AFTER PLAY.
+        // The transport action is decided exactly once at PLAY/STOP key-down.
+        return;
+    }
+    if (b == PLAY || b == STOP) {
+        if (!down) {
+            // A held NOTE REPEAT is momentary. Neither releasing PLAY nor
+            // releasing OCT can fall through into a second transport toggle.
+            if (cueActive_) cueHold(false);
+            playModified_ = false;
+            return;
+        }
+        const bool repeat = !!(held_ & (1u << OCT_UP));
+        const bool restart = !!(held_ & (1u << OCT_DOWN));
+        playModified_ = repeat || restart; // latch what was held BEFORE PLAY/STOP
+        if (repeat) {
+            if (!recordingNow() && loopAny_ && st_.loopSamples > 0) {
+                if (!cueSelect_) { cueReturnPage_ = page_; cueSelect_ = true; }
+                page_ = P_CUE;
+                cueHold(true); // BPM-synced, K1 live; ends on either release
+            } else say("NO LOOP FOR NOTE REPEAT");
+        } else if (restart) {
+            restartLoop(); // same callback: no 1-second threshold
+        } else if (b == PLAY) {
+            transportPlay(); // normal play/stop immediately, without a modifier
+        } else {
+            transportSet(false); // optional external STOP, native FM-1 uses PLAY
+        }
         return;
     }
     if (b == SAVE) {   // only the LOOP page: saving and clearing loops lives in the phone's PROJECT menu
@@ -474,7 +814,7 @@ void SamplerApp::button(int b, bool down) {
     }
     if (!down) return;
     switch (b) {
-    case HOME: page_ = P_HOME; break;
+    case HOME: exitPerformanceMode(); page_ = P_HOME; break;
     case FX: page_ = P_FX; break;
     case ENV: page_ = P_ENV; break;
     case LFO: page_ = P_LFO; break;
@@ -483,25 +823,6 @@ void SamplerApp::button(int b, bool down) {
     case EDIT: page_ = P_MIX; break;
     case GLO: page_ = P_KEY; break;
     case SEL: page_ = P_LEN; break;
-    case PLAY:
-        if (held_ & (1u << OCT_UP)) {
-            if (recordingNow()) { endRecording(); break; }
-            if (!loopAny_ || st_.loopSamples <= 0) { say("NO LOOP FOR CUE"); break; }
-            if (!cueSelect_) { cueReturnPage_ = page_; cueSelect_ = true; }
-            page_ = P_CUE;
-            cueHold(true);
-            break;
-        }
-        if (held_ & (1u << OCT_DOWN)) {
-            if (recordingNow()) { endRecording(); break; }
-            s_.setCue(false, cueDivision_);
-            s_.seek(0.f);
-            s_.play(true);
-            say("LOOP FROM START");
-            break;
-        }
-        transportPlay();
-        break;
     case REC: loopRecord(); break;
     default: break;
     }
@@ -511,6 +832,13 @@ void SamplerApp::encoder(int i, int delta) {
     if (i == 0) { selectTrack(track_ + (delta > 0 ? 1 : -1)); return; }
     if (i == 6) { browse(delta); return; }
     if (i == 1) { setAlgo(ts_[track_].algo + (delta > 0 ? 1 : -1)); return; }
+    // OCT+ makes K1 the CUE subdivision control BEFORE and DURING PLAY.
+    // Crucially, microphone threshold or the underlying page never steals K1.
+    if (i == 2 && ((held_ & (1u << OCT_UP)) || cueActive_ || page_ == P_CUE)) {
+        setCueDivision(cueDivision_ + (delta > 0 ? 1 : -1));
+        touchedKnob_ = 0; touchedAt_ = nowMs_;
+        return;
+    }
     if (i == 2 && mic_ == 1 && page_ != P_SAVE) { setMicThreshold01(micThr_ + (delta > 0 ? 0.03f : -0.03f)); touchedKnob_ = 0; touchedAt_ = nowMs_; return; }   // K1 = trigger level while the microphone listens
     Knobs k = knobs();
     const int idx = i - 2;
@@ -523,6 +851,26 @@ void SamplerApp::tick(uint32_t now) {
     if (fwDirty_) { fwDirty_ = false; sysex(6, {7, (uint8_t)scale_.root, (uint8_t)(scale_.octave + 3), (uint8_t)scale_.mode}, true); }
     if (repaintAt_ && now >= repaintAt_) { repaintAt_ = repaintAt_ + 2500 < now + 2500 && repaintCount_++ < 1 ? now + 2500 : 0; needClear_ = true; }
     st_ = s_.status();
+    Session::LoadedProject loadedProject;
+    if (s_.takeLoadedProject(loadedProject)) {
+        applyLoadedProject(loadedProject);
+        st_ = s_.status();
+    }
+    const int projectState = s_.projectOperation();
+    if (projectState != lastProjectOperation_) {
+        lastProjectOperation_ = projectState;
+        if (projectState == 2) say("FULL PROJECT SAVED");
+        else if (projectState == -1) say("PROJECT SAVE FAILED");
+        else if (projectState == -2) say("PROJECT LOAD FAILED");
+    }
+    if (!scenesLoaded_ && st_.arrangementLoaded) {
+        scenesLoaded_ = true;
+        songOrder_.clear();
+        for (int i = 0; i < st_.arrangementSize; ++i)
+            if (st_.arrangement[i] >= 0 && st_.arrangement[i] < Session::kScenes)
+                songOrder_.push_back(st_.arrangement[i]);
+        songSelected_ = songOrder_.empty() ? -1 : 0;
+    }
     // OCT+ held for two seconds opens the beat division selector without changing key octave.
     if ((held_ & (1u << OCT_UP)) && !cueSelect_ && now - octUpAt_ >= 2000U) {
         cueReturnPage_ = page_;
@@ -537,7 +885,8 @@ void SamplerApp::tick(uint32_t now) {
     if (auditionAt_ && now >= auditionAt_) loadEntry(libCursor_);
     if (st_.sampleVersion != lastSampleVersion_) {   // a sample landed on a track: give it this track's settings
         lastSampleVersion_ = st_.sampleVersion;
-        if (st_.sampleTrack >= 0 && st_.sampleTrack < kTracks) ts_[st_.sampleTrack].tuned = false;   // a new sample: its pitch is unknown again
+        // A user choosing a different sample clears tuning at selection time.
+        // Do not reset saved per-track tuning when archived WAVs are reloaded.
         for (int i = 0; i < kTracks; i++) if (hasSample(i)) applyAll(i);   // several samples can land between two ticks (start-up): every track gets its settings, not only the last
         if (previewAfterLoad_ && st_.sampleTrack == track_) { previewAfterLoad_ = false; previewNote_ = 60; previewTrack_ = track_; s_.noteOn(track_, 60, 100); previewOffAt_ = now + 900; }
     }
@@ -678,8 +1027,8 @@ void SamplerApp::draw(uint32_t now) {
     std::string line;
     if (mic_ == 1) line = "MIC: WAITING FOR SOUND";
     else if (mic_ == 2) line = fmt("MIC: RECORDING %.1fS", st_.sampleSeconds);
-    else if (cueActive_) line = std::string("CUE 1/") + std::to_string(1 << cueDivision_) + "  REPEATING";
-    else if (cueSelect_) line = "CUE RATE: TURN K1, HOLD PLAY";
+    else if (cueActive_) line = std::string("NOTE REPEAT 1/") + std::to_string(1 << cueDivision_) + "  REPEATING";
+    else if (cueSelect_) line = "NOTE REPEAT: K1 RATE, HOLD PLAY";
     else if (!toast().empty()) line = toast();
     else if (auditionAt_) { const Entry& e = lib_[(size_t)libCursor_]; line = ">" + e.label + "  " + e.group; }
     else line = std::string(kAlgo[ts_[track_].algo]) + "  " + loopText();
@@ -712,7 +1061,7 @@ void SamplerApp::draw(uint32_t now) {
         rects_[70 + i] = ~0ull;
         rect(70 + i, cx, cy + 38, bw, 3, ACCENT);
     }
-    const char* hint = mic_ == 1 ? (page_ == P_SAVE ? "K4 = TRIGGER LEVEL  LINE = THRESHOLD" : "K1 = TRIGGER LEVEL  LINE = THRESHOLD") : mic_ == 2 ? "RECORDING  K1 ON LOOP PAGE STOPS"  : page_ == P_CUE ? "K1 RATE LIVE  HOLD OCT+ AND PLAY" : page_ == P_LEN ? "TURN K1: X2 OR /2  THE LOOP REPEATS" : page_ == P_SAVE ? "SAVE AND CLEAR LOOPS: PROJECT MENU ON THE PHONE" : page_ == P_KEY ? "KEYS FOLLOW THE KEY  CHANGE ANY TIME"
+    const char* hint = mic_ == 1 ? (page_ == P_SAVE ? "K4 = TRIGGER LEVEL  LINE = THRESHOLD" : "K1 = TRIGGER LEVEL  LINE = THRESHOLD") : mic_ == 2 ? "RECORDING  K1 ON LOOP PAGE STOPS"  : page_ == P_CUE ? "K1 RATE LIVE  OCT+ + HOLD PLAY" : page_ == P_LEN ? "TURN K1: X2 OR /2  THE LOOP REPEATS" : page_ == P_SAVE ? "SAVE AND CLEAR LOOPS: PROJECT MENU ON THE PHONE" : page_ == P_KEY ? "KEYS FOLLOW THE KEY  CHANGE ANY TIME"
                      : "SEL TRACK  PRE BROWSE  ALG ALGORITHM";
     drawText(90, 12, 228, 1, DIM, BLACK, hint, 38);
     needClear_ = false;
@@ -743,7 +1092,7 @@ void SamplerApp::hero(uint32_t now, const Knobs& k) {
         }
     } else if (page_ == P_CUE) {
         drawText(100, x0, y0 + 8, 3, ACCENT, BLACK, std::string("1/") + std::to_string(1 << cueDivision_), 9);
-        drawText(101, x0, y0 + 32, 2, PAPER, BLACK, cueActive_ ? "CUE REPEATING" : "HOLD PLAY FOR CUE", 18);
+        drawText(101, x0, y0 + 32, 2, PAPER, BLACK, cueActive_ ? "NOTE REPEAT" : "OCT+ + HOLD PLAY", 18);
     } else if (page_ == P_LEN) {   // the loop length in big letters
         char b[32];
         if (st_.loopSamples > 0) snprintf(b, sizeof b, "%.0f BARS", (double)st_.loopBars); else snprintf(b, sizeof b, "NO LOOP");

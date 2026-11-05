@@ -2,14 +2,14 @@ plugins { id 'com.android.application' }
 android {
     namespace 'com.ferluht.fm1sampler'
     compileSdk 34
-    defaultConfig { applicationId 'com.ferluht.fm1sampler'; minSdk 23; targetSdk 30; versionCode 37; versionName "0.37" }
+    defaultConfig { applicationId 'com.ferluht.fm1sampler'; minSdk 23; targetSdk 30; versionCode 46; versionName "0.37.9" }
     signingConfigs { debug { enableV1Signing = true; enableV2Signing = true } }
-    // The GitHub-built test APK installs alongside a signed production FM-1 Sampler.
+    // The GitHub-built preview installs separately from production / CUE FM-1 Sampler.
     buildTypes {
         debug {
-            applicationIdSuffix '.cue'
-            versionNameSuffix '-cue-test'
-            manifestPlaceholders = [appLabel: 'FM1 Sampler CUE']
+            applicationIdSuffix '.scenes'
+            versionNameSuffix '-scenes-test'
+            manifestPlaceholders = [appLabel: 'FM1 Sampler Scenes']
         }
         release {
             manifestPlaceholders = [appLabel: 'FM1 Sampler']

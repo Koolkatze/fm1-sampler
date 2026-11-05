@@ -21,7 +21,7 @@ class SamplerApp {
 public:
     using Send = std::function<void(const uint8_t*, size_t)>;
     static constexpr int kTracks = 8;
-    enum Button { OCT_DOWN, OCT_UP, FX, SEL, ENV, LFO, EDIT, GLO, HOME, SAVE, ARP, SEQ, PLAY, REC };
+    enum Button { OCT_DOWN, OCT_UP, FX, SEL, ENV, LFO, EDIT, GLO, HOME, SAVE, ARP, SEQ, PLAY, REC, STOP };  // STOP=14 is an optional external MIDI/software transport; native FM-1 has PLAY
     enum Page { P_HOME, P_FX, P_ENV, P_LFO, P_ARP, P_SEQ, P_MIX, P_KEY, P_SAVE, P_LEN, P_CUE, kPages };
     struct Knob {
         std::string name, value;
@@ -63,6 +63,11 @@ public:
     void transportPlay();
     void transportSet(bool play);                 // phone PLAY / STOP keys
     void cueHold(bool down);                     // momentary CUE from the phone touch controls
+    void restartLoop();                           // OCT- + PLAY or STOP: immediate restart, no long press
+    void setCueDivision(int division);            // 0..5 selects 1/1..1/32 on phone or K1
+    int cueDivision() const { return cueDivision_; }
+    bool cueModifierHeld() const { return !!(held_ & (1u << OCT_UP)); }
+    bool octDownModifierHeld() const { return !!(held_ & (1u << OCT_DOWN)); }
     bool cueActive() const { return cueActive_; }
     bool recordingNow() const { bool r = st_.freeRecording || st_.freeArmed; for (int t = 0; t < kTracks; t++) r |= st_.track_clip_rec[t]; return r; }
     void endRecording();                          // PLAY / STOP while recording: the take ends, the loop keeps playing
@@ -82,6 +87,33 @@ public:
     int micState() const { return mic_; }         // 0 idle, 1 waiting for sound, 2 recording, 3 saving
     bool loopExists() const { return loopAny_; }
     std::string loopText() const;
+    // Live performance: 12 reusable 8-track scenes on the C1..B1 bank.
+    static std::string sceneLabel(int slot);
+    bool songMode() const { return songMode_; }
+    bool performanceActive() const { return sceneKeys_; }
+    void setSongMode(bool song);
+    void exitPerformanceMode();
+    int selectedScene() const { return selectedScene_; }
+    void selectScene(int slot, bool trigger = false);
+    uint8_t sceneTracks() const { return sceneTracks_; }
+    void toggleSceneTrack(int t);
+    bool sceneSaved(int slot) const { return slot >= 0 && slot < Session::kScenes && (st_.sceneMask & (1u << slot)); }
+    void saveScene();
+    void deleteScene();
+    const std::vector<int>& songOrder() const { return songOrder_; }
+    int selectedSongStep() const { return songSelected_; }
+    void selectSongStep(int step);
+    void songAdd();
+    void songRemove();
+    void songMove(int direction);
+    void playSong();
+    void stopSong();
+    // Complete project slots: source WAV, current performance clips, COMPOSE,
+    // all scenes, SONG order/position, track settings, and transport.
+    bool saveFullProject(int slot);
+    bool loadFullProject(int slot);
+    bool fullProjectExists(int slot) const;
+    int fullProjectOperation() const { return s_.projectOperation(); }
     std::string toast() const { return nowMs_ < toastUntil_ ? toast_ : ""; }
     void say(const std::string& t) { toast_ = t; toastUntil_ = nowMs_ + 1800; }
     // mixer and per-track state
@@ -110,6 +142,11 @@ public:
     void playNote(int note, bool down);
     void keyEvent(int rawNote, bool down);        // FM-1 key: chromatic note from the firmware
     bool linkSeen() const { return linkSeen_; }
+    // Read-only live MIDI monitor. The physical FM-1 buttons are not
+    // emulated by the phone; this only reports what actually arrived.
+    std::string midiControlStatus() const;
+    std::string midiLastEvent() const;
+    void clearMidiDebug();
     std::vector<float> peaks(int t, int bins);    // waveform of a track's sample, cached
     std::string sampleLabel(int t) const { return s_.trackLabel(t); }
     Session& session() { return s_; }
@@ -132,6 +169,7 @@ private:
     void applyAll(int t);
     void applyAlgo(int t); void applyEnv(int t); void applyLfo(int t); void applyHome(int t, bool commit = false); void applyArp(int t); void applyRoot(int t); void applySeq(int t); void applyMix(int t);
     void applyFx();
+    void applyLoadedProject(const Session::LoadedProject& project);
     void queueCommit(int t);
     Knob cont(const char* name, float* v, std::function<std::string(float)> fmt, std::function<void()> apply, float stepSize = 0.02f, bool commit = false);
     Knob choice(const char* name, int* v, std::vector<std::string> opts, std::function<void()> apply);
@@ -148,13 +186,22 @@ private:
     uint32_t repaintAt_ = 0; int repaintCount_ = 0;
     // library
     std::vector<Entry> lib_;
+    // Absolute assignment paths survive library rebuilds. Entry indices
+    // are UI cursors only; they must never determine what audio gets archived.
+    std::array<std::string, kTracks> trackSourcePaths_{};
+    std::array<std::string, kTracks> trackSourceNames_{};
     int libCursor_ = 0, loadedCursor_ = -1;
     uint32_t auditionAt_ = 0, previewOffAt_ = 0; int previewNote_ = -1, previewTrack_ = -1;
     bool wantFile_ = false, previewAfterLoad_ = false;
     // loop / recorder
     Session::Status st_{};
     bool loopAny_ = false;
+    bool songMode_ = false, scenesLoaded_ = false, sceneKeys_ = false;
+    int selectedScene_ = 0, songSelected_ = -1;
+    uint8_t sceneTracks_ = 0xff;   // which loop tracks to capture in the selected pad
+    std::vector<int> songOrder_;
     int mic_ = 0, micTrack_ = 0;
+    int lastProjectOperation_ = 0;
     int lastSampleVersion_ = 0, lastSampleFails_ = 0;
     uint32_t commitAt_ = 0; int commitTrack_ = -1;
     std::string toast_; uint32_t toastUntil_ = 0;
@@ -167,12 +214,17 @@ private:
     int pingId_ = 0, healCursor_ = 0;
     uint64_t lastLed_ = ~0ull; uint32_t ledAt_ = 0;   // the firmware may light / clear a button LED by itself when it is pressed: resend after every button event and every 400 ms
     int knobMsb_ = 0;
+    uint32_t midiRxMessages_ = 0;
+    uint32_t midiControlMask_ = 0; // OCT-, OCT+, PLAY/STOP and K1 seen
+    int lastMidiChannel_ = -1, lastMidiData_ = -1;
+    bool lastMidiController_ = false, lastMidiPressed_ = false;
     int heldNote_[128];
     int keyNotes_[128][3] = {}; int keyCount_[128] = {};
     bool fwDirty_ = true; uint32_t lenAt_ = 0;
     int cueDivision_ = 2;                 // 1/4 default, selectable 1/1..1/32
     bool cueActive_ = false, cueSelect_ = false;
     uint32_t octUpAt_ = 0;
+    bool playModified_ = false;
     Page cueReturnPage_ = P_HOME;
     uint32_t held_ = 0;
     ScaleState scale_;

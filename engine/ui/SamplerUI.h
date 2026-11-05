@@ -18,6 +18,8 @@ public:
     void setEditor(bool on) { editor_ = on; }   // false: the cassette deck, true: sample / page editor
     const std::vector<UiOp>& ops() const { return ops_; }
     void touch(int action /*0 down 1 move 2 up*/, float x, float y, uint32_t nowMs);
+    void setShortcutHelpVisible(bool on);
+    bool shortcutHelpVisible() const { return shortcutHelpVisible_; }
 
 private:
     struct Rect { float x, y, w, h; bool has(float px, float py) const { return px >= x && px < x + w && py >= y && py < y + h; } };
@@ -52,6 +54,7 @@ private:
     void pagePanel(Rect r);
     void librarySheet();
     void projectSheet();
+    void projectSlotsSheet();
 
     SamplerApp& app_;
     float W_ = 860, H_ = 400, top_ = 0, bottom_ = 0;
@@ -64,7 +67,13 @@ private:
     bool linkMidi_ = false, linkAudio_ = false, sheetOpen_ = false, editor_ = false, projectOpen_ = false;
     float sheetScroll_ = 0, sheetLastY_ = 0, sheetMoved_ = 0;
     Rect sheetList_{0, 0, 0, 0};
-    uint32_t clearArmed_ = 0;
+    uint32_t clearArmed_ = 0, sceneSaveAt_ = 0, sceneDeleteAt_ = 0;
+    int sceneArmedSlot_ = -1, deleteArmedSlot_ = -1;
+    int projectSlotsMode_ = 0; // 0 closed, 1 save complete project, 2 load
+    int projectConfirmSlot_ = -1;
+    uint32_t projectConfirmUntil_ = 0;
+    bool projectRight_ = false;  // narrow screens: show columns in separate tabs
+    bool shortcutHelpVisible_ = true; // informational only, saved with app preferences
     float dragY_ = 0, dragV_ = 0;
     static constexpr int kHist = 118;   // the mixer picture: the last four seconds of the active channel (its level, the sidechain source, the gain it is pulled down to)
     float hOwn_[kHist] = {}, hSrc_[kHist] = {}, hGain_[kHist] = {}; int hPos_ = 0, hTrack_ = -1; uint32_t hAt_ = 0;

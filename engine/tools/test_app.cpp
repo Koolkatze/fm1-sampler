@@ -5,12 +5,15 @@
 #include <Stretch.h>
 #include <Wav.h>
 #include <Slicer.h>
+#include <SamplerUI.h>
+#include <Theme.h>
 #include <Reverb.h>
 #include <cmath>
 #include <thread>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <filesystem>
 #include <string>
 static int fails = 0;
 #define CHECK(c, ...) do { if (!(c)) { fails++; printf("FAIL %s: ", #c); printf(__VA_ARGS__); printf("\n"); } else { printf("ok   "); printf(__VA_ARGS__); printf("\n"); } } while (0)
@@ -108,13 +111,54 @@ int main() {
           app.onMidi(m, 3);
       };
       const int octaveBefore = app.scale().octave;
+      app.clearMidiDebug();
+      CHECK(app.midiControlStatus() == "MIDI RX: NO MESSAGES YET",
+            "physical MIDI diagnostics report no incoming messages initially");
       s.seek(0.65f); run(0.06);
+      // Messages arrive separately: OCT- must be remembered without a
+      // simultaneous MIDI callback or an arbitrary time threshold.
       hold(SamplerApp::OCT_DOWN, true);
-      hold(SamplerApp::PLAY, true); run(0.08);
+      CHECK(app.midiControlStatus().find("OCT-:OK") != std::string::npos &&
+            app.midiLastEvent().find("CH2 NOTE 0 DOWN [OCT- HELD]") != std::string::npos,
+            "MIDI monitor confirms OCT- Note On and remembers modifier is held");
+      run(0.50);
+      hold(SamplerApp::PLAY, true); run(0.02);
+      CHECK(app.midiControlStatus().find("PLAY:OK") != std::string::npos &&
+            app.midiLastEvent().find("CH2 NOTE 12 DOWN [OCT- HELD]") != std::string::npos,
+            "MIDI monitor confirms PLAY arrives in a distinct, later callback");
+      CHECK(app.status().pos < app.status().loopSamples * 0.16 && app.status().playing,
+            "OCT- + PLAY instantly restarts on second key-down (%.1f)", app.status().pos);
+      hold(SamplerApp::PLAY, false); hold(SamplerApp::OCT_DOWN, false); run(0.02);
+      CHECK(app.status().playing, "combo PLAY release does not toggle transport");
+      s.seek(0.72f); run(0.04);
+      hold(SamplerApp::OCT_DOWN, true); hold(SamplerApp::STOP, true); run(0.02);
+      CHECK(app.status().pos < app.status().loopSamples * 0.16 && app.status().playing,
+            "OCT- + STOP instantly restarts, not stops (%.1f)", app.status().pos);
+      hold(SamplerApp::STOP, false); hold(SamplerApp::OCT_DOWN, false);
+      // STRICT ORDER: a modifier pressed AFTER PLAY must not become a shortcut.
+      s.seek(0.72f); run(0.04);
+      hold(SamplerApp::PLAY, true); run(0.04);
+      CHECK(!app.status().playing, "PLAY without a prior OCT modifier acts normally on key-down");
+      hold(SamplerApp::OCT_DOWN, true); run(0.02);
+      CHECK(!app.status().playing,
+            "PLAY then OCT- does not restart: OCT has to be pressed first");
+      hold(SamplerApp::OCT_DOWN, false); hold(SamplerApp::PLAY, false); run(0.02);
+      CHECK(!app.status().playing, "releasing OCT and PLAY does not cause an extra transport toggle");
+      app.transportSet(true); run(0.2);
+      s.seek(0.68f); run(0.04);
+      hold(SamplerApp::OCT_DOWN, true);
+      hold(SamplerApp::PLAY, true); run(0.02);
+      hold(SamplerApp::OCT_DOWN, false); // release modifier BEFORE releasing PLAY
+      hold(SamplerApp::PLAY, false); run(0.03);
+      CHECK(app.status().playing && app.status().pos < app.status().loopSamples * 0.16,
+            "modifier release before PLAY release never produces a second stop");
+      s.seek(0.70f); run(0.04);
+      hold(SamplerApp::PLAY, true); run(0.04);
+      CHECK(!app.status().playing, "after releasing OCT-, PLAY is the ordinary stop");
       hold(SamplerApp::PLAY, false);
-      hold(SamplerApp::OCT_DOWN, false); run(0.08);
-      CHECK(app.status().pos < app.status().loopSamples * 0.4 && app.status().playing,
-            "OCT- + PLAY starts the playing loop from zero (pos %.1f)", app.status().pos);
+      hold(SamplerApp::PLAY, true); run(0.04);
+      CHECK(app.status().playing, "second unmodified PLAY starts playback normally");
+      hold(SamplerApp::PLAY, false);
       CHECK(app.scale().octave == octaveBefore, "OCT modifier does not shift the app's octave");
       const auto originalPage = app.page();
       hold(SamplerApp::OCT_UP, true); run(2.15);
@@ -129,11 +173,411 @@ int main() {
             "while PLAY is held, CUE repeats a short BPM-locked region (%.3f -> %.3f)", cq0, cq1);
       enc(2, -1); run(0.05);
       CHECK(app.knobs()[0].value == "1/16", "K1 changes the subdivision live during CUE");
+      CHECK(app.midiControlStatus().find("K1:OK") != std::string::npos,
+            "MIDI diagnostic recognizes incoming physical K1 CC18");
       hold(SamplerApp::PLAY, false); run(0.15);
       CHECK(app.status().playing, "releasing PLAY returns to the running loop");
       hold(SamplerApp::OCT_UP, false); run(0.04);
       CHECK(app.page() == originalPage, "releasing OCT+ restores the previous page");
+
+      // OCT+ is the CUE modifier. PLAY only repeats while held. K1 can be
+      // changed live and the original loop must never be overwritten.
+      std::vector<float> before(64), after(64);
+      s.loopPeaks(0, before.data(), (int)before.size());
+      const auto savedLoopLength = app.status().loopSamples;
+      // Enter immediately: waiting for OCT+ long hold must NOT be required.
+      hold(SamplerApp::OCT_UP, true);
+      hold(SamplerApp::PLAY, true);
+      run(0.05);
+      CHECK(app.cueActive(), "OCT+ and PLAY starts CUE without a prior 2-second hold");
+      enc(2, 1); run(0.08);
+      CHECK(app.cueDivision() == 5 && app.cueActive(),
+            "physical K1 selects 1/32 during held PLAY");
+      enc(2, -5); run(0.08);
+      CHECK(app.cueDivision() == 4 && app.cueActive(),
+            "physical K1 changes rate live while PLAY stays held");
+      hold(SamplerApp::PLAY, false); run(0.05);
+      CHECK(!app.cueActive() && app.status().playing, "releasing PLAY alone restores normal loop");
+      hold(SamplerApp::OCT_UP, false);
+      // When OCT+ is released before a new PLAY/STOP press, NOTE REPEAT
+      // must not be latched for that subsequent ordinary transport action.
+      hold(SamplerApp::PLAY, true); run(0.04);
+      CHECK(!app.status().playing && !app.cueActive(),
+            "after releasing OCT+, PLAY/STOP returns to ordinary STOP");
+      hold(SamplerApp::PLAY, false);
+      hold(SamplerApp::PLAY, true); run(0.04);
+      CHECK(app.status().playing && !app.cueActive(),
+            "next unmodified PLAY/STOP starts without re-entering NOTE REPEAT");
+      hold(SamplerApp::PLAY, false);
+      s.loopPeaks(0, after.data(), (int)after.size());
+      float diff = 0.f;
+      for (size_t i = 0; i < before.size(); ++i)
+          diff = std::max(diff, std::fabs(after[i] - before[i]));
+      CHECK(diff < 1.e-6f && app.status().loopSamples == savedLoopLength,
+            "CUE never modifies the recorded loop audio or duration (diff %.8f)", diff);
+
+      // Hardware-only modifiers: NO added OCT+/OCT- buttons on Android.
+      // The original deck transport and project editor must remain available.
+      SamplerUI touchUi(app);
+      touchUi.setSize(860.f, 400.f, 0.f, 0.f);
+      touchUi.frame(now);
+      bool modifierButton = false;
+      for (const auto& op : touchUi.ops()) if (op.type == UiOp::TEXT)
+          modifierButton |= op.text == "OCT+" || op.text == "OCT-";
+      CHECK(!modifierButton, "deck has no OCT+ or OCT- touch buttons");
+      // Touch where the removed modifier buttons used to be: it must not
+      // synthetically press hardware keys.
+      touchUi.touch(0, 294.f, 234.f, now);
+      touchUi.touch(2, 294.f, 234.f, now);
+      touchUi.touch(0, 294.f, 265.f, now);
+      touchUi.touch(2, 294.f, 265.f, now);
+      CHECK(!app.cueModifierHeld() && !app.octDownModifierHeld(),
+            "removed touch modifiers cannot arm physical octave keys");
+      touchUi.setEditor(true);
+      touchUi.frame(now);
+      modifierButton = false;
+      for (const auto& op : touchUi.ops()) if (op.type == UiOp::TEXT)
+          modifierButton |= op.text == "OCT+" || op.text == "OCT-";
+      CHECK(!modifierButton, "editor has no OCT+ or OCT- touch buttons");
+      // The space previously occupied by synthetic OCT buttons belongs to
+      // the original editor's loop-source control. Do not tap it here: doing so
+      // would change the test recording source and prevent scene recordings.
+
+      // Normal phone PLAY and STOP do not initiate an OCT- combo, even if
+      // the physical octave key is held. A real MIDI PLAY/STOP event must
+      // supply the second press to trigger the immediate restart.
+      app.transportSet(true); run(0.05);
+      s.seek(0.67f); run(0.04);
+      hold(SamplerApp::OCT_DOWN, true);
+      app.transportSet(true); run(0.04);
+      CHECK(app.status().pos > app.status().loopSamples * 0.4,
+            "touch PLAY does not trigger the hardware-only OCT- shortcut");
+      hold(SamplerApp::PLAY, true); run(0.02);
+      CHECK(app.status().pos < app.status().loopSamples * 0.16,
+            "physical OCT- + PLAY still restarts immediately");
+      hold(SamplerApp::PLAY, false);
+      hold(SamplerApp::OCT_DOWN, false);
+      run(0.04);
+
+      s.seek(0.64f); run(0.03);
+      hold(SamplerApp::PLAY, true); run(0.04);
+      CHECK(!app.status().playing, "unmodified PLAY/STOP toggles immediately on key-down");
+      hold(SamplerApp::PLAY, false); run(0.04);
+      CHECK(!app.status().playing, "releasing unmodified PLAY does not toggle transport twice");
+      // Restore the tape to a running state before the next scene-recording test.
+      // This was previously done by the now-removed phone STOP test.
+      app.transportSet(true); run(0.15);
       app.loopClear(); run(0.3); }
+    {   // Live C1/D1 scenes, independent track groups, ordered song, persistence and light/dark UI.
+        app.selectTrack(0); app.loopClear(); run(0.2);
+        app.loopRecord(); run(0.08);
+        app.playNote(60, true); run(0.75); app.playNote(60, false); run(0.18);
+        app.loopRecord(); run(0.25);
+        CHECK(app.loopExists(), "scenes: first loop exists");
+        app.selectScene(0); app.saveScene(); run(0.16);
+        CHECK((app.status().sceneMask & 1u) && app.status().sceneTracks[0] == 1u,
+              "C1 contains exactly track 1 (mask %u)", (unsigned)app.status().sceneTracks[0]);
+        // Build a different pack: add a second loop while track 1 is already sounding.
+        app.selectTrack(1); app.loopRecord(); run(0.15);
+        app.playNote(65, true); run(0.4); app.playNote(65, false); run(0.25);
+        app.loopRecord(); run(0.18);
+        app.selectScene(2); app.saveScene(); run(0.22);
+        CHECK((app.status().sceneMask & 5u) == 5u &&
+              (app.status().sceneTracks[2] & 3u) == 3u,
+              "D1 contains tracks 1+2 while C1 preserves only track 1");
+        const int32_t compositionLength = app.status().loopSamples;
+        const uint32_t originalMask = ((uint32_t)1 << 0) | ((uint32_t)1 << 1);
+        CHECK((app.status().track_has_clip[0] && app.status().track_has_clip[1]),
+              "composition has two separately recorded loops before performance");
+        std::vector<float> baseline0(64), baseline1(64);
+        s.loopPeaks(0, baseline0.data(), (int)baseline0.size());
+        s.loopPeaks(1, baseline1.data(), (int)baseline1.size());
+        app.setSongMode(false);   // snapshot composition before the scene bank
+        uint8_t c1[3] = {0x90, 36, 100}, d1[3] = {0x90, 38, 100};
+        app.onMidi(c1, 3); run(1.2);
+        CHECK(app.status().activeScene == 0 && !app.status().track_has_clip[1],
+              "pressing Ableton MIDI C1 (36) launches scene C1 without changing D1");
+        app.exitPerformanceMode(); run(0.25);
+        CHECK(!app.performanceActive() && app.status().track_has_clip[0] &&
+              app.status().track_has_clip[1] && app.status().loopSamples == compositionLength,
+              "EXIT restores all composition clips and original loop length after launching C1");
+        std::vector<float> restored0(64), restored1(64);
+        s.loopPeaks(0, restored0.data(), (int)restored0.size());
+        s.loopPeaks(1, restored1.data(), (int)restored1.size());
+        float maxDiff = 0.f;
+        for (size_t i = 0; i < baseline0.size(); ++i)
+            maxDiff = std::max(maxDiff, std::max(std::fabs(restored0[i] - baseline0[i]),
+                                               std::fabs(restored1[i] - baseline1[i])));
+        CHECK(maxDiff < 1e-5f, "EXIT restores the exact original loop audio (peak diff %.7f)", maxDiff);
+        app.setSongMode(false); run(0.06);
+        app.onMidi(d1, 3); run(1.2);
+        CHECK(app.status().activeScene == 2 && app.status().track_has_clip[1],
+              "pressing Ableton MIDI D1 (38) launches a different loop structure");
+        // Scientific C1=24 also launches the C1 scene for alternate controllers.
+        uint8_t scientificC1[3] = {0x90, 24, 100};
+        app.onMidi(scientificC1, 3); run(1.1);
+        CHECK(app.status().activeScene == 0, "scientific MIDI C1 (24) also launches C1");
+        // FM-1 physical first C-scene key uses firmware's 53 offset.
+        uint8_t physicalC1[3] = {0x90, 53, 100};
+        app.onMidi(physicalC1, 3); run(1.1);
+        CHECK(app.status().activeScene == 0, "FM-1 physical first note launches C1");
+        app.setSongMode(true);
+        app.selectScene(0); app.songAdd();
+        app.selectScene(2); app.songAdd();
+        app.selectScene(0); app.songAdd(); run(0.1);
+        CHECK(app.songOrder().size() == 3 && app.songOrder()[0] == 0 &&
+              app.songOrder()[1] == 2 && app.songOrder()[2] == 0,
+              "Song Mode keeps C1, D1, C1, including repeated scenes");
+        app.songMove(-1);
+        CHECK(app.songOrder()[1] == 0 && app.songOrder()[2] == 2, "Song Mode can reorder steps");
+        app.songMove(+1); run(0.1);
+        app.playSong(); run(0.12);
+        CHECK(app.status().songPlaying && app.status().songStep == 0 &&
+              app.status().activeScene == 0, "Song starts on its first scene");
+        app.exitPerformanceMode(); run(0.25);
+        CHECK(app.status().track_has_clip[0] && app.status().track_has_clip[1] &&
+              app.status().loopSamples == compositionLength && !app.status().songPlaying,
+              "COMPOSE restores original eight-track recording workspace during SONG playback");
+        app.setSongMode(true); run(0.06);
+        app.playSong(); run(0.12);
+        run(3.4);
+        CHECK(!app.status().songPlaying && !app.status().playing,
+              "Song ends after the final scene instead of looping forever");
+        run(0.4);
+        CHECK(std::filesystem::exists("/tmp/fm1sampler_t2/fm1_scenes.dat"),
+              "saved scenes and Song Mode order are persisted for the next launch");
+        {
+            Session restored(sr);
+            restored.setDataDir("/tmp/fm1sampler_t2");
+            std::vector<float> o(512), input(512, 0.f);
+            Session::Status loaded{};
+            for (int i = 0; i < 80; ++i) {
+                restored.process(o.data(), input.data(), 256);
+                loaded = restored.status();
+                if (loaded.arrangementLoaded) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(4));
+            }
+            CHECK(loaded.arrangementLoaded && (loaded.sceneMask & 5u) == 5u &&
+                  loaded.sceneTracks[0] == 1u && (loaded.sceneTracks[2] & 3u) == 3u &&
+                  loaded.arrangementSize == 3 && loaded.arrangement[0] == 0 &&
+                  loaded.arrangement[1] == 2 && loaded.arrangement[2] == 0,
+                  "saved C1/D1 loop packs and the C1-D1-C1 song survive app restart");
+        }
+
+        // Project sheet must render two separate columns in both existing themes.
+        SamplerUI ui(app); ui.setSize(860.f, 400.f, 0.f, 0.f);
+        ui.openProject(false);
+        ui.setShortcutHelpVisible(true);
+        for (bool light : {true, false}) {
+            theme::apply(light);
+            ui.frame(now + 1);
+            bool restart = false, repeat = false, hide = false, midiStatus = false, last = false;
+            for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+                restart |= op.text == "OCT− + PLAY/STOP: RESTART LOOP";
+                repeat |= op.text.find("NOTE REPEAT") != std::string::npos &&
+                          op.text.find("OCT+ + PLAY/STOP") != std::string::npos;
+                hide |= op.text == "HIDE";
+                midiStatus |= op.text.find("MIDI OCT-:") != std::string::npos;
+                last |= op.text.find("LAST CH") != std::string::npos;
+            }
+            CHECK(restart && repeat && hide && midiStatus && last,
+                  "physical shortcuts and incoming MIDI diagnostics in %s mode",
+                  light ? "light" : "dark");
+        }
+        theme::apply(true);
+        ui.frame(now + 3);
+        ui.touch(0, 294, 84, now + 3);
+        ui.touch(2, 294, 84, now + 3);
+        CHECK(!ui.shortcutHelpVisible(), "HIDE chip collapses shortcut legend");
+        ui.frame(now + 4);
+        bool hasInfo = false, hasRepeat = false;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+            hasInfo |= op.text == "INFO";
+            hasRepeat |= op.text.find("OCT+ + PLAY/STOP") != std::string::npos;
+        }
+        CHECK(hasInfo && !hasRepeat, "collapsed legend displays only the compact INFO button");
+        {
+            SamplerUI restoredHelp(app);
+            CHECK(!restoredHelp.shortcutHelpVisible(),
+                  "shortcut visibility survives app UI recreation");
+        }
+        ui.touch(0, 297, 69, now + 4);
+        ui.touch(2, 297, 69, now + 4);
+        CHECK(ui.shortcutHelpVisible(), "INFO chip reopens physical shortcuts");
+        ui.openProject(true);
+        for (bool light : {true, false}) {
+            theme::apply(light);
+            ui.frame(now + (light ? 1 : 2));
+            bool project = false, song = false, pad = false;
+            for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+                project |= op.text == "PROJECT";
+                song |= op.text == "SONG MODE";
+                pad |= op.text == "C1";
+            }
+            CHECK(project && song && pad,
+                  "PROJECT and scene/song editor render together in %s theme",
+                  light ? "light" : "dark");
+        }
+        theme::apply(true);
+        // A narrower screen must switch between project and scene columns
+        // rather than draw both on top of each other.
+        ui.setSize(640.f, 400.f, 0.f, 0.f);
+        ui.frame(now + 3);
+        bool narrowProject = false, narrowSong = false;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+            narrowProject |= op.text == "PROJECT"; narrowSong |= op.text == "SONG MODE";
+        }
+        CHECK(narrowProject && !narrowSong, "narrow screen shows PROJECT alone");
+        ui.touch(0, 490, 32, now + 3); ui.touch(2, 490, 32, now + 3);
+        ui.frame(now + 4);
+        narrowProject = narrowSong = false;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+            narrowProject |= op.text == "PROJECT"; narrowSong |= op.text == "SONG MODE";
+        }
+        CHECK(narrowSong, "narrow screen switches to scene/song column");
+        app.setSongMode(false);
+        CHECK(app.performanceActive() && !app.songMode(),
+              "LOOP mode enables scene-key bank");
+        app.exitPerformanceMode(); run(0.08);
+        CHECK(!app.performanceActive() && !app.songMode(),
+              "EXIT LOOP returns to normal composition and chromatic keyboard");
+        app.setSongMode(true); run(0.08);
+        CHECK(app.performanceActive() && app.songMode(), "SONG mode enters successfully");
+        app.exitPerformanceMode(); run(0.08);
+        CHECK(!app.performanceActive() && !app.songMode(),
+              "EXIT SONG returns to composition");
+        // Verify touchable EXIT beside LAUNCH in the actual PROJECT right panel.
+        ui.setSize(860.f, 400.f, 0.f, 0.f);
+        ui.openProject(true);
+        app.setSongMode(false); ui.frame(now + 7);
+        bool exitVisible = false, composeVisible = false;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+            exitVisible |= op.text == "EXIT";
+            composeVisible |= op.text == "COMPOSE";
+        }
+        CHECK(exitVisible && composeVisible, "PROJECT shows EXIT beside LAUNCH and COMPOSE mode tab");
+        // Right column x=445..846; four actions at y~221, EXIT is third.
+        ui.touch(0, 701.f, 224.f, now + 7);
+        ui.touch(2, 701.f, 224.f, now + 7);
+        CHECK(!app.performanceActive(), "PROJECT EXIT button actually leaves LOOP mode");
+
+        // FULL PROJECT FILES: eight independent slots, not merely the legacy
+        // fm1_scenes.dat bank. Save must include the actual two COMPOSE clips,
+        // both scene audio packs, the complete C1-D1-C1 song, track processing,
+        // and the embedded WAVs for the original sampler assignments.
+        app.selectTrack(0);
+        const auto originalSong = app.songOrder();
+        const auto originalScale = app.scale();
+        const auto originalSceneMask = app.status().sceneMask;
+        const auto originalAlgo = app.state(0).algo;
+        const auto originalSample0 = app.sampleLabel(0);
+        const auto originalSample1 = app.sampleLabel(1);
+        CHECK(app.status().track_has_clip[0] && app.status().track_has_clip[1],
+              "two COMPOSE recordings are present before full-project save");
+        CHECK(app.saveFullProject(0), "Save Full Project starts asynchronous FMP2 snapshot");
+        for (int spin = 0; spin < 20 && app.fullProjectOperation() == 1; ++spin) run(0.14);
+        CHECK(app.fullProjectOperation() == 2 && app.fullProjectExists(0) &&
+              std::filesystem::file_size("/tmp/fm1sampler_t2/project_1.fm1p") > 100000,
+              "project slot 1 contains a real self-contained archive with audio");
+        app.setAlgo(5); app.selectScene(0); app.deleteScene(); run(0.25);
+        app.loopClear(); run(0.25);
+        CHECK(!app.status().track_has_clip[0] && !app.status().track_has_clip[1],
+              "the working composition can be emptied independently of saved project");
+        CHECK(app.loadFullProject(0), "Load Full Project starts validated background restoration");
+        for (int spin = 0; spin < 35 && app.fullProjectOperation() == 3; ++spin) run(0.12);
+        run(0.65);
+        CHECK(app.fullProjectOperation() == 4 &&
+              app.status().track_has_clip[0] && app.status().track_has_clip[1],
+              "project load restores both independent recorded COMPOSE loops");
+        CHECK(app.status().sceneMask == originalSceneMask &&
+              app.songOrder() == originalSong,
+              "project load restores all scenes and exact song arrangement");
+        CHECK(app.state(0).algo == originalAlgo && app.scale().scale == originalScale.scale &&
+              app.scale().root == originalScale.root &&
+              app.scale().octave == originalScale.octave,
+              "project load restores per-track algorithm and exact scale state");
+        CHECK(app.sampleLabel(0) == originalSample0 &&
+              app.sampleLabel(1) == originalSample1 &&
+              std::filesystem::exists("/tmp/fm1sampler_t2/project_assets/slot_1/track_1.wav"),
+              "project embeds its source WAV and preserves original sampler names");
+        CHECK(!app.performanceActive() && !app.songMode(),
+              "project saved in COMPOSE loads in COMPOSE, not a different scene mode");
+        app.refreshLibrary();
+        CHECK(app.sampleLabel(0) == originalSample0 &&
+              app.state(0).entry >= 0 &&
+              app.library()[(size_t)app.state(0).entry].label == originalSample0,
+              "library refresh keeps the restored source WAV assignment");
+        CHECK(app.saveFullProject(3), "a restored project can be saved again into a new independent slot");
+        for (int spin = 0; spin < 25 && app.fullProjectOperation() == 1; ++spin) run(0.12);
+        CHECK(app.fullProjectOperation() == 2 && app.fullProjectExists(3),
+              "re-saving after library refresh embeds the correct original WAV, not a stale entry index");
+        CHECK(app.loadFullProject(3), "re-saved project reloads from an independent archive");
+        for (int spin = 0; spin < 25 && app.fullProjectOperation() == 3; ++spin) run(0.12);
+        run(0.3);
+        CHECK(app.sampleLabel(0) == originalSample0 &&
+              app.sampleLabel(1) == originalSample1 &&
+              app.status().track_has_clip[0] && app.status().track_has_clip[1],
+              "second-generation project preserves both source names and two recorded loops");
+
+        // A second independent slot saves the running SONG, while its original
+        // COMPOSE workspace remains separately recoverable through HOME/EXIT.
+        app.setSongMode(true); run(0.12);
+        app.playSong(); run(0.15);
+        CHECK(app.status().songPlaying && app.performanceActive() && app.songMode(),
+              "SONG playback is live before snapshot");
+        CHECK(app.saveFullProject(1), "save full project while SONG mode is active");
+        for (int spin = 0; spin < 25 && app.fullProjectOperation() == 1; ++spin) run(0.11);
+        CHECK(app.fullProjectOperation() == 2 && app.fullProjectExists(1),
+              "second independent slot stores SONG plus original COMPOSE");
+        app.exitPerformanceMode(); run(0.2);
+        CHECK(app.loadFullProject(1), "reload the second SONG-mode snapshot");
+        for (int spin = 0; spin < 35 && app.fullProjectOperation() == 3; ++spin) run(0.10);
+        run(0.08);
+        CHECK(app.fullProjectOperation() == 4 && app.performanceActive() &&
+              app.songMode() && app.songOrder() == originalSong,
+              "SONG project restores playback mode and full C1-D1-C1 arrangement");
+        CHECK(app.status().songPlaying && app.status().activeScene >= 0,
+              "SONG snapshot resumes its active scene and transport");
+        app.exitPerformanceMode(); run(0.30);
+        CHECK(app.status().track_has_clip[0] && app.status().track_has_clip[1],
+              "EXIT after a reloaded SONG restores the saved COMPOSE recordings");
+
+        // Truncated project must never overwrite the current unsaved workspace.
+        {
+            std::ifstream original("/tmp/fm1sampler_t2/project_1.fm1p", std::ios::binary);
+            std::ofstream broken("/tmp/fm1sampler_t2/project_3.fm1p", std::ios::binary);
+            std::array<char, 1024> fragment{};
+            original.read(fragment.data(), (std::streamsize)fragment.size());
+            broken.write(fragment.data(), original.gcount());
+        }
+        CHECK(app.loadFullProject(2), "corrupt archived slot is detected asynchronously");
+        for (int spin = 0; spin < 25 && app.fullProjectOperation() == 3; ++spin) run(0.10);
+        CHECK(app.fullProjectOperation() == -2 &&
+              app.status().track_has_clip[0] && app.status().track_has_clip[1],
+              "corrupt/truncated project cannot destroy the active composition");
+
+        ui.openProject(true);
+        ui.frame(now + 9);
+        bool fullSave = false, fullLoad = false;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+            fullSave |= op.text == "SAVE PROJECT";
+            fullLoad |= op.text == "LOAD PROJECT";
+        }
+        CHECK(fullSave && fullLoad, "PROJECT page has distinct SAVE/LOAD COMPLETE PROJECT actions");
+        ui.touch(0, 243.f, 64.f, now + 9);
+        ui.touch(2, 243.f, 64.f, now + 9);
+        ui.frame(now + 10);
+        bool slotPicker = false, slot1 = false, slot2 = false;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+            slotPicker |= op.text == "SAVE COMPLETE PROJECT";
+            slot1 |= op.text == "PROJECT 1";
+            slot2 |= op.text == "PROJECT 2";
+        }
+        CHECK(slotPicker && slot1 && slot2,
+              "full-project save picker shows independent slots and overwrite protection");
+        ui.openProject(false);
+        app.loopClear(); run(0.25);
+    }
     {   // loudness normalisation and auto-tune, on synthetic samples: a quiet and a loud 220 Hz tone
       auto tone = [&](const char* path, float amp, double hz) { std::vector<float> st; for (int i = 0; i < 2 * sr; i++) { const float v = amp * (float)std::sin(2 * M_PI * hz * i / sr) * (i < 100 ? i / 100.f : 1.f); st.push_back(v); st.push_back(v); } writeWav16(path, st, sr); };
       tone("/tmp/fm1sampler_t2/tone_quiet.wav", 0.03f, 220.0); tone("/tmp/fm1sampler_t2/tone_loud.wav", 0.95f, 220.0); tone("/tmp/fm1sampler_t2/tone_flat.wav", 0.5f, 220.0 * std::pow(2.0, 0.3 / 12));
@@ -178,7 +622,11 @@ int main() {
     { double ph = 0; for (long i = 0; i < (long)(1.0 * sr) / 256; i++) { for (int k = 0; k < 256; k++) { float v = 0.4f * std::sin(ph); ph += 2 * M_PI * 440.0 / sr; in[2 * k] = in[2 * k + 1] = v; } std::fill(buf.begin(), buf.end(), 0.f); s.process(buf.data(), in.data(), 256); std::this_thread::sleep_for(std::chrono::microseconds(200)); if (i % 5 == 0) { now += 33; app.tick(now); } } std::fill(in.begin(), in.end(), 0.f); }
     CHECK(app.micState() == 2, "mic sampling recording");
     enc(2, -1); run(3.0);
-    CHECK(app.micState() == 0 && app.library().back().group == "User", "mic sample saved into the library and loaded (%s)", app.sampleLabel(0).c_str());
+    const bool micInUserLibrary = std::any_of(app.library().begin(), app.library().end(),
+                                            [](const SamplerApp::Entry& e) { return e.group == "User"; });
+    CHECK(app.micState() == 0 && micInUserLibrary,
+          "mic sample saved into User library even when project assets have their own category (%s)",
+          app.sampleLabel(0).c_str());
     // import from disk: a WAV dropped into the data dir
     { std::ifstream src(std::string(getenv("HOME")) + "/fm1-sampler/samples/Bass/Fuzz.wav", std::ios::binary); std::ofstream dst("/tmp/fm1sampler_t2/sample_FromDisk.wav", std::ios::binary); dst << src.rdbuf(); }
     app.selectTrack(4); app.importFile("/tmp/fm1sampler_t2/sample_FromDisk.wav"); run(2.0);

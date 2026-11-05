@@ -1,0 +1,25 @@
+name: FM1 physical OCT MIDI firmware validation
+
+on:
+  push:
+    branches: [feature/scene-launcher-song-mode]
+    paths:
+      - "firmware/app/ctrl.c"
+      - "firmware/hosttest/ctrl_host.c"
+      - "firmware/CUE.md"
+      - ".github/workflows/fm1-panel-midi-tests.yml"
+  workflow_dispatch:
+
+jobs:
+  host-panel-midi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile panel firmware simulation with strict warnings
+        run: |
+          mkdir -p firmware/build/host
+          cc -std=c11 -O2 -DFM1_HOST_TEST -I firmware/sdk/include -I firmware/app -I firmware/app/synth \
+            firmware/hosttest/ctrl_host.c -lm -o firmware/build/host/ctrl_host
+      - name: Verify physical OCT On/Off and PLAY over USB
+        working-directory: firmware/build/host
+        run: ./ctrl_host

@@ -4,6 +4,7 @@
 // Threads: the audio thread calls process(). Everything else may be called from any other thread; changes reach the audio thread
 // through a command queue drained at the start of each block. status() and the peak views are lock-free.
 #pragma once
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -15,6 +16,7 @@ public:
     static constexpr int kTracks = 8;
     static constexpr int kVoiceMax = 32;
     static constexpr int kLoopBins = 400;
+    static constexpr int kScenes = 12;   // C1..B1
 
     struct Status {
         bool playing;
@@ -33,6 +35,13 @@ public:
         int sampleTrack; float sampleSeconds, inputPeak;
         int sampleVersion;       // bumps when a sample was loaded into a track (sampleTrack)
         int sampleFails;         // bumps when a sample could not be loaded
+        uint32_t sceneMask;       // saved scene slots
+        uint8_t sceneTracks[kScenes]; // which of 8 loops belongs to each scene
+        int activeScene, queuedScene;
+        bool songPlaying;
+        int songStep, songSize;
+        bool arrangementLoaded;
+        int arrangementSize, arrangement[64]; // saved scene order for UI restoration
         float clipPos[kTracks];  // 0..1 read position of the loops (follows the loop speed)
         float lfoValue[kTracks]; // -1..1, for the UI
         float scGain[kTracks], scLevel[kTracks];   // sidechain: the gain a track is pulled down to (1 = untouched) and the level it is measured by (its own level before the fader)
@@ -52,7 +61,7 @@ public:
     void noteOff(int track, int note);
 
     // ---- sampler (per track) ----
-    void loadSamplePath(const std::string& path, bool kit, int track);          // worker thread builds it, then it replaces the track's sampler
+    void loadSamplePath(const std::string& path, bool kit, int track, const std::string& displayName = "");          // worker thread builds it, then it replaces the track's sampler
     void setMode(int track, int mode);                                         // 0 melodic, 1 one-shot, 2 looped, 3 kit, 4 granular, 5 paulstretch
     void setEnv(int track, float attack, float decay, float sustain, float release);   // seconds, level
     void setRoot(int track, float note);                                       // note at which the sample sounds as recorded (default 60)
@@ -90,6 +99,32 @@ public:
     void scrubEnd();                      // the finger lifts: the tape returns to the transport speed, or comes to a stop
     void seek(float fraction);            // move the playhead to a place of the loop (0..1): all loops share it
     void setCue(bool on, int division);    // momentary beat-repeat from current position; 0..5 = 1/1..1/32
+    void captureScene(int slot, uint8_t tracks = 0xff); // capture chosen loops, up to eight
+    void clearScene(int slot);
+    void launchScene(int slot);            // quantized to the next bar
+    void startSong(const std::vector<int>& order);
+    void stopSong();
+    void beginPerformanceMode(); // snapshot current eight-track composition on audio thread
+    void restoreComposition();   // EXIT / COMPOSE / HOME restore audio clips and transport
+    void cancelSceneLaunch();  // leave LOOP mode without stopping currently audible loops
+    void saveArrangement(const std::vector<int>& order);
+    // Self-contained complete project files (8 slots): eight current clips,
+    // independent COMPOSE clips, scenes, song, source WAVs, and app parameters.
+    // All disk work runs off the audio callback. A loaded payload is applied
+    // atomically on the audio thread before the UI receives its metadata.
+    static constexpr int kProjectSlots = 8;
+    struct LoadedProject {
+        int slot = -1;
+        std::vector<uint8_t> appState;
+        std::array<std::string, kTracks> samplePaths;
+    };
+    bool saveProject(int slot, std::vector<uint8_t> appState,
+                     const std::array<std::string, kTracks>& samplePaths);
+    bool loadProject(int slot);
+    bool takeLoadedProject(LoadedProject& output);
+    bool projectExists(int slot) const;
+    int projectOperation() const; // 0 idle, 1 saving, 2 saved, -1 failed, 3 loading, 4 loaded, -2 failed
+    void clearSample(int track);
     void setLoopSpeed(float speed);       // 0.25..2, tape speed of all loops together; 1 = locked to the transport
     void setLoopSource(int src);          // what the loop records: 0 microphone, 1 the track's sound
     bool saveClip(int track);             // the loop of `track` as sample_*.wav in the data dir
