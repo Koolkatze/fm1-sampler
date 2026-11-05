@@ -108,7 +108,7 @@ void SamplerUI::topBar(Rect r) {
     text(rc.x + 28, cy, 9.5f, recOn ? ON_ACCENT : TEXT, app_.loopExists() ? "OVERDUB" : "REC", 0, true);
     tap(rc, [this] { app_.loopRecord(); });
     x += 94;
-    button({x, 6, 56, r.h - 12}, "SAVE", false, [this] { app_.loopSave(); }, 11);
+    button({x, 6, 56, r.h - 12}, "SAVE", false, [this] { app_.requestName(1); }, 11);
     x += 62;
     button({x, 6, 56, r.h - 12}, "CLEAR", false, [this] { app_.loopClear(); }, 11);
     x += 62;
@@ -537,6 +537,24 @@ void SamplerUI::icon(int kind, float cx, float cy, uint32_t c) {
         break; }
     case 6: rrect({cx - 10, cy - 8.7f, 7.3f, 5}, 0, c); rrect({cx - 10, cy - 4.7f, 20, 14}, 0, c); break;   // folder: a file from the disk
     case 7: rrect({cx - 10, cy - 9.3f, 20, 3.4f}, 0, c); rrect({cx - 10, cy - 1.7f, 20, 3.4f}, 0, c); rrect({cx - 10, cy + 6, 13.3f, 3.4f}, 0, c); break;   // project
+    case 8: // archivador: three stacked file drawer fronts
+        rrect({cx - 11, cy - 10, 22, 6}, 0, c);
+        rrect({cx - 11, cy - 2, 22, 6}, 0, c);
+        rrect({cx - 11, cy + 6, 22, 6}, 0, c);
+        rrect({cx - 3, cy - 7, 6, 1.5f}, 0, kBg);
+        rrect({cx - 3, cy + 1, 6, 1.5f}, 0, kBg);
+        rrect({cx - 3, cy + 9, 6, 1.5f}, 0, kBg);
+        break;
+    case 9: // folder, same silhouette as the deck's load-file glyph
+        rrect({cx - 10, cy - 8.7f, 7.3f, 5}, 0, c);
+        rrect({cx - 10, cy - 4.7f, 20, 14}, 0, c);
+        break;
+    case 10: // waveform, seven solid bars with centre emphasis
+        for (int i = 0; i < 9; i++) {
+            const float h[] = {5, 12, 18, 9, 22, 12, 17, 10, 6};
+            rrect({cx - 11 + i * 2.7f, cy - h[i] / 2, 2, h[i]}, 0, c);
+        }
+        break;
     }
 }
 
@@ -554,7 +572,7 @@ void SamplerUI::deck(Rect r) {
     const int mic = app_.micState();
     if (mic == 1) title = "Listening"; else if (mic == 2) title = "Recording"; else if (mic == 3) title = "Saving";
     text(M + 27, 34, 29, kPaper, fit(title, mx - M - 52, 29), 0, true);
-    tap({M + 24, 8, mx - M - 40, 52}, [this] { sheetOpen_ = true; sheetScroll_ = std::max(0.f, (float)app_.libraryCursor() * 34.f - 100.f); app_.refreshLibrary(); });
+    tap({M + 24, 8, mx - M - 40, 52}, [this] { openLibrary(); });
     {
         float lsec = 0, psec = 0;
         if (hasLoop) { lsec = (float)(st_.loopSamples / app_.session().sampleRate()); psec = loopPos() * lsec; } else if (st_.freeRecording) psec = lsec = st_.freeSeconds;
@@ -706,7 +724,7 @@ void SamplerUI::sampleArea(Rect r) {
         text(nm.x + 10, nm.y + nm.h / 2 + 9, 9, DIM, lib[(size_t)cur].group + "  " + std::to_string(cur + 1) + "/" + std::to_string(lib.size()), 0, false);
     }
     text(nm.x + nm.w - 10, nm.y + nm.h / 2, 9.5f, ACCENT, "LIBRARY", 2, true);
-    tap(nm, [this] { sheetOpen_ = true; sheetScroll_ = std::max(0.f, (float)app_.libraryCursor() * 34.f - 100.f); app_.refreshLibrary(); });
+    tap(nm, [this] { openLibrary(); });
     // microphone and disk
     Rect br{r.x, lr.y + lr.h + 8, r.w, 38};
     const int ms = app_.micState();
@@ -744,39 +762,113 @@ void SamplerUI::pagePanel(Rect r) {
     }
 }
 
+void SamplerUI::openLibrary() {
+    app_.refreshLibrary();
+    sheetOpen_ = true;
+    sheetScroll_ = 0;
+    const auto& lib = app_.library();
+    const int cur = app_.libraryCursor();
+    if (cur >= 0 && cur < (int)lib.size()) {
+        libPack_ = lib[(size_t)cur].pack;
+        libFolder_ = lib[(size_t)cur].folder;
+        libLevel_ = 2;
+    } else libLevel_ = 0;
+}
+
 void SamplerUI::librarySheet() {
-    rrect({0, 0, W_, H_}, 0, theme::withAlpha(BG, 200));
+    // Retain the app's exact flat colour/line system. Three glyphs represent the library depth.
+    rrect({0, 0, W_, H_}, 0, theme::withAlpha(BG, 210));
     tap({0, 0, W_, H_}, [this] { sheetOpen_ = false; });
-    const Rect box{W_ * 0.22f, 24, W_ * 0.56f, H_ - 48};
+    const Rect box{W_ * 0.19f, 16, W_ * 0.62f, H_ - 32};
     rrect(box, R_CARD, SURFACE); stroke(box, R_CARD, ACCENT, 1);
     tap(box, [] {});
-    text(box.x + 14, box.y + 20, T_TITLE, TEXT, "SAMPLE LIBRARY", 0, true);
-    button({box.x + box.w - 70, box.y + 6, 60, 28}, "CLOSE", false, [this] { sheetOpen_ = false; }, 10);
-    sheetList_ = {box.x + 6, box.y + 44, box.w - 12, box.h - 52};
+    text(box.x + 15, box.y + 19, 14, TEXT, "SAMPLE LIBRARY", 0, true);
+    button({box.x + box.w - 69, box.y + 5, 60, 27}, "CLOSE", false, [this] { sheetOpen_ = false; }, 10);
+    const float navY = box.y + 41;
+    const float navX = box.x + 14;
+    const float tabW = 74;
+    for (int tab = 0; tab < 3; tab++) {
+        const Rect r{navX + tab * (tabW + 9), navY, tabW, 40};
+        const bool selected = tab == libLevel_;
+        if (selected) rrect({r.x, r.y + 35, r.w, 2.7f}, 0, ACCENT);
+        icon(8 + tab, r.x + 19, r.y + 17, selected ? ACCENT : TEXT);
+        text(r.x + 38, r.y + 18, 9, selected ? ACCENT : DIM,
+             tab == 0 ? "PACK" : tab == 1 ? "FOLDER" : "WAVE", 0, true);
+        tap(r, [this, tab] {
+            libLevel_ = tab; sheetScroll_ = 0;
+            const auto& lib = app_.library();
+            if (tab >= 1 && libPack_.empty() && !lib.empty()) libPack_ = lib[0].pack;
+            if (tab >= 2 && libFolder_.empty())
+                for (auto& e : lib) if (e.pack == libPack_) { libFolder_ = e.folder; break; }
+        });
+    }
+    button({box.x + box.w - 111, navY + 7, 100, 27}, "+ IMPORT ZIP",
+           false, [this] { app_.requestPack(); }, 9.5f, true);
+    text(box.x + 15, navY + 50, 10, DIM,
+         fit(libLevel_ == 0 ? "SELECT A PACK" :
+             libLevel_ == 1 ? libPack_ + " / SELECT A FOLDER" :
+             libPack_ + " / " + libFolder_, box.w - 30, 10), 0, true);
+    sheetList_ = {box.x + 9, navY + 62, box.w - 18, box.y + box.h - (navY + 69)};
     const auto& lib = app_.library();
-    // rows: a header per group, then its entries
-    struct Row { bool head; std::string text; int entry; };
+    struct Row { std::string label, sub; int entry = -1; };
     std::vector<Row> rows;
-    std::string g;
-    for (int i = 0; i < (int)lib.size(); i++) { if (lib[(size_t)i].group != g) { g = lib[(size_t)i].group; rows.push_back({true, g, -1}); } rows.push_back({false, lib[(size_t)i].label, i}); }
-    const float rh = 34;
-    sheetScroll_ = std::min(std::max(0.f, sheetScroll_), std::max(0.f, rows.size() * rh - sheetList_.h));
+    if (libLevel_ == 0) {
+        // OFFICIAL and SAVED are stable virtual packs, even with no new imports yet.
+        rows.push_back({"OFFICIAL", "BUILT-IN SAMPLES"});
+        rows.push_back({"SAVED", "LOOPS / RECORDINGS / IMPORTS"});
+        for (auto& e : lib) if (e.pack != "OFFICIAL" && e.pack != "SAVED" &&
+            std::none_of(rows.begin(), rows.end(), [&](const Row& r) { return r.label == e.pack; }))
+            rows.push_back({e.pack, "IMPORTED PACK"});
+    } else if (libLevel_ == 1) {
+        for (auto& e : lib) if (e.pack == libPack_ &&
+            std::none_of(rows.begin(), rows.end(), [&](const Row& r) { return r.label == e.folder; }))
+            rows.push_back({e.folder.empty() ? "Unsorted" : e.folder, "FOLDER"});
+        std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) { return a.label < b.label; });
+    } else {
+        for (int i = 0; i < (int)lib.size(); i++) {
+            auto& e = lib[(size_t)i];
+            if (e.pack == libPack_ && e.folder == libFolder_)
+                rows.push_back({e.label, "WAV", i});
+        }
+    }
+    const float rh = 37.f;
+    sheetScroll_ = std::min(std::max(0.f, sheetScroll_),
+                            std::max(0.f, (float)rows.size() * rh - sheetList_.h));
     clip(sheetList_);
-    for (size_t i = 0; i < rows.size(); i++) {
+    for (int i = 0; i < (int)rows.size(); i++) {
         const float y = sheetList_.y + i * rh - sheetScroll_;
         if (y + rh < sheetList_.y || y > sheetList_.y + sheetList_.h) continue;
-        if (rows[i].head) { text(sheetList_.x + 8, y + rh / 2, T_CAPTION, DIM, rows[i].text, 0, true); line(sheetList_.x, y + rh - 3, sheetList_.x + sheetList_.w, y + rh - 3, OUTLINE, 1); continue; }
-        const bool cur = rows[i].entry == app_.libraryCursor();
-        if (cur) { rrect({sheetList_.x, y + 1, sheetList_.w, rh - 2}, R_CONTROL, RAISED); stroke({sheetList_.x, y + 1, sheetList_.w, rh - 2}, R_CONTROL, ACCENT, 1); }
-        text(sheetList_.x + 14, y + rh / 2, T_BODY + 1, cur ? ACCENT : TEXT, fit(rows[i].text, sheetList_.w - 30, T_BODY + 1), 0, cur);
+        const auto& row = rows[(size_t)i];
+        const bool selected = (libLevel_ == 0 && row.label == libPack_) ||
+            (libLevel_ == 1 && row.label == libFolder_) ||
+            (libLevel_ == 2 && row.entry == app_.libraryCursor());
+        if (selected) rrect({sheetList_.x, y, sheetList_.w, rh - 1}, 0, RAISED);
+        icon(libLevel_ == 0 ? 8 : libLevel_ == 1 ? 9 : 10,
+             sheetList_.x + 20, y + 17, selected ? ACCENT : DIM);
+        text(sheetList_.x + 42, y + 14, 12, selected ? ACCENT : TEXT,
+             fit(row.label, sheetList_.w - 75, 12), 0, selected);
+        text(sheetList_.x + 42, y + 29, 8.5f, DIM, row.sub, 0, false);
+        line(sheetList_.x + 40, y + rh - 1, sheetList_.x + sheetList_.w - 4,
+             y + rh - 1, OUTLINE, 0.7f);
     }
     endClip();
-    hit(sheetList_, [this](float, float y) { sheetLastY_ = y; sheetMoved_ = 0; },
+    if (rows.empty()) text(sheetList_.x + sheetList_.w / 2, sheetList_.y + 37,
+                           10, DIM, "NO SAMPLES IN THIS FOLDER", 1, true);
+    hit(sheetList_,
+        [this](float, float y) { sheetLastY_ = y; sheetMoved_ = 0; },
         [this](float, float y) { sheetScroll_ -= y - sheetLastY_; sheetMoved_ += std::fabs(y - sheetLastY_); sheetLastY_ = y; },
-        [this, rows, rh]() {
+        [this, rows, rh] {
             if (sheetMoved_ > 8) return;
             const int idx = (int)((sheetLastY_ - sheetList_.y + sheetScroll_) / rh);
-            if (idx >= 0 && idx < (int)rows.size() && !rows[(size_t)idx].head) { app_.loadEntry(rows[(size_t)idx].entry); sheetOpen_ = false; }
+            if (idx < 0 || idx >= (int)rows.size()) return;
+            const auto row = rows[(size_t)idx];
+            if (libLevel_ == 0) { libPack_ = row.label; libFolder_.clear(); libLevel_ = 1; sheetScroll_ = 0; }
+            else if (libLevel_ == 1) {
+                libFolder_ = row.label == "Unsorted" ? "" : row.label;
+                libLevel_ = 2; sheetScroll_ = 0;
+            } else if (row.entry >= 0) {
+                app_.loadEntry(row.entry); sheetOpen_ = false;
+            }
         });
 }
 
@@ -784,7 +876,7 @@ void SamplerUI::librarySheet() {
 void SamplerUI::projectSheet() {
     rrect({0, 0, W_, H_}, 0, theme::withAlpha(kBg, 235));
     tap({0, 0, W_, H_}, [this] { projectOpen_ = false; });
-    const float bw = std::min(460.f, W_ - 40), bh = 34, gap = 4;
+    const float bw = std::min(460.f, W_ - 40), bh = 26, gap = 1;
     const int t = app_.track();
     const bool hasClip = st_.track_has_clip[t], any = app_.loopExists();
     const Rect box{(W_ - bw) / 2, 22, bw, H_ - 44};
@@ -793,7 +885,7 @@ void SamplerUI::projectSheet() {
     key({box.x + box.w - 84, box.y + 8, 72, 30}, "CLOSE", 0, false, [this] { projectOpen_ = false; }, false);
     const std::string ts = app_.toast();
     text(box.x + 18, box.y + 48, 10, kPaper, !ts.empty() ? ts : app_.loopText(), 0, true);
-    float y = box.y + 66;
+    float y = box.y + 58;
     auto row = [&](const std::string& label, const std::string& hint, bool enabled, bool hot, std::function<void()> f) {
         Rect r{box.x + 18, y, box.w - 36, bh};
         text(r.x + 10, r.y + bh / 2 - 6, 11.5f, hot ? kOrange : enabled ? kPaper : kLine, label, 0, true);
@@ -802,7 +894,10 @@ void SamplerUI::projectSheet() {
         y += bh + gap;
     };
     const std::string tn = "TRACK " + std::to_string(t + 1);
-    row("SAVE LOOP OF " + tn, "into the sample library (USER)", hasClip, false, [this] { app_.loopSave(); });
+    row("SAVE LOOP OF " + tn, "choose a name / SAVED / Loops", hasClip, false, [this] { app_.requestName(1); });
+    row("SAVE WHOLE PROJECT", "all tracks, sounds, loops and parameters", true, false, [this] { app_.requestName(2); });
+    row("OPEN SAVED PROJECT", "restore all tracks and recorded loops", true, false, [this] { app_.requestName(3); });
+    row("IMPORT ZIP PACK", "keep all files: loops and melodic samples included", true, false, [this] { app_.requestPack(); });
     row("CLEAR LOOP OF " + tn, "the other tracks keep theirs", hasClip, false, [this] { app_.loopClearTrack(); });
     const bool armed = clearArmed_ && now_ < clearArmed_;
     row(armed ? "TAP AGAIN: CLEAR ALL LOOPS" : "CLEAR ALL LOOPS", "the looper is clean again, loop length is free", any, armed, [this, armed] {
