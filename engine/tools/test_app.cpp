@@ -181,18 +181,37 @@ int main() {
       hold(SamplerApp::PLAY, false);
       CHECK(app.scale().octave == octaveBefore, "OCT modifier does not shift the app's octave");
       const auto originalPage = app.page();
+      // Both octave buttons expose the rate menu IMMEDIATELY, regardless
+      // of their order; the second button event can arrive much later.
+      hold(SamplerApp::OCT_DOWN, true); run(0.15);
+      CHECK(app.page() == originalPage, "OCT- by itself does not open RATE menu");
+      hold(SamplerApp::OCT_UP, true); run(0.04);
+      CHECK(app.page() == SamplerApp::P_CUE && app.knobs()[0].value == "1/4",
+            "OCT- then OCT+ opens NOTE REPEAT subdivision menu instantly");
+      hold(SamplerApp::OCT_DOWN, false); run(0.02);
+      CHECK(app.page() == SamplerApp::P_CUE,
+            "OCT- release keeps RATE menu visible while OCT+ remains held");
+      hold(SamplerApp::OCT_UP, false); run(0.04);
+      CHECK(app.page() == originalPage, "releasing OCT+ closes subdivision menu");
+      hold(SamplerApp::OCT_UP, true); run(0.10);
+      hold(SamplerApp::OCT_DOWN, true); run(0.04);
+      CHECK(app.page() == SamplerApp::P_CUE,
+            "OCT+ then OCT- also opens NOTE REPEAT menu instantly");
+      hold(SamplerApp::OCT_UP, false); hold(SamplerApp::OCT_DOWN, false);
+      CHECK(app.page() == originalPage,
+            "release in reverse order restores the original page");
       hold(SamplerApp::OCT_UP, true); run(2.15);
       CHECK(app.page() == SamplerApp::P_CUE && app.knobs()[0].value == "1/4",
             "OCT+ held two seconds opens CUE at 1/4");
       app.knobs()[0].set(1.f); run(0.05);
-      CHECK(app.knobs()[0].value == "1/32", "K1 chooses the 1/32 beat division");
+      CHECK(app.knobs()[0].value == "1/32T", "K1 can choose a 1/32 triplet");
       hold(SamplerApp::PLAY, true);
       run(0.15); const float cq0 = app.status().clipPos[0];
       run(0.10); const float cq1 = app.status().clipPos[0];
       CHECK(std::fabs(cq1 - cq0) < 0.15f,
             "while PLAY is held, CUE repeats a short BPM-locked region (%.3f -> %.3f)", cq0, cq1);
       enc(2, -1); run(0.05);
-      CHECK(app.knobs()[0].value == "1/16", "K1 changes the subdivision live during CUE");
+      CHECK(app.knobs()[0].value == "1/32", "K1 switches from triplet to straight during CUE");
       CHECK(app.midiControlStatus().find("K1:OK") != std::string::npos,
             "MIDI diagnostic recognizes incoming physical K1 CC18");
       hold(SamplerApp::PLAY, false); run(0.15);
@@ -211,11 +230,11 @@ int main() {
       run(0.05);
       CHECK(app.cueActive(), "OCT+ and PLAY starts CUE without a prior 2-second hold");
       enc(2, 1); run(0.08);
-      CHECK(app.cueDivision() == 5 && app.cueActive(),
-            "physical K1 selects 1/32 during held PLAY");
+      CHECK(app.cueDivision() == 11 && app.knobs()[0].value == "1/32T" && app.cueActive(),
+            "physical K1 selects 1/32T live during held PLAY");
       enc(2, -5); run(0.08);
-      CHECK(app.cueDivision() == 4 && app.cueActive(),
-            "physical K1 changes rate live while PLAY stays held");
+      CHECK(app.cueDivision() == 10 && app.knobs()[0].value == "1/32" && app.cueActive(),
+            "physical K1 switches triplet/straight live while PLAY stays held");
       hold(SamplerApp::PLAY, false); run(0.05);
       CHECK(!app.cueActive() && app.status().playing, "releasing PLAY alone restores normal loop");
       hold(SamplerApp::OCT_UP, false);
@@ -236,6 +255,18 @@ int main() {
       CHECK(diff < 1.e-6f && app.status().loopSamples == savedLoopLength,
             "CUE never modifies the recorded loop audio or duration (diff %.8f)", diff);
 
+      // Every binary rhythm has an adjacent triplet; the chosen value is
+      // accessible using K1 and visually distinct on the hardware display.
+      for (int base = 0; base < 6; ++base) {
+          app.setCueDivision(2 * base);
+          const std::string normal = app.knobs(SamplerApp::P_CUE)[0].value;
+          app.setCueDivision(2 * base + 1);
+          const std::string triplet = app.knobs(SamplerApp::P_CUE)[0].value;
+          CHECK(triplet == normal + "T",
+                "NOTE REPEAT supports straight %s and triplet %s",
+                normal.c_str(), triplet.c_str());
+      }
+      app.setCueDivision(4); // restore 1/4 for later tests
       // Hardware-only modifiers: NO added OCT+/OCT- buttons on Android.
       // The original deck transport and project editor must remain available.
       SamplerUI touchUi(app);
@@ -716,8 +747,13 @@ int main() {
               !hasText("+ IMPORT ZIP"),
               "HOME shows only inline BACK/ENTER and a filename, no modal browser");
         click(351.f, 184.f);
-        CHECK(app.browserDir().empty() && !app.wantFile(),
-              "HOME LIBRARY icon resets internal root without Android DocumentsUI");
+        CHECK(app.browserDir().empty() && !app.wantFile() &&
+              hasText("+ IMPORT ZIP") && hasText("OFFICIAL") &&
+              hasText("PACKS") && hasText("PROYECTOS") && hasText("SAVED"),
+              "HOME LIBRARY opens previous in-app library page with IMPORT ZIP");
+        click(205.f, 365.f); // actual + IMPORT ZIP button in library sheet
+        CHECK(app.wantPack() && !app.wantPack() && !app.wantFile(),
+              "library + IMPORT ZIP requests ZIP picker without changing the sample cursor");
         app.browserBack(); // deselect to show the archive root itself
         enc(6, 1); // first item: OFFICIAL
         CHECK(app.browserSelected() && app.browserSelected()->label == "OFFICIAL",
@@ -725,17 +761,17 @@ int main() {
         enc(6, 1); // second item: PACKS
         CHECK(app.browserSelected() && app.browserSelected()->label == "PACKS",
               "PRESETS moves row by row within root, including folders");
-        click(91.f, 26.f); // ENTER -> PACKS
+        click(200.f, 164.f); // sheet ENTER -> PACKS
         CHECK(app.browserDir() == "PACKS" && hasText("My Imported ZIP"),
               "ENTER visits selected folder, showing its name in HOME");
-        click(91.f, 26.f); // ENTER -> pack
+        click(200.f, 164.f); // sheet ENTER -> pack
         CHECK(app.browserDir() == "PACKS/My Imported ZIP",
               "ENTER visits imported ZIP's own subdirectory");
-        click(91.f, 26.f); // ENTER -> Drums
+        click(200.f, 164.f); // sheet ENTER -> Drums
         CHECK(app.browserDir() == "PACKS/My Imported ZIP/Drums",
               "ENTER visits nested Drums folder");
         app.selectTrack(4);
-        click(91.f, 26.f); // ENTER -> Kicks; auto-select first WAV on track 5
+        click(200.f, 164.f); // sheet ENTER -> Kicks; auto-select first WAV on track 5
         run(1.0);
         browser.frame(now);
         CHECK(app.browserDir() == "PACKS/My Imported ZIP/Drums/Kicks" &&
@@ -747,17 +783,20 @@ int main() {
         CHECK(app.browserSelected() && app.browserSelected()->label == "02_fuzz.wav" &&
               app.sampleLabel(4) == "02_fuzz",
               "PRESETS auto-loads next WAV immediately without pressing ENTER");
-        click(91.f, 26.f); // ENTER over WAV does not change folder or sample
+        click(200.f, 164.f); // ENTER over WAV does not change folder or sample
         CHECK(app.browserDir() == "PACKS/My Imported ZIP/Drums/Kicks" &&
               app.sampleLabel(4) == "02_fuzz",
               "ENTER on an audio file has no action (already loaded)");
-        click(40.f, 26.f); // BACK highlights Kicks in its parent
+        click(200.f, 126.f); // sheet BACK highlights Kicks in its parent
         CHECK(app.browserDir() == "PACKS/My Imported ZIP/Drums" &&
               app.browserSelected() && app.browserSelected()->label == "Kicks",
               "BACK returns one level and highlights previous folder");
-        click(40.f, 26.f); click(40.f, 26.f); click(40.f, 26.f);
+        click(200.f, 126.f); click(200.f, 126.f); click(200.f, 126.f);
         CHECK(app.browserDir().empty() && hasText("FM1-SAMPLER"),
               "BACK returns all the way to internal FM1-SAMPLER root");
+        click(660.f, 29.f); // CLOSE the library sheet to get back to HOME
+        CHECK(!hasText("+ IMPORT ZIP") && hasText("LIBRARY"),
+              "closing the library sheet restores HOME controls");
         click(351.f, 248.f);
         CHECK(hasText("SAVE PROJECT") && hasText("LOAD PROJECT") &&
               hasText("EXPORT ALL LOOPS"), "PROJECT retains saving and exporting actions");
