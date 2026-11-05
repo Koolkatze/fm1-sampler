@@ -628,10 +628,12 @@ int main() {
     { double ph = 0; for (long i = 0; i < (long)(1.0 * sr) / 256; i++) { for (int k = 0; k < 256; k++) { float v = 0.4f * std::sin(ph); ph += 2 * M_PI * 440.0 / sr; in[2 * k] = in[2 * k + 1] = v; } std::fill(buf.begin(), buf.end(), 0.f); s.process(buf.data(), in.data(), 256); std::this_thread::sleep_for(std::chrono::microseconds(200)); if (i % 5 == 0) { now += 33; app.tick(now); } } std::fill(in.begin(), in.end(), 0.f); }
     CHECK(app.micState() == 2, "mic sampling recording");
     enc(2, -1); run(3.0);
-    const bool micInUserLibrary = std::any_of(app.library().begin(), app.library().end(),
-                                            [](const SamplerApp::Entry& e) { return e.group == "User"; });
-    CHECK(app.micState() == 0 && micInUserLibrary,
-          "mic sample saved into User library even when project assets have their own category (%s)",
+    const bool micInSaved = std::any_of(app.library().begin(), app.library().end(),
+                                            [](const SamplerApp::Entry& e) {
+                                                return e.pack == "SAVED" && e.folder == "Recordings";
+                                            });
+    CHECK(app.micState() == 0 && micInSaved,
+          "microphone recording is available in SAVED/Recordings (%s)",
           app.sampleLabel(0).c_str());
     // import from disk: a WAV dropped into the data dir
     { std::ifstream src(std::string(getenv("HOME")) + "/fm1-sampler/samples/Bass/Fuzz.wav", std::ios::binary); std::ofstream dst("/tmp/fm1sampler_t2/sample_FromDisk.wav", std::ios::binary); dst << src.rdbuf(); }
