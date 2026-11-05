@@ -460,6 +460,105 @@ int main() {
         ui.touch(0, 701.f, 224.f, now + 7);
         ui.touch(2, 701.f, 224.f, now + 7);
         CHECK(!app.performanceActive(), "PROJECT EXIT button actually leaves LOOP mode");
+
+        // FULL PROJECT FILES: eight independent slots, not merely the legacy
+        // fm1_scenes.dat bank. Save must include the actual two COMPOSE clips,
+        // both scene audio packs, the complete C1-D1-C1 song, track processing,
+        // and the embedded WAVs for the original sampler assignments.
+        app.selectTrack(0);
+        const auto originalSong = app.songOrder();
+        const auto originalScale = app.scale();
+        const auto originalSceneMask = app.status().sceneMask;
+        const auto originalAlgo = app.state(0).algo;
+        const auto originalSample0 = app.sampleLabel(0);
+        const auto originalSample1 = app.sampleLabel(1);
+        CHECK(app.status().track_has_clip[0] && app.status().track_has_clip[1],
+              "two COMPOSE recordings are present before full-project save");
+        CHECK(app.saveFullProject(0), "Save Full Project starts asynchronous FMP2 snapshot");
+        for (int spin = 0; spin < 20 && app.fullProjectOperation() == 1; ++spin) run(0.14);
+        CHECK(app.fullProjectOperation() == 2 && app.fullProjectExists(0) &&
+              std::filesystem::file_size("/tmp/fm1sampler_t2/project_1.fm1p") > 100000,
+              "project slot 1 contains a real self-contained archive with audio");
+        app.setAlgo(5); app.selectScene(0); app.deleteScene(); run(0.25);
+        app.loopClear(); run(0.25);
+        CHECK(!app.status().track_has_clip[0] && !app.status().track_has_clip[1],
+              "the working composition can be emptied independently of saved project");
+        CHECK(app.loadFullProject(0), "Load Full Project starts validated background restoration");
+        for (int spin = 0; spin < 35 && app.fullProjectOperation() == 3; ++spin) run(0.12);
+        run(0.65);
+        CHECK(app.fullProjectOperation() == 4 &&
+              app.status().track_has_clip[0] && app.status().track_has_clip[1],
+              "project load restores both independent recorded COMPOSE loops");
+        CHECK(app.status().sceneMask == originalSceneMask &&
+              app.songOrder() == originalSong,
+              "project load restores all scenes and exact song arrangement");
+        CHECK(app.state(0).algo == originalAlgo && app.scale().scale == originalScale.scale &&
+              app.scale().root == originalScale.root &&
+              app.scale().octave == originalScale.octave,
+              "project load restores per-track algorithm and exact scale state");
+        CHECK(app.sampleLabel(0) != "" && app.sampleLabel(1) != "" &&
+              std::filesystem::exists("/tmp/fm1sampler_t2/project_assets/slot_1/track_1.wav"),
+              "project embeds and restores sampler source WAVs to independent project assets");
+        CHECK(!app.performanceActive() && !app.songMode(),
+              "project saved in COMPOSE loads in COMPOSE, not a different scene mode");
+
+        // A second independent slot saves the running SONG, while its original
+        // COMPOSE workspace remains separately recoverable through HOME/EXIT.
+        app.setSongMode(true); run(0.12);
+        app.playSong(); run(0.15);
+        CHECK(app.status().songPlaying && app.performanceActive() && app.songMode(),
+              "SONG playback is live before snapshot");
+        CHECK(app.saveFullProject(1), "save full project while SONG mode is active");
+        for (int spin = 0; spin < 25 && app.fullProjectOperation() == 1; ++spin) run(0.11);
+        CHECK(app.fullProjectOperation() == 2 && app.fullProjectExists(1),
+              "second independent slot stores SONG plus original COMPOSE");
+        app.exitPerformanceMode(); run(0.2);
+        CHECK(app.loadFullProject(1), "reload the second SONG-mode snapshot");
+        for (int spin = 0; spin < 35 && app.fullProjectOperation() == 3; ++spin) run(0.10);
+        run(0.08);
+        CHECK(app.fullProjectOperation() == 4 && app.performanceActive() &&
+              app.songMode() && app.songOrder() == originalSong,
+              "SONG project restores playback mode and full C1-D1-C1 arrangement");
+        CHECK(app.status().songPlaying && app.status().activeScene >= 0,
+              "SONG snapshot resumes its active scene and transport");
+        app.exitPerformanceMode(); run(0.30);
+        CHECK(app.status().track_has_clip[0] && app.status().track_has_clip[1],
+              "EXIT after a reloaded SONG restores the saved COMPOSE recordings");
+
+        // Truncated project must never overwrite the current unsaved workspace.
+        {
+            std::ifstream original("/tmp/fm1sampler_t2/project_1.fm1p", std::ios::binary);
+            std::ofstream broken("/tmp/fm1sampler_t2/project_3.fm1p", std::ios::binary);
+            std::array<char, 1024> fragment{};
+            original.read(fragment.data(), (std::streamsize)fragment.size());
+            broken.write(fragment.data(), original.gcount());
+        }
+        CHECK(app.loadFullProject(2), "corrupt archived slot is detected asynchronously");
+        for (int spin = 0; spin < 25 && app.fullProjectOperation() == 3; ++spin) run(0.10);
+        CHECK(app.fullProjectOperation() == -2 &&
+              app.status().track_has_clip[0] && app.status().track_has_clip[1],
+              "corrupt/truncated project cannot destroy the active composition");
+
+        ui.openProject(true);
+        ui.frame(now + 9);
+        bool fullSave = false, fullLoad = false;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+            fullSave |= op.text == "SAVE PROJECT";
+            fullLoad |= op.text == "LOAD PROJECT";
+        }
+        CHECK(fullSave && fullLoad, "PROJECT page has distinct SAVE/LOAD COMPLETE PROJECT actions");
+        ui.touch(0, 243.f, 64.f, now + 9);
+        ui.touch(2, 243.f, 64.f, now + 9);
+        ui.frame(now + 10);
+        bool slotPicker = false, slot1 = false, slot2 = false;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+            slotPicker |= op.text == "SAVE COMPLETE PROJECT";
+            slot1 |= op.text == "PROJECT 1";
+            slot2 |= op.text == "PROJECT 2";
+        }
+        CHECK(slotPicker && slot1 && slot2,
+              "full-project save picker shows independent slots and overwrite protection");
+        ui.openProject(false);
         app.loopClear(); run(0.25);
     }
     {   // loudness normalisation and auto-tune, on synthetic samples: a quiet and a loud 220 Hz tone
