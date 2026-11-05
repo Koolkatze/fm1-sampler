@@ -14,7 +14,7 @@ void setPalette(bool light) {
     if (light) { BLACK = rgb(241, 239, 233); PAPER = rgb(17, 17, 17); DIM = rgb(154, 150, 140); BAR = rgb(214, 211, 201); ACCENT = rgb(255, 90, 10); }
     else { BLACK = rgb(0, 0, 0); PAPER = rgb(255, 255, 255); DIM = rgb(106, 106, 106); BAR = rgb(42, 42, 42); ACCENT = rgb(255, 106, 31); }
 }
-const char* kPage[] = {"SAMPLE", "FX", "ENVELOPE", "LFO", "ARP", "TAPE", "MIXER", "KEY", "LOOP", "LENGTH", "CUE"};
+const char* kPage[] = {"SAMPLE", "FX", "ENVELOPE", "LFO", "ARP", "TAPE", "MIXER", "KEY", "LOOP", "LENGTH", "NOTE REPEAT"};
 const char* kAlgo[] = {"MELODIC", "ONE-SHOT", "LOOPED", "KIT/SLICE", "GRANULAR", "PAULSTRETCH"};
 const char* kScaleName[] = {"CHROM", "MIX", "MAJ", "MIN", "HMIN", "PHRYG", "MIN+", "OFF"};
 const char* kNote[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
@@ -448,7 +448,7 @@ void SamplerApp::cueHold(bool down) {
         return;
     }
     if (recordingNow()) { say("FINISH RECORDING FIRST"); return; }
-    if (!loopAny_ || st_.loopSamples <= 0) { say("NO LOOP FOR CUE"); return; }
+    if (!loopAny_ || st_.loopSamples <= 0) { say("NO LOOP FOR NOTE REPEAT"); return; }
     if (!cueActive_) {
         cueActive_ = true;
         s_.setCue(true, cueDivision_);
@@ -615,7 +615,7 @@ void SamplerApp::button(int b, bool down) {
                 if (!cueSelect_) { cueReturnPage_ = page_; cueSelect_ = true; }
                 page_ = P_CUE;
                 cueHold(true);
-            } else say("NO LOOP FOR CUE");
+            } else say("NO LOOP FOR NOTE REPEAT");
             return;
         }
         if (held_ & (1u << OCT_DOWN)) {
@@ -831,8 +831,8 @@ void SamplerApp::draw(uint32_t now) {
     std::string line;
     if (mic_ == 1) line = "MIC: WAITING FOR SOUND";
     else if (mic_ == 2) line = fmt("MIC: RECORDING %.1fS", st_.sampleSeconds);
-    else if (cueActive_) line = std::string("CUE 1/") + std::to_string(1 << cueDivision_) + "  REPEATING";
-    else if (cueSelect_) line = "CUE RATE: TURN K1, HOLD PLAY";
+    else if (cueActive_) line = std::string("NOTE REPEAT 1/") + std::to_string(1 << cueDivision_) + "  REPEATING";
+    else if (cueSelect_) line = "NOTE REPEAT: K1 RATE, HOLD PLAY";
     else if (!toast().empty()) line = toast();
     else if (auditionAt_) { const Entry& e = lib_[(size_t)libCursor_]; line = ">" + e.label + "  " + e.group; }
     else line = std::string(kAlgo[ts_[track_].algo]) + "  " + loopText();
@@ -865,7 +865,7 @@ void SamplerApp::draw(uint32_t now) {
         rects_[70 + i] = ~0ull;
         rect(70 + i, cx, cy + 38, bw, 3, ACCENT);
     }
-    const char* hint = mic_ == 1 ? (page_ == P_SAVE ? "K4 = TRIGGER LEVEL  LINE = THRESHOLD" : "K1 = TRIGGER LEVEL  LINE = THRESHOLD") : mic_ == 2 ? "RECORDING  K1 ON LOOP PAGE STOPS"  : page_ == P_CUE ? "K1 RATE LIVE  HOLD OCT+ AND PLAY" : page_ == P_LEN ? "TURN K1: X2 OR /2  THE LOOP REPEATS" : page_ == P_SAVE ? "SAVE AND CLEAR LOOPS: PROJECT MENU ON THE PHONE" : page_ == P_KEY ? "KEYS FOLLOW THE KEY  CHANGE ANY TIME"
+    const char* hint = mic_ == 1 ? (page_ == P_SAVE ? "K4 = TRIGGER LEVEL  LINE = THRESHOLD" : "K1 = TRIGGER LEVEL  LINE = THRESHOLD") : mic_ == 2 ? "RECORDING  K1 ON LOOP PAGE STOPS"  : page_ == P_CUE ? "K1 RATE LIVE  OCT+ + HOLD PLAY" : page_ == P_LEN ? "TURN K1: X2 OR /2  THE LOOP REPEATS" : page_ == P_SAVE ? "SAVE AND CLEAR LOOPS: PROJECT MENU ON THE PHONE" : page_ == P_KEY ? "KEYS FOLLOW THE KEY  CHANGE ANY TIME"
                      : "SEL TRACK  PRE BROWSE  ALG ALGORITHM";
     drawText(90, 12, 228, 1, DIM, BLACK, hint, 38);
     needClear_ = false;
@@ -896,7 +896,7 @@ void SamplerApp::hero(uint32_t now, const Knobs& k) {
         }
     } else if (page_ == P_CUE) {
         drawText(100, x0, y0 + 8, 3, ACCENT, BLACK, std::string("1/") + std::to_string(1 << cueDivision_), 9);
-        drawText(101, x0, y0 + 32, 2, PAPER, BLACK, cueActive_ ? "CUE REPEATING" : "HOLD PLAY FOR CUE", 18);
+        drawText(101, x0, y0 + 32, 2, PAPER, BLACK, cueActive_ ? "NOTE REPEAT" : "OCT+ + HOLD PLAY", 18);
     } else if (page_ == P_LEN) {   // the loop length in big letters
         char b[32];
         if (st_.loopSamples > 0) snprintf(b, sizeof b, "%.0f BARS", (double)st_.loopBars); else snprintf(b, sizeof b, "NO LOOP");
