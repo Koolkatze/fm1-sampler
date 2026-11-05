@@ -20,6 +20,6 @@ jobs:
           mkdir -p firmware/build/host
           cc -std=c11 -O2 -DFM1_HOST_TEST -I firmware/sdk/include -I firmware/app -I firmware/app/synth \
             firmware/hosttest/ctrl_host.c -lm -o firmware/build/host/ctrl_host
-      - name: Verify physical OCT On/Off and PLAY on USB + BLE
+      - name: Verify physical OCT On/Off and PLAY over USB
         working-directory: firmware/build/host
         run: ./ctrl_host
