@@ -734,8 +734,8 @@ int main() {
         click(91.f, 26.f); // ENTER -> Drums
         CHECK(app.browserDir() == "PACKS/My Imported ZIP/Drums",
               "ENTER visits nested Drums folder");
-        click(91.f, 26.f); // ENTER -> Kicks; auto-select first WAV
         app.selectTrack(4);
+        click(91.f, 26.f); // ENTER -> Kicks; auto-select first WAV on track 5
         run(1.0);
         browser.frame(now);
         CHECK(app.browserDir() == "PACKS/My Imported ZIP/Drums/Kicks" &&
