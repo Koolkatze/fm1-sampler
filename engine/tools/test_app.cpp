@@ -686,12 +686,22 @@ int main() {
         CHECK(hasText("ENTER >") && hasText("< BACK") &&
               hasText("PACKS") && hasText("FOLDERS") && hasText("SAMPLES"),
               "library exposes the native-styled archive/folder/wave icons and ENTER/BACK arrows");
+        auto breadcrumb = [&]() -> std::string {
+            for (const auto& op : browser.ops())
+                if (op.type == UiOp::TEXT && op.text.rfind("PACKS /", 0) == 0)
+                    return op.text;
+            return "";
+        };
+        const std::string currentFolder = breadcrumb();
         browser.touch(0, 555.f, 65.f, now); // BACK from currently selected sample folder
         browser.frame(now);
-        CHECK(hasText("PACKS /"), "BACK returns to the parent archive level");
-        browser.touch(0, 660.f, 65.f, now); // ENTER the selected folder
+        const std::string parentFolder = breadcrumb();
+        CHECK(!parentFolder.empty() && parentFolder != currentFolder,
+              "BACK returns to the exact parent folder without choosing a sample");
+        browser.touch(0, 660.f, 65.f, now); // ENTER the selected child folder
         browser.frame(now);
-        CHECK(hasText("PACKS / Keys"), "ENTER re-opens a selected directory without loading a sound");
+        CHECK(breadcrumb() == currentFolder,
+              "ENTER re-opens the previously selected folder, including nested PROJECT folders");
     }
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL OK", fails);
     return fails ? 1 : 0;
