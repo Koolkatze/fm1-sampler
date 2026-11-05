@@ -216,6 +216,9 @@ private:
     std::string browserDir_; // Relative to FM1-SAMPLER root
     std::vector<BrowserItem> browserItems_;
     int browserIndex_ = -1;
+    // BACK on the FM1-SAMPLER root shows the archive itself (-1). ENTER
+    // must still reopen the previously highlighted root folder, not stall.
+    int rootLastIndex_ = 0;
     uint32_t browserTouchedAt_ = 0; // selected folder/file shown temporarily on physical FM-1 LCD
     // Absolute assignment paths survive library rebuilds. Entry indices
     // are UI cursors only; they must never determine what audio gets archived.
