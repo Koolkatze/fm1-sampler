@@ -126,6 +126,49 @@ with no ENTER required; ENTER is reserved for entering folders and BACK for
 the parent directory. Closing LIBRARY returns to HOME, retaining navigation
 state. No second independent folder list or selection state is used.
 
+## SAVE BACKUP / IMPORT BACKUP (0.38.6)
+
+The HOME folder icon opens the **LIBRARY** page containing three independent
+actions on its bottom bar: **+ IMPORT ZIP**, **SAVE BACKUP**, and
+**IMPORT BACKUP**.
+
+- **SAVE BACKUP:** opens Android's **Create document** picker and saves
+  `FM1-SAMPLER-BACKUP-<date>.zip` wherever the user chooses (Downloads,
+  Documents, USB, cloud document provider, etc.). The backup contains the
+  entire *saved* app-private `FM1-SAMPLER/` tree: all eight project slots and
+  their FMP2 archives and asset files, scene/SONG files, completed loop WAVs,
+  microphone recordings, imported WAVs, OFFICIAL instruments, full PACKS,
+  non-audio files and directory hierarchy.
+- **IMPORT BACKUP:** opens Android's **Open document** picker. It only
+  accepts a versioned FM1-SAMPLER backup archive. The app checks every ZIP
+  entry against a manifest of file sizes and SHA-256 hashes, rejects
+  path-traversal, duplicate entries, missing entries or corrupt data and
+  validates the whole archive **before** making changes.
+- **KEEP EXISTING (default):** restores only missing files; existing project
+  slots, saved loops and imports are never overwritten.
+- **REPLACE (explicit confirmation):** restores files from the backup whose
+  names collide, first moving previous originals into an independent
+  `files/FM1-SAMPLER-RECOVERY/<timestamp>/` directory outside the live
+  library. The prior files are retained for recovery, not silently deleted.
+- Both operations stream the bytes and execute off the UI thread. A status
+  dialog reports how many files were saved, imported or protected. The user
+  should restart the app after import to load the restored project files.
+- Recording and in-progress project save/load operations block backup
+  creation/import to avoid snapshotting partially written projects.
+
+**Important:** the ZIP includes **files already saved**, not notes/loops
+currently present only in RAM. **SAVE PROJECT first** (and finish any
+recording) to capture the current COMPOSE, SONG, scenes, live loop clips,
+samples and settings into a self-contained FMP2 project before saving the
+library ZIP. The exported ZIP is user-owned and survives uninstalling the
+APK when saved outside the app; this solves migrating between different
+Android debug APK signing keys or package IDs (export from the old APK,
+import into the new one).
+
+Imported and exported ZIP documents are not deleted by the app. An ordinary
+sample-pack ZIP selected through **+ IMPORT ZIP** is different from a full
+backup; use **IMPORT BACKUP** only for ZIPs made with **SAVE BACKUP**.
+
 ## EXPORT ALL LOOPS (0.38.2)
 
 The **PROJECT** page has three separate actions: SAVE PROJECT,
