@@ -1,0 +1,97 @@
+name: Publish FM1-SAMPLER library preview
+
+on:
+  push:
+    branches: [feature/oneshot-packs-on-scenes]
+    paths:
+      - 'android/app/build.gradle'
+      - 'android/app/src/main/java/**'
+      - 'engine/**'
+      - '.github/workflows/publish-fm1-library-preview.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fm1-library-preview-publish
+  cancel-in-progress: true
+
+jobs:
+  publish-library-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Check sampler regression tests
+        run: |
+          make -C engine -j2 all
+          make -C engine "$GITHUB_WORKSPACE/engine/build/test_app"
+          mkdir -p "$HOME/fm1-sampler"
+          ln -s "$GITHUB_WORKSPACE/samples" "$HOME/fm1-sampler/samples"
+          ./engine/build/test_app
+      - name: Install Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android toolchain
+        run: |
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          for attempt in 1 2 3; do
+            if "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-34" "build-tools;34.0.0" "ndk;27.2.12479018" "cmake;3.22.1"; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep 8
+          done
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Compile installable debug APK
+        working-directory: android
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Stage and check APK
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.0-preview.apk
+          unzip -t dist/FM1-Sampler-Library-0.38.0-preview.apk | tail -n 1
+          sha256sum dist/FM1-Sampler-Library-0.38.0-preview.apk
+      - name: Publish on GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v0.38-library-preview.1
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## FM1 Sampler 0.38 — FM1-SAMPLER library root (preview)
+
+          **Download and install the attached `FM1-Sampler-Library-0.38.0-preview.apk`.**
+
+          - On first launch, creates the `FM1-SAMPLER` root inside the application's private files directory.
+          - Opens the library at `FM1-SAMPLER /`, with four permanent folders: `PROYECTOS`, `OFFICIAL`, `SAVED`, and `PACKS`.
+          - `SAVED/LOOPS` holds named loop recordings; `SAVED/RECORDINGS` holds microphone takes; `SAVED/IMPORTS` holds individual audio imports.
+          - `PROYECTOS` holds full, self-contained FMP2 projects and scene/SONG data.
+          - `OFFICIAL` holds the app's bundled Bass, Drums, Keys and Pads instruments.
+          - Every imported ZIP is extracted to `FM1-SAMPLER/PACKS/<pack name>/`, preserving its original folder hierarchy and **all** source files. Compatible compressed audio also gets a playable WAV copy.
+          - The ZIP source selected in Downloads, USB, Google Drive, etc. is retained in its original location; Android does not allow us to silently move/delete another provider's document.
+          - The library keeps the `ENTER >` and `< BACK` controls for unlimited folder depth.
+          - Attempts to migrate older samples, packs, recordings, scenes and FMP2 project files from the **same package** without overwriting existing files.
+          - Preserves eight tracks, USB MIDI control, loop transport, 12 scenes, COMPOSE and SONG mode, tape FX, and complete project saves.
+
+          **Storage clarification:** `FM1-SAMPLER` is an app-private directory. It is the library root *inside FM1 Sampler*, not a public folder in the phone's Files app.
+
+          **Android package:** `com.ferluht.fm1sampler.scenes` (installs separately from the production package). Files belonging to a different app package are not directly migrated.
+
+          **Update warning:** This is a debug-signed prerelease. GitHub runners may use different signing keys between builds; Android may refuse an in-place update. Do **not** uninstall an older copy with irreplaceable private projects/recordings unless you have backups.
+
+          **Validation:** Automated C++ sampler/scene/song/navigation tests and Android debug APK compilation passed. Physical FM-1 hardware and phone storage migration have not yet been tested on-device. No FM-1 firmware flash is required for these library changes.
+
+          Source: [FM1 Sampler library changes](https://github.com/Koolkatze/fm1-sampler/pull/3).
+          EOF
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.0-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md --prerelease
+          else
+            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.0-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38 — FM1-SAMPLER library and imported packs"               --notes-file release-notes.md               --prerelease
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets,isPrerelease             --jq '{url: .url, isPrerelease: .isPrerelease, files: [.assets[].name]}'
