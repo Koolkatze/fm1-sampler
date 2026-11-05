@@ -127,7 +127,7 @@ public:
     void clearSample(int track);
     void setLoopSpeed(float speed);       // 0.25..2, tape speed of all loops together; 1 = locked to the transport
     void setLoopSource(int src);          // what the loop records: 0 microphone, 1 the track's sound
-    bool saveClip(int track);             // the loop of `track` as sample_*.wav in the data dir
+    bool saveClip(int track, const std::string& name = ""); // exact named loop in samples/SAVED/Loops
     int loopPeaks(int track /* -1 = all tracks mixed */, float* out, int maxBins) const;
 
     // ---- microphone sampling ----
