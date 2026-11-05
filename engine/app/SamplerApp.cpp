@@ -2,6 +2,7 @@
 #include "../ui/Theme.h"
 #include <Common.h>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -96,8 +97,8 @@ void SamplerApp::refreshLibrary() {
             auto p = rel.begin();
             if (p == rel.end()) continue;
             const std::string pack = (p++)->string();
-            const std::string folder = (p == rel.end()) ? "" :
-                rel.parent_path().lexically_relative(pack).generic_string();
+            const fs::path relFolder = rel.parent_path().lexically_relative(pack);
+            const std::string folder = relFolder == fs::path(".") ? "" : relFolder.generic_string();
             const std::string stem = it->path().stem().string();
             const std::string category = pack == "OFFICIAL" ? folder : folder.empty() ? pack : folder;
             const bool kit = pack == "OFFICIAL" && folder == "Drums" &&
@@ -916,7 +917,7 @@ void SamplerApp::tick(uint32_t now) {
                 const std::string path = s_.dataDir() + "/project_" +
                     std::to_string(pendingProjectLabelSlot_ + 1) + ".name";
                 std::ofstream out(path, std::ios::trunc);
-                if (out) out << pendingProjectLabel_ << "\\n";
+                if (out) out << pendingProjectLabel_ << "\n";
                 pendingProjectLabel_.clear();
                 pendingProjectLabelSlot_ = -1;
             }
