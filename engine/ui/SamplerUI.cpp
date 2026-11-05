@@ -1037,7 +1037,7 @@ void SamplerUI::projectSheet() {
         button({left.x + 20 + buttonW, left.y + 43, buttonW, 24}, "LOAD PROJECT", false,
                [this] { projectSlotsMode_ = 2; projectConfirmSlot_ = -1; }, 8.8f);
         button({left.x + 30 + 2 * buttonW, left.y + 43, buttonW, 24},
-               "EXPORT LOOP", false, [this] { app_.requestLoopExport(); }, 8.8f, true);
+               "EXPORT ALL LOOPS", false, [this] { app_.requestLoopExport(); }, 8.8f, true);
         const std::string note = app_.toast().empty() ? app_.loopText() : app_.toast();
         text(left.x + 14, left.y + 76, 10, DIM, fit(note, left.w - 26, 10), 0, true);
         const float rh = std::min(38.f, (left.h - 100.f) / 7.f - 3.f);
