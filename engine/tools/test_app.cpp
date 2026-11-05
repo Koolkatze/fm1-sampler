@@ -502,6 +502,22 @@ int main() {
               "project embeds its source WAV and preserves original sampler names");
         CHECK(!app.performanceActive() && !app.songMode(),
               "project saved in COMPOSE loads in COMPOSE, not a different scene mode");
+        app.refreshLibrary();
+        CHECK(app.sampleLabel(0) == originalSample0 &&
+              app.state(0).entry >= 0 &&
+              app.library()[(size_t)app.state(0).entry].label == originalSample0,
+              "library refresh keeps the restored source WAV assignment");
+        CHECK(app.saveFullProject(3), "a restored project can be saved again into a new independent slot");
+        for (int spin = 0; spin < 25 && app.fullProjectOperation() == 1; ++spin) run(0.12);
+        CHECK(app.fullProjectOperation() == 2 && app.fullProjectExists(3),
+              "re-saving after library refresh embeds the correct original WAV, not a stale entry index");
+        CHECK(app.loadFullProject(3), "re-saved project reloads from an independent archive");
+        for (int spin = 0; spin < 25 && app.fullProjectOperation() == 3; ++spin) run(0.12);
+        run(0.3);
+        CHECK(app.sampleLabel(0) == originalSample0 &&
+              app.sampleLabel(1) == originalSample1 &&
+              app.status().track_has_clip[0] && app.status().track_has_clip[1],
+              "second-generation project preserves both source names and two recorded loops");
 
         // A second independent slot saves the running SONG, while its original
         // COMPOSE workspace remains separately recoverable through HOME/EXIT.

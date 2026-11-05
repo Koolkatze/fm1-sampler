@@ -882,10 +882,10 @@ void SamplerUI::projectSheet() {
         button({left.x + left.w - 110, left.y + 42, 100, 22}, "LOAD PROJECT", false,
                [this] { projectSlotsMode_ = 2; projectConfirmSlot_ = -1; }, 9);
         const std::string note = app_.toast().empty() ? app_.loopText() : app_.toast();
-        text(left.x + 14, left.y + 49, 10, DIM, fit(note, left.w - 26, 10), 0, true);
-        const float rh = std::min(38.f, (left.h - 80.f) / 7.f - 3.f);
-        const float step = (left.h - 76.f) / 7.f;
-        float y = left.y + 65;
+        text(left.x + 14, left.y + 76, 10, DIM, fit(note, left.w - 26, 10), 0, true);
+        const float rh = std::min(38.f, (left.h - 100.f) / 7.f - 3.f);
+        const float step = (left.h - 100.f) / 7.f;
+        float y = left.y + 86;
         auto row = [&](const std::string& label, const std::string& hint,
                        bool enabled, bool highlighted, std::function<void()> onTap) {
             Rect rr{left.x + 12, y, left.w - 24, rh};

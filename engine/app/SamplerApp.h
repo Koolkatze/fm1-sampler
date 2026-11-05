@@ -186,6 +186,10 @@ private:
     uint32_t repaintAt_ = 0; int repaintCount_ = 0;
     // library
     std::vector<Entry> lib_;
+    // Absolute assignment paths survive library rebuilds. Entry indices
+    // are UI cursors only; they must never determine what audio gets archived.
+    std::array<std::string, kTracks> trackSourcePaths_{};
+    std::array<std::string, kTracks> trackSourceNames_{};
     int libCursor_ = 0, loadedCursor_ = -1;
     uint32_t auditionAt_ = 0, previewOffAt_ = 0; int previewNote_ = -1, previewTrack_ = -1;
     bool wantFile_ = false, previewAfterLoad_ = false;

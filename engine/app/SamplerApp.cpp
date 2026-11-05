@@ -64,11 +64,11 @@ SamplerApp::SamplerApp(Session& s, Send send) : s_(s), send_(std::move(send)) {
     s_.setLoopSource(loopSrc_);
     // a first session to play with: keys on 1, a drum kit on 2, bass on 3
     auto first = [&](const char* group, int track) {
-        for (size_t i = 0; i < lib_.size(); i++) if (lib_[i].group == group) { ts_[track].entry = (int)i; if (group == std::string("Drums")) ts_[track].algo = 3; s_.loadSamplePath(lib_[i].path, lib_[i].kit, track); return; }
+        for (size_t i = 0; i < lib_.size(); i++) if (lib_[i].group == group) { ts_[track].entry = (int)i; if (group == std::string("Drums")) ts_[track].algo = 3; trackSourcePaths_[track] = lib_[i].path; trackSourceNames_[track] = lib_[i].label; s_.loadSamplePath(lib_[i].path, lib_[i].kit, track); return; }
     };
     // the default project: Tape Key, Acoustic bass, Shiny, Trap Kit
     auto byLabel = [&](const char* label, int track) {
-        for (size_t i = 0; i < lib_.size(); i++) if (lib_[i].label == label) { ts_[track].entry = (int)i; if (lib_[i].kit) ts_[track].algo = 3; s_.loadSamplePath(lib_[i].path, lib_[i].kit, track); return; }
+        for (size_t i = 0; i < lib_.size(); i++) if (lib_[i].label == label) { ts_[track].entry = (int)i; if (lib_[i].kit) ts_[track].algo = 3; trackSourcePaths_[track] = lib_[i].path; trackSourceNames_[track] = lib_[i].label; s_.loadSamplePath(lib_[i].path, lib_[i].kit, track); return; }
     };
     byLabel("Tape Key", 0); byLabel("Acoustic", 1); byLabel("Shiny", 2); byLabel("TrapKit", 3); (void)first;
     for (int t = 0; t < kTracks; t++) applyMix(t);
@@ -89,6 +89,23 @@ void SamplerApp::refreshLibrary() {
         if (nm.rfind("sample_", 0) == 0) nm = nm.substr(7);
         lib_.push_back({nm, "User", p, false});
     }
+    // Project-embedded WAVs are deliberately outside the regular sample
+    // library. Re-insert them into the browser whenever it refreshes; then
+    // resolve each track's entry from the stable source path, never an old
+    // index which might now refer to another sample.
+    for (int t = 0; t < kTracks; ++t) {
+        const auto& path = trackSourcePaths_[(size_t)t];
+        if (path.empty()) { ts_[(size_t)t].entry = -1; continue; }
+        auto it = std::find_if(lib_.begin(), lib_.end(),
+                               [&](const Entry& e) { return e.path == path; });
+        if (it == lib_.end() && std::filesystem::exists(path)) {
+            auto name = trackSourceNames_[(size_t)t];
+            if (name.empty()) name = std::filesystem::path(path).stem().string();
+            lib_.push_back({name, "Project", path, ts_[(size_t)t].algo == 3});
+            it = lib_.end() - 1;
+        }
+        ts_[(size_t)t].entry = it == lib_.end() ? -1 : (int)(it - lib_.begin());
+    }
     if (libCursor_ >= (int)lib_.size()) libCursor_ = 0;
 }
 void SamplerApp::browse(int d) {
@@ -100,6 +117,8 @@ void SamplerApp::loadEntry(int i) {
     if (i < 0 || i >= (int)lib_.size()) return;
     libCursor_ = i; auditionAt_ = 0;
     const Entry& e = lib_[(size_t)i];
+    trackSourcePaths_[(size_t)track_] = e.path;
+    trackSourceNames_[(size_t)track_] = e.label;
     TrackState& t = ts_[track_];
     t.entry = i; t.tuned = false; t.start = 0.f; t.end = 1.f;
     if (e.kit) t.algo = 3; else if (t.algo == 3) t.algo = 0;
@@ -459,10 +478,8 @@ bool SamplerApp::saveFullProject(int slot) {
         const std::string label = s_.trackLabel(i);
         std::snprintf(m.sampleNames[(size_t)i].data(),
                       m.sampleNames[(size_t)i].size(), "%s", label.c_str());
-        const int index = ts_[(size_t)i].entry;
-        if (index >= 0 && index < (int)lib_.size())
-            sources[(size_t)i] = lib_[(size_t)index].path;
-        else if (hasSample(i)) {
+        sources[(size_t)i] = trackSourcePaths_[(size_t)i];
+        if (sources[(size_t)i].empty() && hasSample(i)) {
             say("SAMPLE SOURCE MISSING ON TRACK " + std::to_string(i + 1));
             return false; // never silently save a project without its sound
         }
@@ -517,21 +534,25 @@ void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
     held_ = 0; mic_ = 0; micTrack_ = 0;
     auditionAt_ = 0; previewNote_ = -1; previewAfterLoad_ = false; commitAt_ = 0;
     pending_.clear(); pendingBytes_ = 0; needClear_ = true; fwDirty_ = true;
-    refreshLibrary(); // regenerate entry indices for self-contained source WAVs
+    // Install stable paths *before* rebuilding the browser so future
+    // refreshes/secondary saves cannot accidentally pick a different WAV.
     for (int i = 0; i < kTracks; ++i) {
-        ts_[(size_t)i].entry = -1;
         const std::string& path = project.samplePaths[(size_t)i];
-        if (path.empty()) {
-            s_.clearSample(i); continue;
-        }
         const auto& stored = m.sampleNames[(size_t)i];
         const auto end = std::find(stored.begin(), stored.end(), '\0');
         std::string title(stored.begin(), end);
-        if (title.empty()) title = "P" + std::to_string(project.slot + 1) +
-                                   " TRACK " + std::to_string(i + 1);
-        lib_.push_back({title, "Project", path, ts_[(size_t)i].algo == 3});
-        ts_[(size_t)i].entry = (int)lib_.size() - 1;
-        s_.loadSamplePath(path, ts_[(size_t)i].algo == 3, i, title);
+        if (title.empty() && !path.empty())
+            title = "P" + std::to_string(project.slot + 1) +
+                    " TRACK " + std::to_string(i + 1);
+        trackSourcePaths_[(size_t)i] = path;
+        trackSourceNames_[(size_t)i] = title;
+    }
+    refreshLibrary();
+    for (int i = 0; i < kTracks; ++i) {
+        const auto& path = trackSourcePaths_[(size_t)i];
+        if (path.empty()) s_.clearSample(i);
+        else s_.loadSamplePath(path, ts_[(size_t)i].algo == 3, i,
+                               trackSourceNames_[(size_t)i]);
     }
     libCursor_ = std::max(0, ts_[(size_t)track_].entry);
     applyFx();
