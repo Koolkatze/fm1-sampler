@@ -136,6 +136,38 @@ int main() {
       CHECK(app.status().playing, "releasing PLAY returns to the running loop");
       hold(SamplerApp::OCT_UP, false); run(0.04);
       CHECK(app.page() == originalPage, "releasing OCT+ restores the previous page");
+
+      // Real touchscreen path: CUE is a visible momentary pad on the deck,
+      // not an inaccessible tiny tab. Its K1 division is editable live.
+      SamplerUI touchUi(app);
+      touchUi.setSize(860.f, 400.f, 0.f, 0.f);
+      touchUi.frame(now);
+      touchUi.touch(0, 236.f, 248.f, now);
+      CHECK(app.cueActive() && app.page() == SamplerApp::P_CUE,
+            "Android touchscreen CUE starts immediately on press in composition mode");
+      app.knobs(SamplerApp::P_CUE)[0].set(1.f);
+      run(0.05);
+      CHECK(app.cueDivision() == 5 && app.cueActive(),
+            "Android CUE rate changes live through K1");
+      touchUi.touch(2, 236.f, 248.f, now);
+      run(0.04);
+      CHECK(!app.cueActive() && app.status().playing,
+            "Android touchscreen CUE releases back to running loop");
+
+      s.seek(0.7f); run(0.05);
+      touchUi.frame(now);
+      touchUi.touch(0, 44.f, 248.f, now);
+      touchUi.frame(now + 1100);
+      touchUi.touch(2, 44.f, 248.f, now + 1100);
+      run(0.05);
+      CHECK(app.status().pos < app.status().loopSamples * 0.3 && app.status().playing,
+            "Android holding PLAY for one second restarts the loop");
+      // The hardware also differentiates a short tap from a timed 1s hold.
+      s.seek(0.7f); run(0.04);
+      hold(SamplerApp::PLAY, true); run(1.05);
+      hold(SamplerApp::PLAY, false); run(0.05);
+      CHECK(app.status().pos < app.status().loopSamples * 0.3 && app.status().playing,
+            "physical PLAY held one second restarts rather than stopping the loop");
       app.loopClear(); run(0.3); }
     {   // Live C1/D1 scenes, independent track groups, ordered song, persistence and light/dark UI.
         app.selectTrack(0); app.loopClear(); run(0.2);
@@ -241,6 +273,30 @@ int main() {
         }
         CHECK(narrowSong, "narrow screen switches to scene/song column");
         app.setSongMode(false);
+        CHECK(app.performanceActive() && !app.songMode(),
+              "LOOP mode enables scene-key bank");
+        app.exitPerformanceMode(); run(0.08);
+        CHECK(!app.performanceActive() && !app.songMode(),
+              "EXIT LOOP returns to normal composition and chromatic keyboard");
+        app.setSongMode(true); run(0.08);
+        CHECK(app.performanceActive() && app.songMode(), "SONG mode enters successfully");
+        app.exitPerformanceMode(); run(0.08);
+        CHECK(!app.performanceActive() && !app.songMode(),
+              "EXIT SONG returns to composition");
+        // Verify touchable EXIT beside LAUNCH in the actual PROJECT right panel.
+        ui.setSize(860.f, 400.f, 0.f, 0.f);
+        ui.openProject(true);
+        app.setSongMode(false); ui.frame(now + 7);
+        bool exitVisible = false, composeVisible = false;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+            exitVisible |= op.text == "EXIT";
+            composeVisible |= op.text == "COMPOSE";
+        }
+        CHECK(exitVisible && composeVisible, "PROJECT shows EXIT beside LAUNCH and COMPOSE mode tab");
+        // Right column x=445..846; four actions at y~221, EXIT is third.
+        ui.touch(0, 701.f, 224.f, now + 7);
+        ui.touch(2, 701.f, 224.f, now + 7);
+        CHECK(!app.performanceActive(), "PROJECT EXIT button actually leaves LOOP mode");
         app.loopClear(); run(0.25);
     }
     {   // loudness normalisation and auto-tune, on synthetic samples: a quiet and a loud 220 Hz tone
