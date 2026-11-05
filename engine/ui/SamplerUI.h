@@ -52,8 +52,6 @@ private:
     void pagePanel(Rect r);
     void librarySheet();
     void projectSheet();
-    void toggleTouchCueModifier();
-    void toggleTouchRestartModifier();
 
     SamplerApp& app_;
     float W_ = 860, H_ = 400, top_ = 0, bottom_ = 0;
@@ -62,9 +60,6 @@ private:
     Hit active_{};
     bool haveActive_ = false;
     uint32_t now_ = 0;
-    // Touch modifiers latch to permit one-finger control on a phone.
-    bool cueTouchArmed_ = false, cueTouchPlay_ = false, restartTouchArmed_ = false;
-    SamplerApp::Page cueTouchReturn_ = SamplerApp::P_HOME;
     Session::Status st_{};
     bool linkMidi_ = false, linkAudio_ = false, sheetOpen_ = false, editor_ = false, projectOpen_ = false;
     float sheetScroll_ = 0, sheetLastY_ = 0, sheetMoved_ = 0;
