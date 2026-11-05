@@ -68,10 +68,6 @@ public:
     int cueDivision() const { return cueDivision_; }
     bool cueModifierHeld() const { return !!(held_ & (1u << OCT_UP)); }
     bool octDownModifierHeld() const { return !!(held_ & (1u << OCT_DOWN)); }
-    // Public touch events feed the same hardware MIDI button state machine.
-    void cueModifierTouch(bool down);
-    void octDownModifierTouch(bool down);
-    void playButtonTouch(bool down);
     bool cueActive() const { return cueActive_; }
     bool recordingNow() const { bool r = st_.freeRecording || st_.freeArmed; for (int t = 0; t < kTracks; t++) r |= st_.track_clip_rec[t]; return r; }
     void endRecording();                          // PLAY / STOP while recording: the take ends, the loop keeps playing
