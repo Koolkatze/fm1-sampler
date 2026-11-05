@@ -931,12 +931,17 @@ void SamplerUI::librarySheet() {
             }
         });
 
-    button({box.x + 15, box.y + box.h - 37, 135, 28}, "+ IMPORT ZIP", false,
-           [this] { app_.requestPack(); }, 10, true);
-    text(box.x + 163, box.y + box.h - 22, 9, DIM,
-         browseRows_.empty() ? "0 FILES" :
-         std::to_string(browseSelected_ + 1) + "/" + std::to_string(browseRows_.size()) +
-             "  -  PRESETS SELECTS / WAV AUTO LOADS", 0, false);
+    // Backup buttons share this familiar LIBRARY sheet with IMPORT ZIP.
+    // SAF pickers open only when the user explicitly requests export/import.
+    const float actionsY = box.y + box.h - 35;
+    text(box.x + box.w - 14, actionsY - 9, 8.7f, DIM,
+         std::to_string(browseRows_.size()) + " ITEMS  /  PRESETS: SELECT", 2, false);
+    button({box.x + 15, actionsY, 129, 28}, "+ IMPORT ZIP", false,
+           [this] { app_.requestPack(); }, 9.4f, true);
+    button({box.x + 155, actionsY, 148, 28}, "SAVE BACKUP", false,
+           [this] { app_.requestBackupExport(); }, 9.8f);
+    button({box.x + 314, actionsY, 161, 28}, "IMPORT BACKUP", false,
+           [this] { app_.requestBackupImport(); }, 9.8f);
 }
 
 // PROJECT: original loop actions on the left; scene / song sequencer on the
