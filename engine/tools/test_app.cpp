@@ -823,9 +823,28 @@ int main() {
         click(200.f, 126.f); click(200.f, 126.f); click(200.f, 126.f);
         CHECK(app.browserDir().empty() && hasText("FM1-SAMPLER"),
               "BACK returns all the way to internal FM1-SAMPLER root");
+        click(200.f, 126.f); // BACK again highlights the FM1-SAMPLER root itself
+        CHECK(app.browserDir().empty() && app.browserSelected() == nullptr &&
+              hasText("FM1-SAMPLER"),
+              "BACK on FM1-SAMPLER root selects the archive, without a child");
+        click(200.f, 164.f); // ENTER directly from archive root: NO PRESETS detent needed
+        CHECK(app.browserDir() == "PACKS" && hasText("My Imported ZIP"),
+              "ENTER from FM1-SAMPLER root reopens last selected folder on LIBRARY sheet");
+        click(200.f, 126.f); // PACKS -> root, still highlighted
+        click(200.f, 126.f); // deselect child; FM1-SAMPLER root
+        CHECK(app.browserDir().empty() && app.browserSelected() == nullptr,
+              "repeated BACK can reach the unselected archive root again");
         click(660.f, 29.f); // CLOSE the library sheet to get back to HOME
         CHECK(!hasText("+ IMPORT ZIP") && hasText("LIBRARY"),
               "closing the library sheet restores HOME controls");
+        click(91.f, 26.f); // HOME's ENTER must use the same root navigator
+        CHECK(app.browserDir() == "PACKS" && hasText("My Imported ZIP"),
+              "HOME ENTER from FM1-SAMPLER root navigates correctly without PRESETS");
+        click(40.f, 26.f); // HOME BACK -> root, highlighted PACKS
+        click(40.f, 26.f); // HOME BACK -> root itself
+        click(91.f, 26.f); // HOME ENTER again, must not lock up
+        CHECK(app.browserDir() == "PACKS" && !app.wantFile(),
+              "BACK then ENTER at root remains repeatable without external file picker");
         click(351.f, 248.f);
         CHECK(hasText("SAVE PROJECT") && hasText("LOAD PROJECT") &&
               hasText("EXPORT ALL LOOPS"), "PROJECT retains saving and exporting actions");
