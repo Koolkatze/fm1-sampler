@@ -326,9 +326,18 @@ std::string SamplerApp::sceneLabel(int slot) {
 void SamplerApp::setSongMode(bool song) {
     if (song == songMode_ && sceneKeys_) return;
     if (st_.songPlaying) s_.stopSong();
+    if (!song) s_.cancelSceneLaunch();
     songMode_ = song;
-    sceneKeys_ = true;  // capture physical C1..B1 pad bank only after enabling Loop Mode
+    sceneKeys_ = true;  // explicitly enter performance mode; never trap composition keys
     say(songMode_ ? "SONG MODE" : "LOOP MODE: C1-B1");
+}
+void SamplerApp::exitPerformanceMode() {
+    if (st_.songPlaying) s_.stopSong();
+    else s_.cancelSceneLaunch();  // leave running loops audible but cancel queued scene
+    songMode_ = false;
+    sceneKeys_ = false;
+    if (cueActive_) cueHold(false);
+    say("COMPOSITION MODE");
 }
 void SamplerApp::selectScene(int slot, bool trigger) {
     if (slot < 0 || slot >= Session::kScenes) return;
@@ -414,6 +423,22 @@ void SamplerApp::transportSet(bool play) {
     if (recordingNow()) { if (!play) endRecording(); return; }
     if (songMode_) { if (play) playSong(); else stopSong(); return; }
     s_.play(play);
+}
+void SamplerApp::restartLoop() {
+    if (recordingNow()) { say("FINISH RECORDING FIRST"); return; }
+    if (songMode_ && !songOrder_.empty()) {
+        playSong();  // restart the full arrangement on long PLAY in SONG mode
+        return;
+    }
+    if (st_.loopSamples <= 0) { say("NO LOOP TO RESTART"); return; }
+    cueHold(false);
+    s_.seek(0.f);
+    s_.play(true);
+    say("LOOP FROM START");
+}
+void SamplerApp::setCueDivision(int division) {
+    cueDivision_ = std::max(0, std::min(5, division));
+    if (cueActive_) s_.setCue(true, cueDivision_);
 }
 void SamplerApp::cueHold(bool down) {
     if (!down) {
@@ -544,7 +569,7 @@ void SamplerApp::onSysex(const uint8_t* m, size_t n) {
     else if (m[6] == 0x42) needClear_ = true;     // the firmware had its own screen up: repaint everything
 }
 void SamplerApp::button(int b, bool down) {
-    lastLed_ = ~0ull;   // the firmware's own LED handling must not win: the active page stays lit, the others go dark
+    lastLed_ = ~0ull;   // preserve the hardware LED state
     if (down) held_ |= 1u << b; else held_ &= ~(1u << b);
     if (b == OCT_UP) {
         if (down) {
@@ -558,9 +583,32 @@ void SamplerApp::button(int b, bool down) {
         return;   // octave changes arrive separately as EV_SCALE on short standalone taps
     }
     if (b == OCT_DOWN) return;
-    if (b == PLAY && !down && cueActive_) {
-        cueHold(false);    // gate: release PLAY to return to the normal loop
-        return;
+    if (b == PLAY) {
+        if (!down) {
+            if (cueActive_) cueHold(false);
+            else if (!playLongFired_ && !playModified_) transportPlay();
+            playModified_ = false;
+            playLongFired_ = false;
+            return;
+        }
+        playDownAt_ = nowMs_;
+        playLongFired_ = false;
+        playModified_ = false;
+        if (held_ & (1u << OCT_UP)) {
+            playModified_ = true;
+            if (!recordingNow() && loopAny_ && st_.loopSamples > 0) {
+                if (!cueSelect_) { cueReturnPage_ = page_; cueSelect_ = true; }
+                page_ = P_CUE;
+                cueHold(true);
+            } else say("NO LOOP FOR CUE");
+            return;
+        }
+        if (held_ & (1u << OCT_DOWN)) {
+            playModified_ = true;
+            restartLoop();
+            return;
+        }
+        return;  // normal PLAY is decided on release: tap vs >=1 second hold
     }
     if (b == SAVE) {   // only the LOOP page: saving and clearing loops lives in the phone's PROJECT menu
         if (down) page_ = P_SAVE;
@@ -568,7 +616,7 @@ void SamplerApp::button(int b, bool down) {
     }
     if (!down) return;
     switch (b) {
-    case HOME: page_ = P_HOME; break;
+    case HOME: exitPerformanceMode(); page_ = P_HOME; break;
     case FX: page_ = P_FX; break;
     case ENV: page_ = P_ENV; break;
     case LFO: page_ = P_LFO; break;
@@ -577,25 +625,6 @@ void SamplerApp::button(int b, bool down) {
     case EDIT: page_ = P_MIX; break;
     case GLO: page_ = P_KEY; break;
     case SEL: page_ = P_LEN; break;
-    case PLAY:
-        if (held_ & (1u << OCT_UP)) {
-            if (recordingNow()) { endRecording(); break; }
-            if (!loopAny_ || st_.loopSamples <= 0) { say("NO LOOP FOR CUE"); break; }
-            if (!cueSelect_) { cueReturnPage_ = page_; cueSelect_ = true; }
-            page_ = P_CUE;
-            cueHold(true);
-            break;
-        }
-        if (held_ & (1u << OCT_DOWN)) {
-            if (recordingNow()) { endRecording(); break; }
-            s_.setCue(false, cueDivision_);
-            s_.seek(0.f);
-            s_.play(true);
-            say("LOOP FROM START");
-            break;
-        }
-        transportPlay();
-        break;
     case REC: loopRecord(); break;
     default: break;
     }
@@ -624,6 +653,13 @@ void SamplerApp::tick(uint32_t now) {
             if (st_.arrangement[i] >= 0 && st_.arrangement[i] < Session::kScenes)
                 songOrder_.push_back(st_.arrangement[i]);
         songSelected_ = songOrder_.empty() ? -1 : 0;
+    }
+    // A one-second physical PLAY hold restarts the loop in the audio engine;
+    // short taps retain the original play/pause behavior on release.
+    if ((held_ & (1u << PLAY)) && !playModified_ && !playLongFired_ &&
+        now - playDownAt_ >= 1000U) {
+        playLongFired_ = true;
+        restartLoop();
     }
     // OCT+ held for two seconds opens the beat division selector without changing key octave.
     if ((held_ & (1u << OCT_UP)) && !cueSelect_ && now - octUpAt_ >= 2000U) {
