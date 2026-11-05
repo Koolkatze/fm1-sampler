@@ -138,7 +138,7 @@ struct Session::Impl {
     // CUE / beat repeat uses a separate read head. The original transport runs underneath
     // so releasing PLAY drops back on the original beat (slip-style return).
     bool cueActive = false;
-    int cueDivision = 2;                         // 1/4 note by default; 0..5 = 1/1..1/32
+    int cueDivision = 4;                         // interleaved straight/triplet: 1/1,1/1T,...1/32T (0..11)
     double cueStart = 0.0, cuePhase = 0.0;
     float cueMix = 0.f;
     std::vector<double> cueCpArr;
@@ -687,8 +687,12 @@ struct Session::Impl {
             if ((int)cueCpArr.size() < n) {
                 cueCpArr.resize((size_t)n); cueMixArr.resize((size_t)n); cueEdgeArr.resize((size_t)n);
             }
+            // Every binary duration has a triplet alternative (two thirds
+            // of the straight note): 1/4T is 1/6 of a 4/4 bar.
+            const double straight = (240.0 * sr / std::max(1.f, bpm))
+                                  / (double)(1 << (cueDivision / 2));
             const double length = std::max(1.0, std::min((double)loopSamples,
-                (240.0 * sr / std::max(1.f, bpm)) / (double)(1 << cueDivision)));
+                straight * ((cueDivision & 1) ? 2.0 / 3.0 : 1.0)));
             const double fade = std::max(1.0, std::min(0.004 * sr, length * 0.12));
             cuePhase = std::fmod(cuePhase, length);
             const float blendStep = 1.f / std::max(1, (int)(0.006f * sr));
@@ -1048,7 +1052,7 @@ void Session::seek(float f) {
 }
 void Session::setCue(bool on, int division) {
     d->post([this, on, division] {
-        d->cueDivision = std::min(5, std::max(0, division));
+        d->cueDivision = std::min(11, std::max(0, division));
         if (on && d->loopSamples > 0 && !d->freeRec && !d->freeArmed) {
             if (!d->cueActive) {
                 d->cueStart = d->tapePos;
