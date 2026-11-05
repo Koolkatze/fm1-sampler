@@ -198,10 +198,9 @@ int main() {
       for (const auto& op : touchUi.ops()) if (op.type == UiOp::TEXT)
           modifierButton |= op.text == "OCT+" || op.text == "OCT-";
       CHECK(!modifierButton, "editor has no OCT+ or OCT- touch buttons");
-      touchUi.touch(0, 365.f, 22.f, now);
-      touchUi.touch(2, 365.f, 22.f, now);
-      CHECK(!app.cueModifierHeld() && !app.octDownModifierHeld(),
-            "former editor modifier area does not arm hardware octave keys");
+      // The space previously occupied by synthetic OCT buttons belongs to
+      // the original editor's loop-source control. Do not tap it here: doing so
+      // would change the test recording source and prevent scene recordings.
 
       // Normal phone PLAY and STOP do not initiate an OCT- combo, even if
       // the physical octave key is held. A real MIDI PLAY/STOP event must
