@@ -604,19 +604,13 @@ void SamplerUI::deck(Rect r) {
         const std::string route = directory.empty() ? "FM1-SAMPLER /" :
                                   "FM1-SAMPLER / " + directory;
         text(M, 61, 9.2f, kDim, fit(route, mx - M - 55, 9.2f), 0, false);
-        // Track badge is NOT beside the theme control. It sits in the
-        // 57px gap immediately to the LEFT of the sample waveform viewer.
-        // The enlarged T1..T8 also remains a touch control for track cycling.
-        const Rect trackBadge{mx + 38, 35, x0 - (mx + 38) - 5, 97};
-        rrect(trackBadge, R_CONTROL, theme::SURFACE);
-        stroke(trackBadge, R_CONTROL, kOrange, 1.6f);
-        rrect({trackBadge.x + 4, trackBadge.y + 7, 2.5f, trackBadge.h - 14},
-              0, kOrange);
-        text(trackBadge.x + trackBadge.w / 2 + 2, trackBadge.y + 43,
-             22, kOrange, "T" + std::to_string(t + 1), 1, true);
-        text(trackBadge.x + trackBadge.w / 2 + 2, trackBadge.y + 74,
-             7.5f, kDim, "TRACK", 1, true);
-        tap(trackBadge, [this, t] {
+        // Only the large orange T1..T8 is drawn left of the waveform.
+        // No background, outline, decorative stripe or "TRACK" caption.
+        // The transparent touch target still cycles through tracks.
+        const Rect trackTap{mx + 38, 35, x0 - (mx + 38) - 5, 97};
+        text(trackTap.x + trackTap.w / 2, trackTap.y + trackTap.h / 2,
+             26, kOrange, "T" + std::to_string(t + 1), 1, true);
+        tap(trackTap, [this, t] {
             app_.selectTrack((t + 1) % SamplerApp::kTracks);
         });
     }
