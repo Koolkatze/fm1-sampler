@@ -18,6 +18,8 @@ public:
     void setEditor(bool on) { editor_ = on; }   // false: the cassette deck, true: sample / page editor
     const std::vector<UiOp>& ops() const { return ops_; }
     void touch(int action /*0 down 1 move 2 up*/, float x, float y, uint32_t nowMs);
+    void setShortcutHelpVisible(bool on);
+    bool shortcutHelpVisible() const { return shortcutHelpVisible_; }
 
 private:
     struct Rect { float x, y, w, h; bool has(float px, float py) const { return px >= x && px < x + w && py >= y && py < y + h; } };
@@ -52,8 +54,6 @@ private:
     void pagePanel(Rect r);
     void librarySheet();
     void projectSheet();
-    void setShortcutHelpVisible(bool on);
-    bool shortcutHelpVisible() const { return shortcutHelpVisible_; }
 
     SamplerApp& app_;
     float W_ = 860, H_ = 400, top_ = 0, bottom_ = 0;
