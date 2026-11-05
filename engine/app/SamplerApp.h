@@ -74,6 +74,8 @@ public:
     bool wantFile() { bool w = wantFile_; wantFile_ = false; return w; }   // the UI asked for the disk picker: Java polls this
     void requestFile() { wantFile_ = true; }
     void requestPack() { wantPack_ = true; }
+    void requestBackupExport() { dialogRequest_ = 4; }  // Android SAF CREATE_DOCUMENT
+    void requestBackupImport() { dialogRequest_ = 5; }  // Android SAF OPEN_DOCUMENT
     bool wantPack() { bool result = wantPack_; wantPack_ = false; return result; }
     void requestLoopExport() { wantLoopExport_ = true; }
     bool wantLoopExport() { bool result = wantLoopExport_; wantLoopExport_ = false; return result; }
