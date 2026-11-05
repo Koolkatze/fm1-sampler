@@ -17,14 +17,15 @@ import java.nio.ByteOrder;
 
 /** A file picked from the disk -> a 16-bit PCM WAV in the app's data dir (sample_*.wav = the library). WAV is converted in place of decoding; mp3, aac, ogg, flac... go through MediaCodec. */
 final class AudioImport {
-    private static final int MAX_SECONDS = 90;
+    private static final int MAX_SECONDS = 180;
     private AudioImport() { }
 
     static String displayName(Context c, Uri uri) {
         try (android.database.Cursor q = c.getContentResolver().query(uri, null, null, null, null)) {
             if (q != null && q.moveToFirst()) { int i = q.getColumnIndex(OpenableColumns.DISPLAY_NAME); if (i >= 0) return q.getString(i); }
         } catch (Exception ignored) { }
-        return "import";
+        return "file".equals(uri.getScheme()) && uri.getLastPathSegment() != null
+            ? new File(uri.getPath()).getName() : "import";
     }
 
     /** Returns the written file. */
@@ -32,7 +33,9 @@ final class AudioImport {
         String base = displayName(c, uri);
         int dot = base.lastIndexOf('.'); if (dot > 0) base = base.substring(0, dot);
         base = base.replaceAll("[^A-Za-z0-9 _-]", "").trim(); if (base.isEmpty()) base = "import";
-        File out = new File(dir, "sample_" + base + ".wav");
+        if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("Cannot create import folder");
+        File out = new File(dir, base + ".wav");
+        for (int i = 2; out.exists(); i++) out = new File(dir, base + " (" + i + ").wav");
         Pcm p = null;
         try (InputStream in = c.getContentResolver().openInputStream(uri)) { if (in != null) p = readWav(in); }
         if (p == null) p = decode(c, uri);
@@ -60,7 +63,7 @@ final class AudioImport {
         }
         if (dataOff < 0 || ch < 1 || ch > 2 || !(fmt == 1 || fmt == 3)) return null;   // other layouts: let MediaCodec try
         int bytes = bits / 8, frames = dataLen / (bytes * ch);
-        frames = Math.min(frames, MAX_SECONDS * rate);
+        if (frames > MAX_SECONDS * rate) throw new IOException("Audio too long for sampler");
         short[] s = new short[frames * ch];
         for (int i = 0; i < s.length; i++) {
             int o = dataOff + i * bytes; float v;
@@ -123,6 +126,7 @@ final class AudioImport {
                     if (of.containsKey(MediaFormat.KEY_SAMPLE_RATE)) rate = of.getInteger(MediaFormat.KEY_SAMPLE_RATE);
                 }
             }
+            if (!outDone) throw new IOException("Audio exceeds the sampler length limit");
             byte[] raw = pcm.toByteArray();
             short[] s = new short[raw.length / 2];
             ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(s);
