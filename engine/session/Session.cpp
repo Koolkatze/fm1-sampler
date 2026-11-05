@@ -950,6 +950,13 @@ void Session::startSong(const std::vector<int>& order) {
         d->activateScene(d->songOrder[0]);
     });
 }
+void Session::cancelSceneLaunch() {
+    d->post([this] {
+        d->pendingScene = -1;
+        d->a_queuedScene = -1;
+        d->songPlaying = false;
+    });
+}
 void Session::stopSong() {
     d->post([this] {
         d->songPlaying = false; d->songStep = -1; d->pendingScene = -1;
