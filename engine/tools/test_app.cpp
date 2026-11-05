@@ -691,10 +691,13 @@ int main() {
             return false;
         };
         auto breadcrumb = [&]() -> std::string {
+            // HOME also displays the library path. The browser sheet is
+            // drawn later and its breadcrumb is the last matching text.
+            std::string crumb;
             for (const auto& op : browser.ops())
                 if (op.type == UiOp::TEXT && op.text.rfind("FM1-SAMPLER /", 0) == 0)
-                    return op.text;
-            return "";
+                    crumb = op.text;
+            return crumb;
         };
         CHECK(hasText("ROOT") && hasText("FOLDERS") && hasText("SAMPLES"),
               "HOME shows the always-visible archive, folder and waveform navigation");
@@ -707,7 +710,6 @@ int main() {
               "FM1-SAMPLER always opens at its four permanent top-level folders");
         // Alphabetical folder order: OFFICIAL, PACKS, PROYECTOS, SAVED.
         click(285.f, 165.f); click(660.f, 65.f);
-        fprintf(stderr, "DBG browser after PACKS: [%s]\n", breadcrumb().c_str());
         CHECK(breadcrumb() == "FM1-SAMPLER / PACKS", "ENTER visits PACKS");
         click(285.f, 129.f); click(660.f, 65.f);
         CHECK(breadcrumb() == "FM1-SAMPLER / PACKS/My Imported ZIP" ||
