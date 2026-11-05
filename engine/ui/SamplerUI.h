@@ -51,6 +51,7 @@ private:
     void sampleArea(Rect r);
     void pagePanel(Rect r);
     void librarySheet();
+    void openLibrary();
     void projectSheet();
 
     SamplerApp& app_;
@@ -63,6 +64,8 @@ private:
     Session::Status st_{};
     bool linkMidi_ = false, linkAudio_ = false, sheetOpen_ = false, editor_ = false, projectOpen_ = false;
     float sheetScroll_ = 0, sheetLastY_ = 0, sheetMoved_ = 0;
+    int libLevel_ = 0; // 0 archive packs, 1 folders, 2 sample waveforms
+    std::string libPack_ = "OFFICIAL", libFolder_ = "Keys";
     Rect sheetList_{0, 0, 0, 0};
     uint32_t clearArmed_ = 0;
     float dragY_ = 0, dragV_ = 0;
