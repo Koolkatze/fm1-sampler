@@ -124,6 +124,33 @@ int main(void) {
     CHECK(count_button(FM1_MIDI_USB, 0x81, 1) == up1 + 1,
           "OCT+ Note Off transmitted on release");
 
+    /* Both physical octave buttons are a menu shortcut, never two
+     * independent octave taps. MIDI still sends BOTH Note On/Off pairs. */
+    {
+        const int octBefore = sc_oct;
+        const int oldDown = count_button(FM1_MIDI_USB, 0x91, BTN_OCT_DOWN);
+        const int oldUp = count_button(FM1_MIDI_USB, 0x91, BTN_OCT_UP);
+        ctl.buttons |= 1U << BTN_OCT_DOWN; tick(); tick(); tick();
+        ctl.buttons |= 1U << BTN_OCT_UP; tick();
+        CHECK(count_button(FM1_MIDI_USB, 0x91, BTN_OCT_DOWN) == oldDown + 1 &&
+              count_button(FM1_MIDI_USB, 0x91, BTN_OCT_UP) == oldUp + 1,
+              "OCT- then OCT+ both send USB MIDI Note On to activate RATE menu");
+        ctl.buttons &= ~(1U << BTN_OCT_DOWN); tick();
+        ctl.buttons &= ~(1U << BTN_OCT_UP); tick();
+        CHECK(sc_oct == octBefore,
+              "OCT- then OCT+ leaves octave unchanged after both releases");
+
+        ctl.buttons |= 1U << BTN_OCT_UP; tick();
+        ctl.buttons |= 1U << BTN_OCT_DOWN; tick();
+        ctl.buttons &= ~(1U << BTN_OCT_UP); tick();
+        ctl.buttons &= ~(1U << BTN_OCT_DOWN); tick();
+        CHECK(sc_oct == octBefore,
+              "OCT+ then OCT- also opens menu without shifting octave");
+        CHECK(count_button(FM1_MIDI_USB, 0x81, BTN_OCT_DOWN) >= oldDown + 2 &&
+              count_button(FM1_MIDI_USB, 0x81, BTN_OCT_UP) >= oldUp + 2,
+              "both OCT shortcut orders deliver matching Note Off events");
+    }
+
     /* chord mode */
     scale_set(3, 0, 0, MODE_CHORD);
     midi_n = 0; press_key(0, 1);
