@@ -244,11 +244,31 @@ int main() {
         CHECK((app.status().sceneMask & 5u) == 5u &&
               (app.status().sceneTracks[2] & 3u) == 3u,
               "D1 contains tracks 1+2 while C1 preserves only track 1");
-        app.setSongMode(false);   // enable the scene note bank explicitly
+        const int32_t compositionLength = app.status().loopSamples;
+        const uint32_t originalMask = ((uint32_t)1 << 0) | ((uint32_t)1 << 1);
+        CHECK((app.status().track_has_clip[0] && app.status().track_has_clip[1]),
+              "composition has two separately recorded loops before performance");
+        std::vector<float> baseline0(64), baseline1(64);
+        s.loopPeaks(0, baseline0.data(), (int)baseline0.size());
+        s.loopPeaks(1, baseline1.data(), (int)baseline1.size());
+        app.setSongMode(false);   // snapshot composition before the scene bank
         uint8_t c1[3] = {0x90, 36, 100}, d1[3] = {0x90, 38, 100};
         app.onMidi(c1, 3); run(1.2);
         CHECK(app.status().activeScene == 0 && !app.status().track_has_clip[1],
               "pressing Ableton MIDI C1 (36) launches scene C1 without changing D1");
+        app.exitPerformanceMode(); run(0.25);
+        CHECK(!app.performanceActive() && app.status().track_has_clip[0] &&
+              app.status().track_has_clip[1] && app.status().loopSamples == compositionLength,
+              "EXIT restores all composition clips and original loop length after launching C1");
+        std::vector<float> restored0(64), restored1(64);
+        s.loopPeaks(0, restored0.data(), (int)restored0.size());
+        s.loopPeaks(1, restored1.data(), (int)restored1.size());
+        float maxDiff = 0.f;
+        for (size_t i = 0; i < baseline0.size(); ++i)
+            maxDiff = std::max(maxDiff, std::max(std::fabs(restored0[i] - baseline0[i]),
+                                               std::fabs(restored1[i] - baseline1[i])));
+        CHECK(maxDiff < 1e-5f, "EXIT restores the exact original loop audio (peak diff %.7f)", maxDiff);
+        app.setSongMode(false); run(0.06);
         app.onMidi(d1, 3); run(1.2);
         CHECK(app.status().activeScene == 2 && app.status().track_has_clip[1],
               "pressing Ableton MIDI D1 (38) launches a different loop structure");
@@ -273,6 +293,12 @@ int main() {
         app.playSong(); run(0.12);
         CHECK(app.status().songPlaying && app.status().songStep == 0 &&
               app.status().activeScene == 0, "Song starts on its first scene");
+        app.exitPerformanceMode(); run(0.25);
+        CHECK(app.status().track_has_clip[0] && app.status().track_has_clip[1] &&
+              app.status().loopSamples == compositionLength && !app.status().songPlaying,
+              "COMPOSE restores original eight-track recording workspace during SONG playback");
+        app.setSongMode(true); run(0.06);
+        app.playSong(); run(0.12);
         run(3.4);
         CHECK(!app.status().songPlaying && !app.status().playing,
               "Song ends after the final scene instead of looping forever");

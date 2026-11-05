@@ -325,15 +325,20 @@ std::string SamplerApp::sceneLabel(int slot) {
 }
 void SamplerApp::setSongMode(bool song) {
     if (song == songMode_ && sceneKeys_) return;
+    if (recordingNow()) { say("FINISH RECORDING FIRST"); return; }
+    if (!sceneKeys_) s_.beginPerformanceMode(); // one COW snapshot for LOOP and SONG
     if (st_.songPlaying) s_.stopSong();
     if (!song) s_.cancelSceneLaunch();
     songMode_ = song;
-    sceneKeys_ = true;  // explicitly enter performance mode; never trap composition keys
+    sceneKeys_ = true;
     say(songMode_ ? "SONG MODE" : "LOOP MODE: C1-B1");
 }
 void SamplerApp::exitPerformanceMode() {
-    if (st_.songPlaying) s_.stopSong();
-    else s_.cancelSceneLaunch();  // leave running loops audible but cancel queued scene
+    // The old code only cancelled playback; scene activation had already
+    // replaced all 8 clip pointers. Restore the edit workspace instead.
+    if (sceneKeys_) s_.restoreComposition();
+    else if (st_.songPlaying) s_.stopSong();
+    else s_.cancelSceneLaunch();
     songMode_ = false;
     sceneKeys_ = false;
     if (cueActive_) cueHold(false);

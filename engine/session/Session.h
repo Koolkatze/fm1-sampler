@@ -103,6 +103,8 @@ public:
     void launchScene(int slot);            // quantized to the next bar
     void startSong(const std::vector<int>& order);
     void stopSong();
+    void beginPerformanceMode(); // snapshot current eight-track composition on audio thread
+    void restoreComposition();   // EXIT / COMPOSE / HOME restore audio clips and transport
     void cancelSceneLaunch();  // leave LOOP mode without stopping currently audible loops
     void saveArrangement(const std::vector<int>& order);
     void setLoopSpeed(float speed);       // 0.25..2, tape speed of all loops together; 1 = locked to the transport

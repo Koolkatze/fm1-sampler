@@ -61,6 +61,20 @@ struct Session::Impl {
         std::array<bool, kTracks> has{};
     };
     std::array<Scene, Session::kScenes> scenes;
+    // Independent edit workspace. Scene launches swap the active clip pointers;
+    // retain the complete composition using COW before the FIRST launch, and
+    // restore those eight clip buffers when leaving either performance mode.
+    // Samples assigned to tracks are held separately and never replaced.
+    struct Composition {
+        bool valid = false;
+        std::array<std::shared_ptr<std::vector<float>>, kTracks> clips{};
+        std::array<bool, kTracks> has{}, rec{};
+        int32_t samples = 0;
+        int bars = 4;
+        float tempo = 120.f;
+        double pos = 0., tapePos = 0., rate = 1.;
+        bool playing = false, stopping = false;
+    } composition;
     int activeScene = -1, pendingScene = -1;
     double pendingAt = 0;   // audio frame of the next whole-bar boundary
     int sceneFadeFrames = 0;  // short scene start fade, no click on clip changes
@@ -165,6 +179,51 @@ struct Session::Impl {
             if (scenes[(size_t)i].filled) mask |= 1u << i;
         }
         a_sceneMask.store(mask);
+    }
+
+    void retainComposition() {
+        if (composition.valid) return;  // LOOP <-> SONG must not overwrite original
+        if (freeRec || freeArmed) return;
+        for (const auto& t : tracks) if (t->clipRec) return;
+        composition.valid = true;
+        composition.samples = loopSamples;
+        composition.bars = loopBars; composition.tempo = bpm;
+        composition.pos = pos; composition.tapePos = tapePos;
+        composition.rate = rate;
+        composition.playing = playing; composition.stopping = stopping;
+        for (int i = 0; i < kTracks; ++i) {
+            const auto& t = *tracks[(size_t)i];
+            composition.clips[(size_t)i] = t.clip;
+            composition.has[(size_t)i] = t.clipHas;
+            composition.rec[(size_t)i] = t.clipRec;
+        }
+    }
+    void restoreComposition() {
+        // Cancel even a scene which was only queued; prevent it from firing
+        // after EXIT/HOME/COMPOSE during the next audio callback.
+        pendingScene = -1; songPlaying = false; songStep = -1;
+        a_queuedScene = -1; a_songPlaying = false; a_songStep = -1;
+        if (!composition.valid) return;
+        const Composition saved = std::move(composition);
+        composition = Composition{};
+        freeRec = freeArmed = false; a_free = a_freeArmed = false;
+        for (int i = 0; i < kTracks; ++i) {
+            auto& t = *tracks[(size_t)i];
+            releaseAll(t);
+            t.clip = saved.clips[(size_t)i] ? saved.clips[(size_t)i]
+                                           : std::make_shared<std::vector<float>>();
+            t.clipHas = saved.has[(size_t)i];
+            t.clipRec = saved.rec[(size_t)i]; t.recPrevOk = false;
+        }
+        loopSamples = saved.samples; a_loop = loopSamples;
+        loopBars = saved.bars; a_bars = loopBars;
+        bpm = saved.tempo; a_bpm = bpm;
+        pos = saved.pos; tapePos = saved.tapePos; rate = saved.rate;
+        playing = saved.playing; stopping = saved.stopping;
+        activeScene = -1; a_activeScene = -1;
+        scrubActive = scrubTail = false;
+        cueActive = false; cueMix = 0.f;
+        sceneFadeFrames = std::max(1, sr / 180);
     }
 
     // Change all 8 loop tracks together. Copy-on-write clips make this constant-time
@@ -926,6 +985,7 @@ void Session::launchScene(int slot) {
     d->post([this, slot] {
         if (!d->scenes[(size_t)slot].filled || d->freeRec || d->freeArmed) return;
         for (const auto& t : d->tracks) if (t->clipRec) return;
+        d->retainComposition();
         d->songPlaying = false;
         d->songStep = -1;
         if (!d->playing || d->stopping || d->loopSamples <= 0) {
@@ -946,9 +1006,16 @@ void Session::startSong(const std::vector<int>& order) {
         for (int slot : order) if (slot >= 0 && slot < kScenes &&
                d->scenes[(size_t)slot].filled && valid.size() < 64) valid.push_back(slot);
         if (valid.empty()) return;
+        d->retainComposition();
         d->songOrder = std::move(valid); d->songStep = 0; d->songPlaying = true;
         d->activateScene(d->songOrder[0]);
     });
+}
+void Session::beginPerformanceMode() {
+    d->post([this] { d->retainComposition(); });
+}
+void Session::restoreComposition() {
+    d->post([this] { d->restoreComposition(); });
 }
 void Session::cancelSceneLaunch() {
     d->post([this] {
