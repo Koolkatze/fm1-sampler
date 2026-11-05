@@ -2,6 +2,10 @@ package com.ferluht.fm1sampler;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.text.InputType;
+import android.widget.EditText;
+import java.util.Arrays;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -13,6 +17,7 @@ import java.io.File;
 /** The app: starts the backend (engine, FM-1 link, audio), shows the sampler and opens the system file picker when the UI asks for a file. */
 public class SamplerActivity extends Activity {
     static final int PICK = 7;
+    static final int PICK_PACK = 8;
     Backend backend;
 
     @Override protected void onCreate(Bundle b) {
@@ -23,6 +28,8 @@ public class SamplerActivity extends Activity {
         getWindow().setNavigationBarColor(0xff1a1a1f);
         backend = Backend.get(this);
         backend.onFileRequest = this::pickFile;
+        backend.onPackRequest = this::pickPack;
+        backend.onNameRequest = this::nameDialog;
         backend.start();
         SamplerView v = new SamplerView(this, backend.engine, 0, 0);
         setContentView(v);
@@ -57,14 +64,74 @@ public class SamplerActivity extends Activity {
         try { startActivityForResult(i, PICK); } catch (Exception e) { Native.say(backend.engine, "NO FILE PICKER ON THIS PHONE"); }
     }
 
+    void pickPack() {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("*/*");
+        i.putExtra(Intent.EXTRA_MIME_TYPES,
+            new String[]{"application/zip", "application/x-zip-compressed", "application/octet-stream"});
+        try { startActivityForResult(i, PICK_PACK); }
+        catch (Exception e) { Native.say(backend.engine, "NO ZIP PICKER"); }
+    }
+
+    /** Native FM-1 graphics keep their aesthetic; use Android's actual keyboard to name files. */
+    void nameDialog(int kind) {
+        if (kind == 3) {
+            File dir = new File(getFilesDir(), "projects");
+            File[] all = dir.listFiles(f -> f.isDirectory() && new File(f, "project.state").isFile());
+            if (all == null || all.length == 0) {
+                Native.say(backend.engine, "NO SAVED PROJECTS");
+                return;
+            }
+            Arrays.sort(all, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
+            String[] names = new String[all.length];
+            for (int i = 0; i < all.length; i++) names[i] = all[i].getName();
+            new AlertDialog.Builder(this).setTitle("OPEN PROJECT")
+                .setItems(names, (dialog, which) -> Native.submitName(backend.engine, 3, names[which]))
+                .setNegativeButton("CANCEL", null).show();
+            return;
+        }
+        EditText name = new EditText(this);
+        name.setSingleLine(true);
+        name.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
+        name.setText(kind == 1 ? "My Loop" : "My Project");
+        name.selectAll();
+        new AlertDialog.Builder(this)
+            .setTitle(kind == 1 ? "SAVE LOOP AS" : "SAVE PROJECT AS")
+            .setView(name)
+            .setPositiveButton("SAVE", (dialog, which) -> {
+                String value = name.getText().toString().trim();
+                if (value.isEmpty()) Native.say(backend.engine, "NAME REQUIRED");
+                else Native.submitName(backend.engine, kind, value);
+            })
+            .setNegativeButton("CANCEL", null).show();
+    }
+
     @Override protected void onActivityResult(int code, int result, Intent data) {
         super.onActivityResult(code, result, data);
-        if (code != PICK || result != RESULT_OK || data == null || data.getData() == null) return;
+        if (result != RESULT_OK || data == null || data.getData() == null) return;
         final Uri uri = data.getData();
+        if (code == PICK_PACK) {
+            Native.say(backend.engine, "IMPORTING PACK...");
+            new Thread(() -> {
+                try {
+                    File out = PackImport.importZip(this, uri, new File(getFilesDir(), "samples"));
+                    Native.refreshLibrary(backend.engine);
+                    Native.say(backend.engine, "PACK: " + out.getName());
+                } catch (Exception e) {
+                    android.util.Log.w("fm1sampler", "pack import", e);
+                    Native.say(backend.engine, "PACK IMPORT FAILED");
+                }
+            }, "pack-import").start();
+            return;
+        }
+        if (code != PICK) return;
         Native.say(backend.engine, "READING THE FILE...");
-        new Thread(() -> {   // decoding can take a moment: off the UI thread
+        new Thread(() -> {
             try {
-                File out = AudioImport.importTo(this, uri, getFilesDir());
+                File folder = new File(getFilesDir(), "samples/SAVED/Imports");
+                folder.mkdirs();
+                File out = AudioImport.importTo(this, uri, folder);
                 Native.importFile(backend.engine, out.getAbsolutePath());
             } catch (Exception e) {
                 android.util.Log.w("fm1sampler", "import: " + e);
