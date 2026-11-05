@@ -162,6 +162,12 @@ int main() {
       run(0.05);
       CHECK(app.status().pos < app.status().loopSamples * 0.3 && app.status().playing,
             "Android holding PLAY for one second restarts the loop");
+      touchUi.setEditor(true); touchUi.frame(now);
+      touchUi.touch(0, 365.f, 22.f, now);
+      CHECK(app.cueActive(), "the editor also has a dedicated momentary CUE pad");
+      touchUi.touch(2, 365.f, 22.f, now);
+      run(0.03);
+      CHECK(!app.cueActive(), "editor CUE releases cleanly");
       // The hardware also differentiates a short tap from a timed 1s hold.
       s.seek(0.7f); run(0.04);
       hold(SamplerApp::PLAY, true); run(1.05);
