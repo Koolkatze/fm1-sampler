@@ -415,16 +415,21 @@ void SamplerApp::endRecording() {
     for (int t = 0; t < kTracks; t++) if (st_.track_clip_rec[t]) s_.clipRecord(t, false);
 }
 void SamplerApp::transportPlay() {   // hardware PLAY follows the selected PROJECT mode
+    if (octDownModifierHeld()) { restartLoop(); return; }
     if (recordingNow()) { endRecording(); return; }
     if (songMode_) { if (st_.songPlaying) stopSong(); else playSong(); return; }
     s_.play(!st_.playing);
 }
 void SamplerApp::transportSet(bool play) {
+    // This is invoked directly on touchscreen press, with no 1-second timer.
+    // Both OCT- + PLAY and OCT- + STOP trigger the same immediate restart.
+    if (octDownModifierHeld()) { restartLoop(); return; }
     if (recordingNow()) { if (!play) endRecording(); return; }
     if (songMode_) { if (play) playSong(); else stopSong(); return; }
     s_.play(play);
 }
 void SamplerApp::cueModifierTouch(bool down) { button(OCT_UP, down); }
+void SamplerApp::octDownModifierTouch(bool down) { button(OCT_DOWN, down); }
 void SamplerApp::playButtonTouch(bool down) { button(PLAY, down); }
 void SamplerApp::restartLoop() {
     if (recordingNow()) { say("FINISH RECORDING FIRST"); return; }
@@ -584,17 +589,27 @@ void SamplerApp::button(int b, bool down) {
         }
         return;   // octave changes arrive separately as EV_SCALE on short standalone taps
     }
-    if (b == OCT_DOWN) return;
+    if (b == OCT_DOWN) {
+        // Support both key orders: PLAY then OCT-, or OCT- then PLAY.
+        // Execute at the SECOND key-down event, never after a timer.
+        if (down && (held_ & (1u << PLAY))) {
+            playModified_ = true;
+            restartLoop();
+        }
+        if (down && (held_ & (1u << STOP))) restartLoop();
+        return;
+    }
+    if (b == STOP) {
+        if (down) transportSet(false);  // native touchscreen STOP or optional external MIDI note 14
+        return;
+    }
     if (b == PLAY) {
         if (!down) {
             if (cueActive_) cueHold(false);
-            else if (!playLongFired_ && !playModified_) transportPlay();
+            else if (!playModified_) transportPlay();
             playModified_ = false;
-            playLongFired_ = false;
             return;
         }
-        playDownAt_ = nowMs_;
-        playLongFired_ = false;
         playModified_ = false;
         if (held_ & (1u << OCT_UP)) {
             playModified_ = true;
@@ -610,7 +625,7 @@ void SamplerApp::button(int b, bool down) {
             restartLoop();
             return;
         }
-        return;  // normal PLAY is decided on release: tap vs >=1 second hold
+        return;  // normal unmodified PLAY toggles transport on release
     }
     if (b == SAVE) {   // only the LOOP page: saving and clearing loops lives in the phone's PROJECT menu
         if (down) page_ = P_SAVE;
@@ -662,13 +677,6 @@ void SamplerApp::tick(uint32_t now) {
             if (st_.arrangement[i] >= 0 && st_.arrangement[i] < Session::kScenes)
                 songOrder_.push_back(st_.arrangement[i]);
         songSelected_ = songOrder_.empty() ? -1 : 0;
-    }
-    // A one-second physical PLAY hold restarts the loop in the audio engine;
-    // short taps retain the original play/pause behavior on release.
-    if ((held_ & (1u << PLAY)) && !playModified_ && !playLongFired_ &&
-        now - playDownAt_ >= 1000U) {
-        playLongFired_ = true;
-        restartLoop();
     }
     // OCT+ held for two seconds opens the beat division selector without changing key octave.
     if ((held_ & (1u << OCT_UP)) && !cueSelect_ && now - octUpAt_ >= 2000U) {
