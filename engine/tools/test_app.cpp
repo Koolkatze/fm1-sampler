@@ -496,9 +496,10 @@ int main() {
               app.scale().root == originalScale.root &&
               app.scale().octave == originalScale.octave,
               "project load restores per-track algorithm and exact scale state");
-        CHECK(app.sampleLabel(0) != "" && app.sampleLabel(1) != "" &&
+        CHECK(app.sampleLabel(0) == originalSample0 &&
+              app.sampleLabel(1) == originalSample1 &&
               std::filesystem::exists("/tmp/fm1sampler_t2/project_assets/slot_1/track_1.wav"),
-              "project embeds and restores sampler source WAVs to independent project assets");
+              "project embeds its source WAV and preserves original sampler names");
         CHECK(!app.performanceActive() && !app.songMode(),
               "project saved in COMPOSE loads in COMPOSE, not a different scene mode");
 
