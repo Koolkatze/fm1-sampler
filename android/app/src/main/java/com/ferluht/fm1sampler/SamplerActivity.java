@@ -29,6 +29,7 @@ public class SamplerActivity extends Activity {
         backend = Backend.get(this);
         backend.onFileRequest = this::pickFile;
         backend.onPackRequest = this::pickPack;
+        backend.onLoopExportRequest = this::exportLoops;
         backend.onNameRequest = this::nameDialog;
         backend.start();
         SamplerView v = new SamplerView(this, backend.engine, 0, 0);
@@ -72,6 +73,51 @@ public class SamplerActivity extends Activity {
             new String[]{"application/zip", "application/x-zip-compressed", "application/octet-stream"});
         try { startActivityForResult(i, PICK_PACK); }
         catch (Exception e) { Native.say(backend.engine, "NO ZIP PICKER"); }
+    }
+
+    /** Export a consistent audio-thread snapshot; publish completed WAVs
+     * into the public Downloads directory through Android MediaStore. */
+    void exportLoops() {
+        if (android.os.Build.VERSION.SDK_INT < 29) {
+            Native.say(backend.engine, "EXPORT NEEDS ANDROID 10+");
+            return;
+        }
+        final File temp = new File(getCacheDir(), "fm1-loop-export-" +
+                                   System.currentTimeMillis() + "-" + System.nanoTime());
+        if (!temp.mkdirs()) {
+            Native.say(backend.engine, "CANNOT PREPARE LOOP EXPORT");
+            return;
+        }
+        if (!Native.exportLoops(backend.engine, temp.getAbsolutePath())) {
+            temp.delete();
+            Native.say(backend.engine, "EXPORT ALREADY RUNNING");
+            return;
+        }
+        Native.say(backend.engine, "PREPARING WAV EXPORT...");
+        new Thread(() -> {
+            try {
+                long until = android.os.SystemClock.elapsedRealtime() + 600000L;
+                int state;
+                do {
+                    state = Native.loopExportStatus(backend.engine);
+                    if (state != 1) break;
+                    Thread.sleep(100);
+                } while (android.os.SystemClock.elapsedRealtime() < until);
+                if (state != 2)
+                    throw new java.io.IOException(state == -1
+                         ? "No finished loops or recording still active"
+                         : state == -2 ? "Writing loop WAV files failed"
+                         : "Loop export timed out");
+                int files = LoopExport.publish(this, temp);
+                LoopExport.deleteTemporaryFiles(temp);
+                Native.say(backend.engine, "EXPORTED " + files +
+                    " WAVS TO DOWNLOAD/FM1-SAMPLER");
+            } catch (Exception e) {
+                android.util.Log.w("fm1sampler", "loop export", e);
+                Native.say(backend.engine, "EXPORT FAILED - RECORDINGS KEPT");
+                // Keep any finished temporary WAVs for recovery after errors.
+            }
+        }, "fm1-export-loops").start();
     }
 
     /** Native FM-1 graphics keep their aesthetic; use Android's actual keyboard to name files. */
