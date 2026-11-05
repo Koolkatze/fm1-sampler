@@ -70,19 +70,20 @@ jobs:
       - name: Stage and check APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.8-preview.apk
-          unzip -t dist/FM1-Sampler-Library-0.38.8-preview.apk | tail -n 1
-          sha256sum dist/FM1-Sampler-Library-0.38.8-preview.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.9-preview.apk
+          unzip -t dist/FM1-Sampler-Library-0.38.9-preview.apk | tail -n 1
+          sha256sum dist/FM1-Sampler-Library-0.38.9-preview.apk
       - name: Publish on GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v0.38-library-preview.9
+          TAG: v0.38-library-preview.10
         run: |
           cat > release-notes.md <<'EOF'
-          ## FM1 Sampler 0.38.8 — Minimal orange track selector
+          ## FM1 Sampler 0.38.9 — Fix ENTER from the FM1-SAMPLER library root
 
-          **Installable Android APK:** `FM1-Sampler-Library-0.38.8-preview.apk`.
+          **Installable Android APK:** `FM1-Sampler-Library-0.38.9-preview.apk`.
 
+          - **Fixed root navigation:** after using BACK to highlight the `FM1-SAMPLER` archive itself, pressing **ENTER** immediately reopens the previously selected root folder (or the first one on initial use). No extra PRESETS turn is required; the same behavior works in both HOME and the LIBRARY sheet. Repeating BACK then ENTER never gets stuck.
           - **HOME selected track:** only large orange **T1, T2 ... T8** text appears immediately left of the sample waveform, with **no grey fill, outline, stripe, or TRACK caption**. The transparent touch target cycles tracks.
           - Inside **HOME → LIBRARY**, alongside **+ IMPORT ZIP**, two buttons now work: **SAVE BACKUP** and **IMPORT BACKUP**.
           - **SAVE BACKUP** lets you choose a user-owned ZIP location through Android's Create Document picker (Downloads, Documents, USB or compatible cloud). The ZIP contains the full already-saved FM1-SAMPLER library: complete FMP2 project slots, current saved scene/SONG files, loops WAVs, recordings, imported audio, OFFICIAL instruments, PACKS, nested folders and non-audio files.
@@ -99,9 +100,9 @@ jobs:
           Source: [FM1 Sampler development](https://github.com/Koolkatze/fm1-sampler/pull/3).
           EOF
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.8-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.9-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md --prerelease
           else
-            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.8-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.8 — Minimal orange T1–T8 indicator"               --notes-file release-notes.md               --prerelease
+            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.9-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.9 — Fix ENTER at library root"               --notes-file release-notes.md               --prerelease
           fi
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets,isPrerelease             --jq '{url: .url, isPrerelease: .isPrerelease, files: [.assets[].name]}'
