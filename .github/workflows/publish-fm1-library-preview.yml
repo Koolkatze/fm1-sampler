@@ -69,7 +69,7 @@ jobs:
 
           - **HOME:** BACK and ENTER are the only navigation buttons. The read-only icon to the left of the selected name identifies root (file cabinet), a folder, or an audio file (waveform).
           - **Library browser:** BACK and ENTER appear to the left of the file list. Each row has a non-interactive icon directly beside its name, identifying folders and samples.
-          - **PROJECT > EXPORT LOOP:** export all currently recorded tracks as WAV stems plus MASTER.wav to public `Download/FM1-SAMPLER/EXPORTED LOOPS/`, visible in Android Files. MediaStore keeps previous exports; original loops and projects are not altered.
+          - **PROJECT > EXPORT ALL LOOPS:** export all currently recorded tracks as WAV stems plus MASTER.wav to public `Download/FM1-SAMPLER/EXPORTED LOOPS/`, visible in Android Files. MediaStore keeps previous exports; original loops and projects are not altered.
           - Preserves ENTER and BACK for nested packs, imports and sample loading.
           - On first launch, creates the `FM1-SAMPLER` root inside the application's private files directory.
           - Opens the library at `FM1-SAMPLER /`, with four permanent folders: `PROYECTOS`, `OFFICIAL`, `SAVED`, and `PACKS`.
