@@ -428,9 +428,6 @@ void SamplerApp::transportSet(bool play) {
     if (songMode_) { if (play) playSong(); else stopSong(); return; }
     s_.play(play);
 }
-void SamplerApp::cueModifierTouch(bool down) { button(OCT_UP, down); }
-void SamplerApp::octDownModifierTouch(bool down) { button(OCT_DOWN, down); }
-void SamplerApp::playButtonTouch(bool down) { button(PLAY, down); }
 void SamplerApp::restartLoop() {
     if (recordingNow()) { say("FINISH RECORDING FIRST"); return; }
     if (songMode_ && !songOrder_.empty()) {
