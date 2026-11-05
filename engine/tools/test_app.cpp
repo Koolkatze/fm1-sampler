@@ -425,8 +425,8 @@ int main() {
             bool restart = false, repeat = false, hide = false, midiStatus = false, last = false;
             for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
                 restart |= op.text == "OCT− + PLAY/STOP: RESTART LOOP";
-                repeat |= op.text.find("NOTE REPEAT") != std::string::npos &&
-                          op.text.find("OCT+ + PLAY/STOP") != std::string::npos;
+                repeat |= op.text.find("OCT+ + PLAY: REPEAT") != std::string::npos &&
+                          op.text.find("OCT+ + OCT-: RATE MENU") != std::string::npos;
                 hide |= op.text == "HIDE";
                 midiStatus |= op.text.find("MIDI OCT-:") != std::string::npos;
                 last |= op.text.find("LAST CH") != std::string::npos;
@@ -444,7 +444,7 @@ int main() {
         bool hasInfo = false, hasRepeat = false;
         for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
             hasInfo |= op.text == "INFO";
-            hasRepeat |= op.text.find("OCT+ + PLAY/STOP") != std::string::npos;
+            hasRepeat |= op.text.find("OCT+ + PLAY: REPEAT") != std::string::npos;
         }
         CHECK(hasInfo && !hasRepeat, "collapsed legend displays only the compact INFO button");
         {
