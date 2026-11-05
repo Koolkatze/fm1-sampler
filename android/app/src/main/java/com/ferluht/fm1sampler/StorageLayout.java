@@ -25,7 +25,7 @@ final class StorageLayout {
     static File packs(Context context) { return new File(root(context), "PACKS"); }
     static File loops(Context context) { return new File(root(context), "SAVED/LOOPS"); }
     static File recordings(Context context) { return new File(root(context), "SAVED/RECORDINGS"); }
-    static File imports(Context context) { return new File(root(context), "SAVED/Imports"); }
+    static File imports(Context context) { return new File(root(context), "SAVED/IMPORTS"); }
 
     static File initialize(Context context) throws IOException {
         File root = root(context);
@@ -35,6 +35,17 @@ final class StorageLayout {
         // Former APKs used files/samples as the library root and files/ for scenes/projects.
         // Migration is repeatable: a failed move leaves the source available to retry.
         migrateLibrary(context);
+        // Older versions capitalized these names differently. Merge their contents
+        // into the required uppercase directories before any new recording is saved.
+        for (String[] alias : new String[][]{
+                {"Loops", "LOOPS"}, {"Recordings", "RECORDINGS"},
+                {"Imports", "IMPORTS"}}) {
+            File prior = new File(root, "SAVED/" + alias[0]);
+            if (prior.exists()) {
+                try { mergePreserving(prior, new File(root, "SAVED/" + alias[1])); }
+                catch (IOException e) { Log.w(TAG, "Keeping legacy SAVED folder: " + prior, e); }
+            }
+        }
         migrateProjects(context);
         for (String category : new String[]{"Bass", "Drums", "Keys", "Pads"}) {
             File dest = new File(official(context), category);
