@@ -54,19 +54,20 @@ jobs:
       - name: Stage and check APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.2-preview.apk
-          unzip -t dist/FM1-Sampler-Library-0.38.2-preview.apk | tail -n 1
-          sha256sum dist/FM1-Sampler-Library-0.38.2-preview.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.3-preview.apk
+          unzip -t dist/FM1-Sampler-Library-0.38.3-preview.apk | tail -n 1
+          sha256sum dist/FM1-Sampler-Library-0.38.3-preview.apk
       - name: Publish on GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v0.38-library-preview.3
+          TAG: v0.38-library-preview.4
         run: |
           cat > release-notes.md <<'EOF'
-          ## FM1 Sampler 0.38.2 — HOME library navigation
+          ## FM1 Sampler 0.38.3 — HOME library navigation
 
-          **Download and install the attached `FM1-Sampler-Library-0.38.2-preview.apk`.**
+          **Download and install the attached `FM1-Sampler-Library-0.38.3-preview.apk`.**
 
+          - **HOME folder/import icon:** opens the actual Android file explorer. Select a ZIP from anywhere: the app automatically extracts it to FM1-SAMPLER/PACKS/<pack name>, with every original subfolder retained. Select a single audio file: the app imports and loads it as a sample.
           - **HOME:** BACK and ENTER are the only navigation buttons. The read-only icon to the left of the selected name identifies root (file cabinet), a folder, or an audio file (waveform).
           - **Library browser:** BACK and ENTER appear to the left of the file list. Each row has a non-interactive icon directly beside its name, identifying folders and samples.
           - **PROJECT > EXPORT ALL LOOPS:** export all currently recorded tracks as WAV stems plus MASTER.wav to public `Download/FM1-SAMPLER/EXPORTED LOOPS/`, visible in Android Files. MediaStore keeps previous exports; original loops and projects are not altered.
@@ -93,9 +94,9 @@ jobs:
           Source: [FM1 Sampler library changes](https://github.com/Koolkatze/fm1-sampler/pull/3).
           EOF
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.2-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.3-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md --prerelease
           else
-            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.2-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.2 — HOME root, folders and samples browser"               --notes-file release-notes.md               --prerelease
+            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.3-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.3 — HOME root, folders and samples browser"               --notes-file release-notes.md               --prerelease
           fi
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets,isPrerelease             --jq '{url: .url, isPrerelease: .isPrerelease, files: [.assets[].name]}'
