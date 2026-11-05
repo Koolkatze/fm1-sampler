@@ -877,9 +877,9 @@ void SamplerUI::projectSheet() {
         text(left.x + 14, left.y + 23, 16, ACCENT, "PROJECT", 0, true);
         // Complete project save/load is separate from SAVE LOOP and SAVE SCENE.
         // Files contain COMPOSE, live loops, 12 scenes, SONG, samples and FX.
-        button({left.x + left.w - 217, left.y + 9, 102, 27}, "SAVE PROJECT", false,
+        button({left.x + left.w - 217, left.y + 42, 102, 22}, "SAVE PROJECT", false,
                [this] { projectSlotsMode_ = 1; projectConfirmSlot_ = -1; }, 9);
-        button({left.x + left.w - 110, left.y + 9, 100, 27}, "LOAD PROJECT", false,
+        button({left.x + left.w - 110, left.y + 42, 100, 22}, "LOAD PROJECT", false,
                [this] { projectSlotsMode_ = 2; projectConfirmSlot_ = -1; }, 9);
         const std::string note = app_.toast().empty() ? app_.loopText() : app_.toast();
         text(left.x + 14, left.y + 49, 10, DIM, fit(note, left.w - 26, 10), 0, true);
