@@ -54,19 +54,22 @@ jobs:
       - name: Stage and check APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.0-preview.apk
-          unzip -t dist/FM1-Sampler-Library-0.38.0-preview.apk | tail -n 1
-          sha256sum dist/FM1-Sampler-Library-0.38.0-preview.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.1-preview.apk
+          unzip -t dist/FM1-Sampler-Library-0.38.1-preview.apk | tail -n 1
+          sha256sum dist/FM1-Sampler-Library-0.38.1-preview.apk
       - name: Publish on GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v0.38-library-preview.1
+          TAG: v0.38-library-preview.2
         run: |
           cat > release-notes.md <<'EOF'
-          ## FM1 Sampler 0.38 — FM1-SAMPLER library root (preview)
+          ## FM1 Sampler 0.38.1 — HOME library navigation
 
-          **Download and install the attached `FM1-Sampler-Library-0.38.0-preview.apk`.**
+          **Download and install the attached `FM1-Sampler-Library-0.38.1-preview.apk`.**
 
+          - **New HOME controls:** three always-visible touch buttons at upper left, immediately before the sample name: ROOT (file cabinet), FOLDERS (folder), SAMPLES (waveform).
+          - **New browser sidebar:** the same three functional category buttons sit to the LEFT of folder/sample names; ROOT returns to library root, FOLDERS shows directories, SAMPLES shows playable WAVs (global index from root).
+          - Preserves ENTER and BACK for nested packs, imports and sample loading.
           - On first launch, creates the `FM1-SAMPLER` root inside the application's private files directory.
           - Opens the library at `FM1-SAMPLER /`, with four permanent folders: `PROYECTOS`, `OFFICIAL`, `SAVED`, and `PACKS`.
           - `SAVED/LOOPS` holds named loop recordings; `SAVED/RECORDINGS` holds microphone takes; `SAVED/IMPORTS` holds individual audio imports.
@@ -89,9 +92,9 @@ jobs:
           Source: [FM1 Sampler library changes](https://github.com/Koolkatze/fm1-sampler/pull/3).
           EOF
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.0-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.1-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md --prerelease
           else
-            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.0-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38 — FM1-SAMPLER library and imported packs"               --notes-file release-notes.md               --prerelease
+            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.1-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.1 — HOME root, folders and samples browser"               --notes-file release-notes.md               --prerelease
           fi
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets,isPrerelease             --jq '{url: .url, isPrerelease: .isPrerelease, files: [.assets[].name]}'
