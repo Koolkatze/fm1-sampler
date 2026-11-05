@@ -7,6 +7,7 @@ on:
       - 'android/app/src/main/AndroidManifest.xml'
       - 'android/app/src/main/res/**'
       - 'android/app/build.gradle'
+      - 'engine/**'
       - '.github/workflows/publish-scenes-release.yml'
   workflow_dispatch:
 
@@ -23,6 +24,14 @@ jobs:
     steps:
       - name: Checkout Scenes source
         uses: actions/checkout@v4
+
+      - name: Run sampler transport and UI regression suite
+        run: |
+          make -C engine -j2 all
+          make -C engine "$GITHUB_WORKSPACE/engine/build/test_app"
+          mkdir -p "$HOME/fm1-sampler"
+          ln -s "$GITHUB_WORKSPACE/samples" "$HOME/fm1-sampler/samples"
+          ./engine/build/test_app
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -62,19 +71,23 @@ jobs:
       - name: Publish APK in new GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v0.37-scenes-preview.2
+          TAG: v0.37-scenes-preview.3
         run: |
           cat > release-notes.md <<'EOF'
-          ## FM1 Sampler Scenes + Song Mode — launcher icon update
+          ## FM1 Sampler Scenes — CUE, PLAY and mode exit fixes
 
           **Install the attached `FM1-Sampler-Scenes-SongMode.apk` on Android.**
 
-          - New cassette-tape application icon, split white and black with an orange dot, displayed by the Android launcher.
+          - Fix: dedicated momentary CUE pad on the main composition deck, with live K1 rate selection (1/1 to 1/32).
+          - Fix: holding PLAY for at least one second restarts the loop at the beginning, on touch and FM-1 MIDI.
+          - Fix: EXIT beside LAUNCH returns from LOOP and SONG performance modes to normal composition.
+          - New: COMPOSE / LOOP MODE / SONG MODE navigation, including physical HOME exit.
+          - Retains the cassette-tape application icon, split white and black with an orange dot.
           - All existing LOOP MODE (C1–B1) and SONG MODE functionality retained.
           - PROJECT panels continue to use the original light/dark design.
           - Includes the earlier FM1 Sampler CUE feature.
           - Package: `com.ferluht.fm1sampler.scenes`.
-          - Preview version: 0.37.1-scenes-test (versionCode 38).
+          - Preview version: 0.37.2-scenes-test (versionCode 39).
 
           **Important:** GitHub builds of this preview use the Android default
           debug signing key, which can differ between CI runs. If Android
@@ -96,7 +109,7 @@ jobs:
             gh release create "$TAG" dist/FM1-Sampler-Scenes-SongMode.apk \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
-              --title "FM1 Sampler Scenes + Song Mode — cassette icon" \
+              --title "FM1 Sampler Scenes — CUE + PLAY + EXIT fixes" \
               --notes-file release-notes.md \
               --prerelease
           fi
