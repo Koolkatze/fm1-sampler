@@ -1,4 +1,8 @@
 #include "SamplerApp.h"
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
 #include "../ui/Theme.h"
 #include <Common.h>
 #include <algorithm>
@@ -62,11 +66,11 @@ SamplerApp::SamplerApp(Session& s, Send send) : s_(s), send_(std::move(send)) {
     s_.setLoopSource(loopSrc_);
     // a first session to play with: keys on 1, a drum kit on 2, bass on 3
     auto first = [&](const char* group, int track) {
-        for (size_t i = 0; i < lib_.size(); i++) if (lib_[i].group == group) { ts_[track].entry = (int)i; if (group == std::string("Drums")) ts_[track].algo = 3; s_.loadSamplePath(lib_[i].path, lib_[i].kit, track); return; }
+        for (size_t i = 0; i < lib_.size(); i++) if (lib_[i].group == group) { ts_[track].entry = (int)i; ts_[track].samplePath = lib_[i].path; if (group == std::string("Drums")) ts_[track].algo = 3; s_.loadSamplePath(lib_[i].path, lib_[i].kit, track); return; }
     };
     // the default project: Tape Key, Acoustic bass, Shiny, Trap Kit
     auto byLabel = [&](const char* label, int track) {
-        for (size_t i = 0; i < lib_.size(); i++) if (lib_[i].label == label) { ts_[track].entry = (int)i; if (lib_[i].kit) ts_[track].algo = 3; s_.loadSamplePath(lib_[i].path, lib_[i].kit, track); return; }
+        for (size_t i = 0; i < lib_.size(); i++) if (lib_[i].label == label) { ts_[track].entry = (int)i; ts_[track].samplePath = lib_[i].path; if (lib_[i].kit) ts_[track].algo = 3; s_.loadSamplePath(lib_[i].path, lib_[i].kit, track); return; }
     };
     byLabel("Tape Key", 0); byLabel("Acoustic", 1); byLabel("Shiny", 2); byLabel("TrapKit", 3); (void)first;
     for (int t = 0; t < kTracks; t++) applyMix(t);
@@ -75,19 +79,54 @@ SamplerApp::SamplerApp(Session& s, Send send) : s_(s), send_(std::move(send)) {
 
 // ---- library ----
 void SamplerApp::refreshLibrary() {
+    namespace fs = std::filesystem;
+    const std::string oldCursor = libCursor_ >= 0 && libCursor_ < (int)lib_.size()
+        ? lib_[(size_t)libCursor_].path : "";
     lib_.clear();
-    const std::string dir = s_.sampleDir();
-    for (auto& f : s_.sampleFolders())
-        for (auto& file : s_.sampleFiles(f)) {
-            std::string stem = file.substr(0, file.rfind('.'));
-            lib_.push_back({stem, f, dir + "/" + f + "/" + file, f == "Drums"});
+    const fs::path root(s_.sampleDir());
+    std::error_code ec;
+    auto walk = [&](const fs::path& dir, const std::string& pack, bool official) {
+        std::error_code err;
+        if (!fs::exists(dir, err)) return;
+        for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, err), end;
+             !err && it != end; it.increment(err)) {
+            if (!it->is_regular_file(err)) continue;
+            const auto ext = it->path().extension().string();
+            if (ext != ".wav" && ext != ".WAV") continue;
+            auto rel = it->path().lexically_relative(dir);
+            std::string folder = std::next(rel.begin()) == rel.end() ? "Other" : (*rel.begin()).string();
+            lib_.push_back({it->path().stem().string(), folder, it->path().string(),
+                official && folder == "Drums", pack, folder});
         }
-    for (auto& p : s_.sampleLibrary()) {
-        std::string nm = p.substr(p.find_last_of('/') + 1); nm = nm.substr(0, nm.rfind('.'));
-        if (nm.rfind("sample_", 0) == 0) nm = nm.substr(7);
-        lib_.push_back({nm, "User", p, false});
+    };
+    walk(root / "OFFICIAL", "OFFICIAL", true);
+    walk(root / "SAVED", "SAVED", false);
+    if (fs::exists(root / "PACKS", ec)) {
+        for (fs::directory_iterator it(root / "PACKS", ec), end; !ec && it != end; it.increment(ec))
+            if (it->is_directory(ec)) walk(it->path(), it->path().filename().string(), false);
     }
-    if (libCursor_ >= (int)lib_.size()) libCursor_ = 0;
+    // Do not remove legacy files in case a device upgrade could not move them.
+    for (auto& folder : {"Bass", "Drums", "Keys", "Pads"})
+        if (fs::exists(root / folder, ec)) walk(root / folder, "OFFICIAL", true);
+    for (auto& p : s_.sampleLibrary()) { // legacy user recordings
+        fs::path file(p);
+        std::string label = file.stem().string();
+        if (label.rfind("sample_", 0) == 0) label = label.substr(7);
+        lib_.push_back({label, "Recorded", p, false, "SAVED", "Recorded"});
+    }
+    std::sort(lib_.begin(), lib_.end(), [](const Entry& a, const Entry& b) {
+        const auto rank = [](const std::string& p) { return p == "OFFICIAL" ? 0 : p == "SAVED" ? 1 : 2; };
+        if (rank(a.pack) != rank(b.pack)) return rank(a.pack) < rank(b.pack);
+        if (a.pack != b.pack) return a.pack < b.pack;
+        if (a.folder != b.folder) return a.folder < b.folder;
+        return a.label < b.label;
+    });
+    for (int t = 0; t < kTracks; t++) {
+        auto it = std::find_if(lib_.begin(), lib_.end(), [&](const Entry& e) { return e.path == ts_[t].samplePath; });
+        ts_[t].entry = it == lib_.end() ? -1 : (int)std::distance(lib_.begin(), it);
+    }
+    auto cur = std::find_if(lib_.begin(), lib_.end(), [&](const Entry& e) { return e.path == oldCursor; });
+    libCursor_ = cur == lib_.end() ? 0 : (int)std::distance(lib_.begin(), cur);
 }
 void SamplerApp::browse(int d) {
     if (lib_.empty()) return;
@@ -99,7 +138,7 @@ void SamplerApp::loadEntry(int i) {
     libCursor_ = i; auditionAt_ = 0;
     const Entry& e = lib_[(size_t)i];
     TrackState& t = ts_[track_];
-    t.entry = i; t.start = 0.f; t.end = 1.f;
+    t.entry = i; t.samplePath = e.path; t.start = 0.f; t.end = 1.f;
     if (e.kit) t.algo = 3; else if (t.algo == 3) t.algo = 0;
     previewAfterLoad_ = true;
     s_.loadSamplePath(e.path, e.kit, track_);
