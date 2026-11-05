@@ -23,6 +23,8 @@ The repeat is non-destructive; it does not write repeated material into a clip. 
 
 ### Compatibility and build
 
-Both the **phone SamplerApp/Session engine** and the updated **firmware/app/ctrl.c** must be running for the modifier combinations to work on the physical device. The committed prebuilt `.fwsc` file is **not** rebuilt by this change. Do **not** flash the prebuilt firmware expecting these controls.
+**The APK alone is insufficient for physical OCT commands.** The actual firmware installed on the FM-1 must transmit the following channel 2 note messages: OCT− Note 0 On/Off, OCT+ Note 1 On/Off, PLAY/STOP Note 12 On/Off. The updated `firmware/app/ctrl.c` transmits these independently over supported USB/BLE MIDI outputs. It deliberately retains the existing octave-change behaviour for a standalone tap while preventing an OCT modifier from changing the octave after a combo.
+
+**Important:** The checked-in `.fwsc` file is a *previous prebuilt image*, **not** an artifact of these changes. Do not flash it expecting octave forwarding. Rebuild the exact source using the matching JieLi Windows SDK/toolchain; verify its firmware package and updater before flashing. Flashing will replace the currently installed firmware (including Blackhole, if present) and may affect its sounds/projects. Back up first.
 
 The host test in `engine/tools/test_app.cpp` covers restart, long-hold page access, all-speed selection, live changes, release, and octave preservation. The CI host test compiles this engine; a separate Windows JieLi SDK toolchain is needed to package the device firmware.

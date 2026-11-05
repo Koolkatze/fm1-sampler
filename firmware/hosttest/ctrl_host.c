@@ -9,7 +9,10 @@
 static struct fm1_controls ctl;
 static uint32_t ms;
 static uint16_t fb[240 * 240];
-static unsigned char midi_log[4096][3]; static int midi_n; static int midi_full;
+static unsigned char midi_log[4096][3]; static unsigned midi_port_log[4096];
+static int midi_n; static int midi_full;
+static unsigned ready_ports = 1U << FM1_MIDI_USB;
+unsigned fm1_midi_ready_ports(void) { return ready_ports; }
 static unsigned char sx_log[64][40]; static int sx_len[64]; static int sx_n;
 void fm1_controls_init(void) {}
 void fm1_controls_read(struct fm1_controls *s) { *s = ctl; memset(ctl.encoders, 0, sizeof ctl.encoders); }
@@ -20,9 +23,9 @@ void fm1_screen_init(void) {}
 void fm1_screen_fill(unsigned x, unsigned y, unsigned w, unsigned h, uint16_t c) { for (unsigned j = y; j < y + h && j < 240; j++) for (unsigned i = x; i < x + w && i < 240; i++) fb[j * 240 + i] = c; }
 int fm1_screen_blit(unsigned x, unsigned y, unsigned w, unsigned h, const uint16_t *p, size_t n) { (void)n; for (unsigned j = 0; j < h; j++) for (unsigned i = 0; i < w; i++) if (x + i < 240 && y + j < 240) fb[(y + j) * 240 + x + i] = p[j * w + i]; return 0; }
 int fm1_midi_send_port(unsigned port, const uint8_t *m, size_t n) {
-    (void)port;
-    if (midi_full) return -2;
+    if (!(ready_ports & (1U << port)) || midi_full) return -2;
     if (m[0] == 0xf0) { sx_len[sx_n] = (int)n; memcpy(sx_log[sx_n], m, n > 40 ? 40 : n); sx_n++; return 0; }
+    midi_port_log[midi_n] = port;
     midi_log[midi_n][0] = m[0]; midi_log[midi_n][1] = m[1]; midi_log[midi_n][2] = m[2]; midi_n++; return 0;
 }
 
@@ -30,6 +33,13 @@ static int fails;
 #define CHECK(c, ...) do { if (c) printf("PASS  "); else { printf("FAIL  "); fails++; } printf(__VA_ARGS__); printf("\n"); } while (0)
 static void tick(void) { ms += 33; groove_screen_control(); }
 static void press_key(int k, int down) { if (down) ctl.keys |= 1UL << k; else ctl.keys &= ~(1UL << k); tick(); }
+static int count_button(unsigned port, unsigned status, unsigned button) {
+    int found = 0;
+    for (int i = 0; i < midi_n; ++i)
+        if (midi_port_log[i] == port && midi_log[i][0] == status &&
+            midi_log[i][1] == button) ++found;
+    return found;
+}
 static int last_on(void) { for (int i = midi_n - 1; i >= 0; i--) if (midi_log[i][0] == 0x90) return midi_log[i][1]; return -1; }
 static void ppm(const char *p) {
     FILE *f = fopen(p, "wb"); fprintf(f, "P6\n480 480\n255\n");
@@ -58,9 +68,66 @@ int main(void) {
     CHECK(redraw == 1 && state >= 4, "phone told to redraw once, state reported %d times", state);
     press_key(0, 1); CHECK(last_on() == 60 + 2 + 12, "HMIN root D oct+1: key 0 -> %d (D5)", last_on()); press_key(0, 0);
     press_key(6, 1); CHECK(last_on() == 60 + 2 + 12 + 11, "HMIN key 6 -> %d (the raised 7th)", last_on()); press_key(6, 0);
-    /* octave buttons */
-    ctl.buttons |= 1U << 0; tick(); ctl.buttons &= ~(1U << 0); tick();
-    CHECK(sc_oct == 0, "OCT- lowers the octave");
+    /* OCT messages are required by the Android app, not just local shifts. */
+    int down0 = count_button(FM1_MIDI_USB, 0x91, 0);
+    int up0 = count_button(FM1_MIDI_USB, 0x81, 0);
+    ctl.buttons |= 1U << 0; tick();
+    CHECK(count_button(FM1_MIDI_USB, 0x91, 0) == down0 + 1,
+          "OCT- Note On (CH2 note 0) transmitted over USB immediately");
+    tick(); tick();
+    CHECK(count_button(FM1_MIDI_USB, 0x91, 0) == down0 + 1,
+          "OCT- held is not spuriously re-sent as repeated Note Ons");
+    ctl.buttons &= ~(1U << 0); tick();
+    CHECK(count_button(FM1_MIDI_USB, 0x81, 0) == up0 + 1,
+          "OCT- Note Off (CH2 note 0) transmitted on release");
+    CHECK(sc_oct == 0, "OCT- tap still lowers keyboard octave");
+
+    const int initial_oct = sc_oct;
+    down0 = count_button(FM1_MIDI_USB, 0x91, 0);
+    int playDown = count_button(FM1_MIDI_USB, 0x91, 12);
+    ctl.buttons |= 1U << 0; tick();
+    tick(); tick(); // OCT- arrives first, PLAY arrives on a later scan
+    ctl.buttons |= 1U << 12; tick();
+    CHECK(count_button(FM1_MIDI_USB, 0x91, 0) == down0 + 1 &&
+          count_button(FM1_MIDI_USB, 0x91, 12) == playDown + 1,
+          "OCT- and PLAY emit independent MIDI Note On events");
+    ctl.buttons &= ~(1U << 12); tick();
+    ctl.buttons &= ~(1U << 0); tick();
+    CHECK(sc_oct == initial_oct, "OCT- used as modifier does not shift octave");
+    CHECK(count_button(FM1_MIDI_USB, 0x81, 12) >= 1,
+          "PLAY/STOP emits matching Note Off on release");
+
+    int up1 = count_button(FM1_MIDI_USB, 0x81, 1);
+    int down1 = count_button(FM1_MIDI_USB, 0x91, 1);
+    ctl.buttons |= 1U << 1; tick();
+    CHECK(count_button(FM1_MIDI_USB, 0x91, 1) == down1 + 1,
+          "OCT+ Note On transmitted over USB");
+    ctl.buttons |= 1U << 12; tick();
+    ctl.encoders[2] = 1; tick(); // K1 on firmware maps to CC18
+    int k1 = 0;
+    for (int i = 0; i < midi_n; i++)
+        if (midi_log[i][0] == 0xb0 && midi_log[i][1] == 18) ++k1;
+    CHECK(k1 >= 1, "K1 is forwarded as CC18 while NOTE REPEAT held");
+    ctl.buttons &= ~(1U << 12); tick();
+    ctl.buttons &= ~(1U << 1); tick();
+    CHECK(count_button(FM1_MIDI_USB, 0x81, 1) == up1 + 1,
+          "OCT+ Note Off transmitted on release");
+
+    // BLE receiver must get all three physical panel events too; the USB
+    // port may be unplugged while Android remains connected over Bluetooth.
+    ready_ports = 1U << FM1_MIDI_BLE;
+    down0 = count_button(FM1_MIDI_BLE, 0x91, 0);
+    ctl.buttons |= 1U << 0; tick();
+    ctl.buttons |= 1U << 12; tick();
+    CHECK(count_button(FM1_MIDI_BLE, 0x91, 0) == down0 + 1 &&
+          count_button(FM1_MIDI_BLE, 0x91, 12) >= 1,
+          "BLE transmits OCT- and PLAY independently without USB");
+    ctl.buttons &= ~(1U << 12); tick();
+    ctl.buttons &= ~(1U << 0); tick();
+    CHECK(count_button(FM1_MIDI_BLE, 0x81, 0) >= 1 &&
+          count_button(FM1_MIDI_BLE, 0x81, 12) >= 1,
+          "BLE transmits corresponding OCT-/PLAY releases");
+    ready_ports = 1U << FM1_MIDI_USB;
     /* chord mode */
     scale_set(3, 0, 0, MODE_CHORD);
     midi_n = 0; press_key(0, 1);

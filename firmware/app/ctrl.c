@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-only WITH GPL-3.0-linking-exception
- * FM1-DAW control surface: panel events out over USB MIDI, LEDs + screen
+ * FM1-DAW control surface: panel events out over USB/BLE MIDI, LEDs + screen
  * commands in over SysEx. Replaces the stock UI (app/screen.c).
  * Protocol: see ../../PROTOCOL.md */
 #include <string.h>
@@ -126,10 +126,27 @@ static unsigned key_notes(unsigned key, uint8_t *out)   /* notes sounded by one 
 static uint8_t held_notes[KEYS][3], held_count[KEYS];
 
 /* ---- MIDI out ------------------------------------------------------------ */
+/* OCT+/OCT-/PLAY and K1 must arrive on the phone on USB OR BLE.
+ * The device's per-port MIDI queues are independent. Send only to ports
+ * actually ready, so a disconnected USB link never blocks a BLE controller.
+ * On a legacy runtime which reports no ready port yet, retry USB (the
+ * original control-surface behaviour). */
+static int surface_midi_send(const uint8_t *m, size_t n)
+{
+    const unsigned outputs = fm1_midi_ready_ports() &
+                             ((1U << FM1_MIDI_USB) | (1U << FM1_MIDI_BLE));
+    if (!outputs) return fm1_midi_send_port(FM1_MIDI_USB, m, n);
+    int delivered = 0;
+    for (unsigned p = FM1_MIDI_USB; p <= FM1_MIDI_BLE; ++p) {
+        if (!(outputs & (1U << p))) continue;
+        if (fm1_midi_send_port(p, m, n) == 0) delivered = 1;
+    }
+    return delivered ? 0 : -2;
+}
 static int midi3(uint8_t status, uint8_t a, uint8_t b)
 {
     uint8_t m[3] = {status, a, b};
-    return fm1_midi_send_port(FM1_MIDI_USB, m, 3);
+    return surface_midi_send(m, 3);
 }
 static void sysex_reply(const uint8_t *body, unsigned n)
 {
@@ -137,7 +154,7 @@ static void sysex_reply(const uint8_t *body, unsigned n)
     if (n > sizeof m - 7) return;
     memcpy(m + 6, body, n);
     m[6 + n] = 0xf7;
-    (void)fm1_midi_send_port(FM1_MIDI_USB, m, 7 + n);
+    (void)surface_midi_send(m, 7 + n);
 }
 
 static void put32(uint8_t *p, uint32_t v)
@@ -367,7 +384,10 @@ void groove_screen_control(void)
         if (!(kdiff >> i & 1U)) continue;
         if (keys >> i & 1U) key_down(i); else key_up(i);
     }
-    /* Other buttons: notes 0..13 on channel 2, including OCT modifiers. */
+    /* Physical OCT-/OCT+/PLAY: MIDI channel 2 notes 0/1/12.
+     * Each press transmits Note On, each release transmits Note Off.
+     * The receiving phone keeps the modifier state between the messages;
+     * no simultaneous event is necessary. */
     uint32_t forwarded = c.buttons & ((1UL << BUTTONS) - 1U);
     uint32_t bdiff = forwarded ^ sent_buttons;
     for (unsigned i = 0; i < BUTTONS && bdiff; ++i)
