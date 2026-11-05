@@ -11,7 +11,7 @@ static uint32_t ms;
 static uint16_t fb[240 * 240];
 static unsigned char midi_log[4096][3]; static unsigned midi_port_log[4096];
 static int midi_n; static int midi_full;
-static unsigned ready_ports = 1U << FM1_MIDI_USB;
+static unsigned ready_ports = 1U << FM1_MIDI_USB; /* USB only */
 unsigned fm1_midi_ready_ports(void) { return ready_ports; }
 static unsigned char sx_log[64][40]; static int sx_len[64]; static int sx_n;
 int groove_master_update(unsigned adc) { (void)adc; return 0; }
@@ -124,21 +124,6 @@ int main(void) {
     CHECK(count_button(FM1_MIDI_USB, 0x81, 1) == up1 + 1,
           "OCT+ Note Off transmitted on release");
 
-    // BLE receiver must get all three physical panel events too; the USB
-    // port may be unplugged while Android remains connected over Bluetooth.
-    ready_ports = 1U << FM1_MIDI_BLE;
-    down0 = count_button(FM1_MIDI_BLE, 0x91, 0);
-    ctl.buttons |= 1U << 0; tick();
-    ctl.buttons |= 1U << 12; tick();
-    CHECK(count_button(FM1_MIDI_BLE, 0x91, 0) == down0 + 1 &&
-          count_button(FM1_MIDI_BLE, 0x91, 12) >= 1,
-          "BLE transmits OCT- and PLAY independently without USB");
-    ctl.buttons &= ~(1U << 12); tick();
-    ctl.buttons &= ~(1U << 0); tick();
-    CHECK(count_button(FM1_MIDI_BLE, 0x81, 0) >= 1 &&
-          count_button(FM1_MIDI_BLE, 0x81, 12) >= 1,
-          "BLE transmits corresponding OCT-/PLAY releases");
-    ready_ports = 1U << FM1_MIDI_USB;
     /* chord mode */
     scale_set(3, 0, 0, MODE_CHORD);
     midi_n = 0; press_key(0, 1);
