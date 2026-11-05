@@ -21,6 +21,9 @@ import java.io.File;
 public class SamplerActivity extends Activity {
     static final int PICK = 7;
     static final int PICK_PACK = 8;
+    static final int EXPORT_BACKUP = 9;
+    static final int RESTORE_BACKUP = 10;
+    private volatile boolean backupBusy;
     Backend backend;
 
     @Override protected void onCreate(Bundle b) {
@@ -80,6 +83,140 @@ public class SamplerActivity extends Activity {
             new String[]{"application/zip", "application/x-zip-compressed", "application/octet-stream"});
         try { startActivityForResult(i, PICK_PACK); }
         catch (Exception e) { Native.say(backend.engine, "NO ZIP PICKER"); }
+    }
+
+    /** SAVE BACKUP produces an ordinary, portable ZIP under a document URI,
+     * not an app-private file that would disappear after uninstalling. */
+    void pickBackupExport() {
+        if (backupBusy) { Native.say(backend.engine, "BACKUP ALREADY RUNNING"); return; }
+        if (!Native.backupReady(backend.engine)) {
+            Native.say(backend.engine, "FINISH RECORDING OR PROJECT SAVE FIRST");
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/zip");
+        String stamp = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss",
+                         Locale.ROOT).format(new java.util.Date());
+        intent.putExtra(Intent.EXTRA_TITLE, "FM1-SAMPLER-BACKUP-" + stamp + ".zip");
+        try { startActivityForResult(intent, EXPORT_BACKUP); }
+        catch (Exception e) { Native.say(backend.engine, "BACKUP SAVE PICKER UNAVAILABLE"); }
+    }
+
+    void pickBackupImport() {
+        if (backupBusy) { Native.say(backend.engine, "BACKUP ALREADY RUNNING"); return; }
+        if (!Native.backupReady(backend.engine)) {
+            Native.say(backend.engine, "FINISH RECORDING OR PROJECT SAVE FIRST");
+            return;
+        }
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*"); // also accept ZIP labelled octet-stream by a provider
+        try { startActivityForResult(intent, RESTORE_BACKUP); }
+        catch (Exception e) { Native.say(backend.engine, "BACKUP IMPORT PICKER UNAVAILABLE"); }
+    }
+
+    private void finishBackupImport(LibraryBackupArchive.Plan plan) {
+        if (!Native.backupReady(backend.engine)) {
+            plan.zip.delete(); backupBusy = false;
+            Native.say(backend.engine, "FINISH RECORDING FIRST");
+            return;
+        }
+        String message = plan.files() + " files checked (SHA-256).\\n"
+            + plan.collisions + " existing names.\\n\\n"
+            + "Choose KEEP to import only missing files; nothing is overwritten. "
+            + "Choose REPLACE to restore the backup versions; existing originals "
+            + "are preserved in a separate safety folder.";
+        AlertDialog.Builder dialog = new AlertDialog.Builder(this)
+            .setTitle("IMPORT BACKUP")
+            .setMessage(message)
+            .setPositiveButton("KEEP EXISTING", (d, which) -> restoreBackup(plan, false))
+            .setNegativeButton("CANCEL", (d, which) -> discardBackup(plan))
+            .setOnCancelListener(d -> discardBackup(plan));
+        if (plan.collisions > 0) {
+            dialog.setNeutralButton("REPLACE", (d, which) ->
+                new AlertDialog.Builder(this)
+                    .setTitle("REPLACE CURRENT FILES?")
+                    .setMessage("Files with matching names will be replaced by "
+                        + "their backup copies. The previous files will be kept "
+                        + "in a recovery folder outside FM1-SAMPLER. "
+                        + "Save a separate backup of your current library first.")
+                    .setPositiveButton("REPLACE", (confirm, button) -> restoreBackup(plan, true))
+                    .setNegativeButton("CANCEL", (confirm, button) -> discardBackup(plan))
+                    .setOnCancelListener(confirm -> discardBackup(plan))
+                    .show());
+        }
+        dialog.show();
+    }
+
+    private void discardBackup(LibraryBackupArchive.Plan plan) {
+        plan.zip.delete();
+        backupBusy = false;
+    }
+
+    private void restoreBackup(LibraryBackupArchive.Plan plan, boolean replace) {
+        if (!Native.backupReady(backend.engine)) {
+            discardBackup(plan);
+            Native.say(backend.engine, "FINISH RECORDING FIRST");
+            return;
+        }
+        Native.say(backend.engine, "IMPORTING VERIFIED BACKUP...");
+        new Thread(() -> {
+            try {
+                LibraryBackupArchive.Result result =
+                    LibraryBackupArchive.restore(StorageLayout.root(this), plan, replace);
+                Native.refreshLibrary(backend.engine);
+                Native.say(backend.engine, "RESTORED " + result.imported + " FILES");
+                runOnUiThread(() -> {
+                    if (isFinishing()) return;
+                    new AlertDialog.Builder(this)
+                        .setTitle("BACKUP IMPORTED")
+                        .setMessage(result.imported + " files imported. "
+                            + result.unchanged + " existing files kept. "
+                            + result.protectedFiles + " previous files protected."
+                            + "\\nReopen the app to load restored projects and settings.")
+                        .setPositiveButton("OK", null).show();
+                });
+            } catch (Exception error) {
+                android.util.Log.e("fm1sampler", "backup restore", error);
+                Native.say(backend.engine, "BACKUP IMPORT FAILED");
+                runOnUiThread(() -> {
+                    if (!isFinishing())
+                        new AlertDialog.Builder(this).setTitle("BACKUP IMPORT FAILED")
+                            .setMessage(error.getMessage()).setPositiveButton("OK", null).show();
+                });
+            } finally {
+                discardBackup(plan);
+            }
+        }, "fm1-library-restore").start();
+    }
+
+    private void importBackup(Uri uri) {
+        if (backupBusy) { Native.say(backend.engine, "BACKUP ALREADY RUNNING"); return; }
+        backupBusy = true;
+        Native.say(backend.engine, "VERIFYING BACKUP...");
+        new Thread(() -> {
+            File snapshot = null;
+            try {
+                snapshot = LibraryBackup.snapshot(this, uri);
+                LibraryBackupArchive.Plan plan =
+                    LibraryBackupArchive.inspect(StorageLayout.root(this), snapshot);
+                runOnUiThread(() -> {
+                    if (isFinishing()) discardBackup(plan);
+                    else finishBackupImport(plan);
+                });
+            } catch (Exception error) {
+                if (snapshot != null) snapshot.delete();
+                backupBusy = false;
+                android.util.Log.e("fm1sampler", "backup inspect", error);
+                Native.say(backend.engine, "INVALID BACKUP - NO FILES CHANGED");
+                runOnUiThread(() -> {
+                    if (!isFinishing())
+                        new AlertDialog.Builder(this).setTitle("INVALID BACKUP")
+                            .setMessage(error.getMessage()).setPositiveButton("OK", null).show();
+                });
+            }
+        }, "fm1-library-inspect").start();
     }
 
     /** Detect ZIPs by filename, MIME or PK header, without trusting the
@@ -158,6 +295,8 @@ public class SamplerActivity extends Activity {
 
     /** Native FM-1 graphics keep their aesthetic; use Android's actual keyboard to name files. */
     void nameDialog(int kind) {
+        if (kind == 4) { pickBackupExport(); return; }
+        if (kind == 5) { pickBackupImport(); return; }
         if (kind == 3) {
             File dir = new File(StorageLayout.projects(this), "projects");
             File[] all = dir.listFiles(f -> f.isDirectory() && new File(f, "project.state").isFile());
@@ -193,6 +332,38 @@ public class SamplerActivity extends Activity {
         super.onActivityResult(code, result, data);
         if (result != RESULT_OK || data == null || data.getData() == null) return;
         final Uri uri = data.getData();
+        if (code == EXPORT_BACKUP) {
+            if (backupBusy || !Native.backupReady(backend.engine)) {
+                Native.say(backend.engine, "FINISH RECORDING FIRST"); return;
+            }
+            backupBusy = true;
+            Native.say(backend.engine, "WRITING FULL LIBRARY BACKUP...");
+            new Thread(() -> {
+                try {
+                    int count = LibraryBackup.save(this, uri);
+                    Native.say(backend.engine, "BACKUP SAVED: " + count + " FILES");
+                    runOnUiThread(() -> {
+                        if (!isFinishing())
+                            new AlertDialog.Builder(this).setTitle("BACKUP SAVED")
+                                .setMessage(count + " saved library files copied into the "
+                                    + "selected ZIP. Keep this ZIP outside the app. "
+                                    + "Save your currently playing project separately if "
+                                    + "it has unsaved changes.")
+                                .setPositiveButton("OK", null).show();
+                    });
+                } catch (Exception error) {
+                    android.util.Log.e("fm1sampler", "backup write", error);
+                    Native.say(backend.engine, "BACKUP SAVE FAILED");
+                    runOnUiThread(() -> {
+                        if (!isFinishing())
+                            new AlertDialog.Builder(this).setTitle("BACKUP SAVE FAILED")
+                                .setMessage(error.getMessage()).setPositiveButton("OK", null).show();
+                    });
+                } finally { backupBusy = false; }
+            }, "fm1-library-backup").start();
+            return;
+        }
+        if (code == RESTORE_BACKUP) { importBackup(uri); return; }
         if (code != PICK && code != PICK_PACK) return;
         // Both explicit external import actions route through the same importer. Selecting a ZIP always extracts
         // its complete original directory tree under FM1-SAMPLER/PACKS.
