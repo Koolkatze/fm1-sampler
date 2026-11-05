@@ -124,12 +124,30 @@ int main() {
       CHECK(app.status().pos < app.status().loopSamples * 0.16 && app.status().playing,
             "OCT- + STOP instantly restarts, not stops (%.1f)", app.status().pos);
       hold(SamplerApp::STOP, false); hold(SamplerApp::OCT_DOWN, false);
+      // STRICT ORDER: a modifier pressed AFTER PLAY must not become a shortcut.
       s.seek(0.72f); run(0.04);
-      hold(SamplerApp::PLAY, true); hold(SamplerApp::OCT_DOWN, true); run(0.02);
-      CHECK(app.status().pos < app.status().loopSamples * 0.16 && app.status().playing,
-            "PLAY then OCT- also restarts on second key-down");
+      hold(SamplerApp::PLAY, true); run(0.04);
+      CHECK(!app.status().playing, "PLAY without a prior OCT modifier acts normally on key-down");
+      hold(SamplerApp::OCT_DOWN, true); run(0.02);
+      CHECK(!app.status().playing,
+            "PLAY then OCT- does not restart: OCT has to be pressed first");
       hold(SamplerApp::OCT_DOWN, false); hold(SamplerApp::PLAY, false); run(0.02);
-      CHECK(app.status().playing, "reverse combo release does not stop");
+      CHECK(!app.status().playing, "releasing OCT and PLAY does not cause an extra transport toggle");
+      app.transportSet(true); run(0.2);
+      s.seek(0.68f); run(0.04);
+      hold(SamplerApp::OCT_DOWN, true);
+      hold(SamplerApp::PLAY, true); run(0.02);
+      hold(SamplerApp::OCT_DOWN, false); // release modifier BEFORE releasing PLAY
+      hold(SamplerApp::PLAY, false); run(0.03);
+      CHECK(app.status().playing && app.status().pos < app.status().loopSamples * 0.16,
+            "modifier release before PLAY release never produces a second stop");
+      s.seek(0.70f); run(0.04);
+      hold(SamplerApp::PLAY, true); run(0.04);
+      CHECK(!app.status().playing, "after releasing OCT-, PLAY is the ordinary stop");
+      hold(SamplerApp::PLAY, false);
+      hold(SamplerApp::PLAY, true); run(0.04);
+      CHECK(app.status().playing, "second unmodified PLAY starts playback normally");
+      hold(SamplerApp::PLAY, false);
       CHECK(app.scale().octave == octaveBefore, "OCT modifier does not shift the app's octave");
       const auto originalPage = app.page();
       hold(SamplerApp::OCT_UP, true); run(2.15);
@@ -168,6 +186,16 @@ int main() {
       hold(SamplerApp::PLAY, false); run(0.05);
       CHECK(!app.cueActive() && app.status().playing, "releasing PLAY alone restores normal loop");
       hold(SamplerApp::OCT_UP, false);
+      // When OCT+ is released before a new PLAY/STOP press, NOTE REPEAT
+      // must not be latched for that subsequent ordinary transport action.
+      hold(SamplerApp::PLAY, true); run(0.04);
+      CHECK(!app.status().playing && !app.cueActive(),
+            "after releasing OCT+, PLAY/STOP returns to ordinary STOP");
+      hold(SamplerApp::PLAY, false);
+      hold(SamplerApp::PLAY, true); run(0.04);
+      CHECK(app.status().playing && !app.cueActive(),
+            "next unmodified PLAY/STOP starts without re-entering NOTE REPEAT");
+      hold(SamplerApp::PLAY, false);
       s.loopPeaks(0, after.data(), (int)after.size());
       float diff = 0.f;
       for (size_t i = 0; i < before.size(); ++i)
@@ -220,9 +248,9 @@ int main() {
 
       s.seek(0.64f); run(0.03);
       hold(SamplerApp::PLAY, true); run(0.04);
-      CHECK(app.status().playing, "PLAY alone no longer has a timed restart");
+      CHECK(!app.status().playing, "unmodified PLAY/STOP toggles immediately on key-down");
       hold(SamplerApp::PLAY, false); run(0.04);
-      CHECK(!app.status().playing, "PLAY alone retains normal transport on release");
+      CHECK(!app.status().playing, "releasing unmodified PLAY does not toggle transport twice");
       // Restore the tape to a running state before the next scene-recording test.
       // This was previously done by the now-removed phone STOP test.
       app.transportSet(true); run(0.15);

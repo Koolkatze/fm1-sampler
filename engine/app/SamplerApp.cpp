@@ -576,8 +576,12 @@ void SamplerApp::onSysex(const uint8_t* m, size_t n) {
     else if (m[6] == 0x42) needClear_ = true;     // the firmware had its own screen up: repaint everything
 }
 void SamplerApp::button(int b, bool down) {
-    lastLed_ = ~0ull;   // preserve the hardware LED state
-    if (down) held_ |= 1u << b; else held_ &= ~(1u << b);
+    if (b < OCT_DOWN || b > STOP) return; // ignore unknown vendor notes safely
+    const uint32_t mask = 1u << b;
+    const bool wasDown = !!(held_ & mask);
+    if (wasDown == down) return; // duplicate MIDI Note On/Off must not toggle transport
+    lastLed_ = ~0ull;
+    if (down) held_ |= mask; else held_ &= ~mask;
     if (b == OCT_UP) {
         if (down) {
             octUpAt_ = nowMs_;
@@ -590,45 +594,35 @@ void SamplerApp::button(int b, bool down) {
         return;   // octave changes arrive separately as EV_SCALE on short standalone taps
     }
     if (b == OCT_DOWN) {
-        // Support both key orders: PLAY then OCT-, or OCT- then PLAY.
-        // Execute at the SECOND key-down event, never after a timer.
-        if (down && (held_ & (1u << PLAY))) {
-            playModified_ = true;
-            restartLoop();
-        }
-        if (down && (held_ & (1u << STOP))) restartLoop();
+        // Modifier only: never trigger an action by pressing OCT- AFTER PLAY.
+        // The transport action is decided exactly once at PLAY/STOP key-down.
         return;
     }
-    if (b == STOP) {
-        if (down) { // optional external hardware STOP note 14; not native FM-1 firmware
-            if (held_ & (1u << OCT_DOWN)) restartLoop();
-            else transportSet(false);
-        }
-        return;
-    }
-    if (b == PLAY) {
+    if (b == PLAY || b == STOP) {
         if (!down) {
+            // A held NOTE REPEAT is momentary. Neither releasing PLAY nor
+            // releasing OCT can fall through into a second transport toggle.
             if (cueActive_) cueHold(false);
-            else if (!playModified_) transportPlay();
             playModified_ = false;
             return;
         }
-        playModified_ = false;
-        if (held_ & (1u << OCT_UP)) {
-            playModified_ = true;
+        const bool repeat = !!(held_ & (1u << OCT_UP));
+        const bool restart = !!(held_ & (1u << OCT_DOWN));
+        playModified_ = repeat || restart; // latch what was held BEFORE PLAY/STOP
+        if (repeat) {
             if (!recordingNow() && loopAny_ && st_.loopSamples > 0) {
                 if (!cueSelect_) { cueReturnPage_ = page_; cueSelect_ = true; }
                 page_ = P_CUE;
-                cueHold(true);
+                cueHold(true); // BPM-synced, K1 live; ends on either release
             } else say("NO LOOP FOR NOTE REPEAT");
-            return;
+        } else if (restart) {
+            restartLoop(); // same callback: no 1-second threshold
+        } else if (b == PLAY) {
+            transportPlay(); // normal play/stop immediately, without a modifier
+        } else {
+            transportSet(false); // optional external STOP, native FM-1 uses PLAY
         }
-        if (held_ & (1u << OCT_DOWN)) {
-            playModified_ = true;
-            restartLoop();
-            return;
-        }
-        return;  // normal unmodified PLAY toggles transport on release
+        return;
     }
     if (b == SAVE) {   // only the LOOP page: saving and clearing loops lives in the phone's PROJECT menu
         if (down) page_ = P_SAVE;
