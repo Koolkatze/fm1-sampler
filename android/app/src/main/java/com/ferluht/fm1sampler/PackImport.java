@@ -26,12 +26,15 @@ final class PackImport {
         return s.length() > 90 ? s.substring(0, 90) : s;
     }
 
-    static File importZip(Context ctx, Uri uri, File samples) throws IOException {
+    static File importZip(Context ctx, Uri uri, File libraryRoot) throws IOException {
         String source = AudioImport.displayName(ctx, uri);
         source = source.replaceFirst("(?i)\\.zip$", "");
         String base = safe(source);
-        if (base.equalsIgnoreCase("OFFICIAL") || base.equalsIgnoreCase("SAVED")) base = "PACK_" + base;
-        File target = new File(samples, base);
+        // Always place the extracted directory in FM1-SAMPLER/PACKS, no matter
+        // where the user picked the ZIP (Downloads, Drive, USB, etc.).
+        File packs = new File(libraryRoot, "PACKS");
+        if (!packs.isDirectory() && !packs.mkdirs()) throw new IOException("Cannot create PACKS folder");
+        File target = new File(packs, base);
         for (int i = 2; target.exists(); i++) target = new File(samples, base + " (" + i + ")");
         if (!target.mkdirs()) throw new IOException("Cannot create pack folder");
         boolean completed = false;
