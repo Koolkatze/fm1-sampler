@@ -4,6 +4,7 @@
 // Threads: the audio thread calls process(). Everything else may be called from any other thread; changes reach the audio thread
 // through a command queue drained at the start of each block. status() and the peak views are lock-free.
 #pragma once
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -107,6 +108,23 @@ public:
     void restoreComposition();   // EXIT / COMPOSE / HOME restore audio clips and transport
     void cancelSceneLaunch();  // leave LOOP mode without stopping currently audible loops
     void saveArrangement(const std::vector<int>& order);
+    // Self-contained complete project files (8 slots): eight current clips,
+    // independent COMPOSE clips, scenes, song, source WAVs, and app parameters.
+    // All disk work runs off the audio callback. A loaded payload is applied
+    // atomically on the audio thread before the UI receives its metadata.
+    static constexpr int kProjectSlots = 8;
+    struct LoadedProject {
+        int slot = -1;
+        std::vector<uint8_t> appState;
+        std::array<std::string, kTracks> samplePaths;
+    };
+    bool saveProject(int slot, std::vector<uint8_t> appState,
+                     const std::array<std::string, kTracks>& samplePaths);
+    bool loadProject(int slot);
+    bool takeLoadedProject(LoadedProject& output);
+    bool projectExists(int slot) const;
+    int projectOperation() const; // 0 idle, 1 saving, 2 saved, -1 failed, 3 loading, 4 loaded, -2 failed
+    void clearSample(int track);
     void setLoopSpeed(float speed);       // 0.25..2, tape speed of all loops together; 1 = locked to the transport
     void setLoopSource(int src);          // what the loop records: 0 microphone, 1 the track's sound
     bool saveClip(int track);             // the loop of `track` as sample_*.wav in the data dir

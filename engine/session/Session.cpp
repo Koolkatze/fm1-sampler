@@ -19,6 +19,8 @@
 #include <cstring>
 #include <deque>
 #include <filesystem>
+#include <array>
+#include <limits>
 #include <functional>
 #include <mutex>
 #include <thread>
@@ -79,6 +81,30 @@ struct Session::Impl {
     double pendingAt = 0;   // audio frame of the next whole-bar boundary
     int sceneFadeFrames = 0;  // short scene start fade, no click on clip changes
     std::vector<int> songOrder;
+    // Serialized in a single standalone .fm1p file for each project.
+    struct ProjectTimeline {
+        int32_t samples = 0;
+        int bars = 4; float tempo = 120.f;
+        double pos = 0., tapePos = 0., rate = 1.;
+        bool playing = false, stopping = false;
+        std::array<std::shared_ptr<std::vector<float>>, kTracks> clips{};
+        std::array<bool, kTracks> has{};
+    };
+    struct ProjectSnapshot {
+        ProjectTimeline current, compose;
+        bool hasCompose = false;
+        std::array<Scene, Session::kScenes> savedScenes;
+        std::vector<int> arrangement;
+        int active = -1, queued = -1, songStep = -1;
+        double pendingAt = 0.;
+        bool songPlaying = false;
+        std::vector<uint8_t> appState;
+        std::array<std::string, kTracks> samplePaths;
+    };
+    std::atomic<int> projectOp{0};
+    mutable std::mutex projectMtx;
+    std::shared_ptr<Session::LoadedProject> projectReady;
+    bool projectRestored = false;
     int songStep = -1;
     bool songPlaying = false;
 
@@ -249,6 +275,75 @@ struct Session::Impl {
         sceneFadeFrames = std::max(1, sr / 180);  // about 5.5 ms
     }
 
+    ProjectSnapshot captureProject(std::vector<uint8_t> app,
+                                   std::array<std::string, kTracks> paths) {
+        ProjectSnapshot s;
+        s.appState = std::move(app);
+        s.samplePaths = std::move(paths);
+        s.savedScenes = scenes; s.arrangement = songOrder;
+        s.active = activeScene; s.queued = pendingScene;
+        s.songPlaying = songPlaying; s.songStep = songStep; s.pendingAt = pendingAt;
+        auto& c = s.current;
+        c.samples = loopSamples; c.bars = loopBars; c.tempo = bpm;
+        c.pos = pos; c.tapePos = tapePos; c.rate = rate;
+        c.playing = playing; c.stopping = stopping;
+        for (int t = 0; t < kTracks; ++t) {
+            c.clips[(size_t)t] = tracks[(size_t)t]->clip;
+            c.has[(size_t)t] = tracks[(size_t)t]->clipHas;
+        }
+        s.hasCompose = composition.valid;
+        if (s.hasCompose) {
+            auto& d = s.compose;
+            d.samples = composition.samples; d.bars = composition.bars;
+            d.tempo = composition.tempo; d.pos = composition.pos;
+            d.tapePos = composition.tapePos; d.rate = composition.rate;
+            d.playing = composition.playing; d.stopping = composition.stopping;
+            d.clips = composition.clips; d.has = composition.has;
+        }
+        return s; // COW; subsequent loop overdubs cannot change this audio snapshot
+    }
+    void installProject(ProjectSnapshot&& s) {
+        freeRec = freeArmed = sampling = armedWait = false;
+        a_free = a_freeArmed = false; a_sampleState = 0;
+        cueActive = false; cueMix = 0.f;
+        scrubActive = scrubTail = false; freeBuf.clear();
+        const auto& c = s.current;
+        loopSamples = c.samples; loopBars = c.bars; bpm = c.tempo;
+        pos = c.pos; tapePos = c.tapePos; rate = c.rate;
+        playing = c.playing; stopping = c.stopping;
+        for (int t = 0; t < kTracks; ++t) {
+            auto& tr = *tracks[(size_t)t];
+            releaseAll(tr);
+            tr.clip = c.has[(size_t)t] && c.clips[(size_t)t]
+                    ? c.clips[(size_t)t] : std::make_shared<std::vector<float>>();
+            tr.clipHas = c.has[(size_t)t]; tr.clipRec = false;
+            tr.recPrevOk = false;
+        }
+        composition = Composition{};
+        if (s.hasCompose) {
+            composition.valid = true;
+            composition.samples = s.compose.samples;
+            composition.bars = s.compose.bars;
+            composition.tempo = s.compose.tempo;
+            composition.pos = s.compose.pos;
+            composition.tapePos = s.compose.tapePos;
+            composition.rate = s.compose.rate;
+            composition.playing = s.compose.playing;
+            composition.stopping = s.compose.stopping;
+            composition.clips = std::move(s.compose.clips);
+            composition.has = s.compose.has;
+        }
+        scenes = std::move(s.savedScenes); songOrder = std::move(s.arrangement);
+        activeScene = s.active; pendingScene = s.queued;
+        pendingAt = s.pendingAt; songPlaying = s.songPlaying; songStep = s.songStep;
+        sceneFadeFrames = std::max(1, sr / 180);
+        updateSceneMask();
+        a_loop = loopSamples; a_bars = loopBars; a_bpm = bpm;
+        a_activeScene = activeScene; a_queuedScene = pendingScene;
+        a_arrangementLoaded = true;
+        projectRestored = true; // asynchronous startup scene restore must not overwrite it
+    }
+
     // Save/load whole scenes off the audio thread. The shared buffers cannot
     // change while the worker reads them: live overdubs use copy-on-write.
     void persistScenes() {
@@ -346,7 +441,7 @@ struct Session::Impl {
             }
             post([this, ok, loaded = std::move(loaded), order = std::move(order)]() mutable {
                 // If a user has already captured something, their new work wins.
-                if (a_sceneMask.load() == 0 && ok) {
+                if (!projectRestored && a_sceneMask.load() == 0 && ok) {
                     scenes = std::move(loaded);
                     songOrder = std::move(order);
                     updateSceneMask();
@@ -1052,6 +1147,334 @@ int Session::loopPeaks(int track, float* out, int maxBins) const {
     const int n = std::min(maxBins, kLoopBins);
     for (int i = 0; i < n; i++) out[i] = track < 0 ? d->a_lpk[i].load() : d->a_tpk[std::min(track, kTracks - 1)][i].load();
     return d->a_loop.load() > 0 ? n : 0;
+}
+
+
+// ---- complete, self-contained project archive (FMP2) ----
+// Stored per slot under app-private storage. Source WAVs are embedded so
+// recordings/imports and the original composition survive deleted libraries.
+// Snapshots are captured at one audio callback and written asynchronously.
+namespace {
+constexpr uint32_t kProjectMagic = 0x32504d46;  // FMP2
+constexpr uint32_t kProjectVersion = 2;
+constexpr uint64_t kProjectMaxBytes = 536870912ULL; // 512 MiB decompressed
+constexpr uint32_t kSampleMax = 67108864U; // 64 MiB per WAV
+std::string projectPath(const std::string& dir, int slot) {
+    return dir + "/project_" + std::to_string(slot + 1) + ".fm1p";
+}
+struct ProjectWrite {
+    std::ofstream out;
+    uint64_t hash = 14695981039346656037ULL, bytes = 0;
+    bool good = true;
+    explicit ProjectWrite(const std::string& path) : out(path, std::ios::binary | std::ios::trunc) {}
+    bool put(const void* data, size_t n) {
+        if (!out || !good || n > kProjectMaxBytes - std::min(bytes, kProjectMaxBytes)) return good = false;
+        out.write((const char*)data, (std::streamsize)n);
+        if (!out) return good = false;
+        const auto* b = (const uint8_t*)data;
+        for (size_t i = 0; i < n; ++i) { hash ^= b[i]; hash *= 1099511628211ULL; }
+        bytes += n;
+        return true;
+    }
+    template<class T> bool value(const T& v) { return put(&v, sizeof(v)); }
+};
+struct ProjectRead {
+    std::ifstream in;
+    uint64_t hash = 14695981039346656037ULL, bytes = 0;
+    bool good = true;
+    explicit ProjectRead(const std::string& path) : in(path, std::ios::binary) {}
+    bool get(void* data, size_t n) {
+        if (!in || !good || n > kProjectMaxBytes - std::min(bytes, kProjectMaxBytes)) return good = false;
+        in.read((char*)data, (std::streamsize)n);
+        if (!in) return good = false;
+        const auto* b = (const uint8_t*)data;
+        for (size_t i = 0; i < n; ++i) { hash ^= b[i]; hash *= 1099511628211ULL; }
+        bytes += n;
+        return true;
+    }
+    template<class T> bool value(T& v) { return get(&v, sizeof(v)); }
+};
+bool validTimeline(int32_t samples, int bars, float tempo, double pos, double tapePos, double rate, int sr) {
+    return samples >= 0 && samples <= sr * 180 && bars >= 1 && bars <= 32 &&
+           std::isfinite(tempo) && tempo >= 30.f && tempo <= 300.f &&
+           std::isfinite(pos) && std::isfinite(tapePos) && std::isfinite(rate) &&
+           rate >= -6. && rate <= 6. &&
+           (samples == 0 ? pos == 0. && tapePos == 0. :
+            pos >= 0. && pos <= samples && tapePos >= 0. && tapePos <= samples);
+}
+bool writeTimeline(ProjectWrite& w, const Session::Impl::ProjectTimeline& t) {
+    const uint8_t playing = t.playing, stopping = t.stopping;
+    if (!w.value(t.samples) || !w.value(t.bars) || !w.value(t.tempo) ||
+        !w.value(t.pos) || !w.value(t.tapePos) || !w.value(t.rate) ||
+        !w.value(playing) || !w.value(stopping)) return false;
+    for (int i = 0; i < Session::kTracks; ++i) {
+        const auto& ptr = t.clips[(size_t)i];
+        const uint8_t has = t.has[(size_t)i] ? 1 : 0;
+        if (has && (!ptr || t.samples <= 0 || ptr->size() != (size_t)t.samples * 2)) return false;
+        if (!w.value(has) || (has && !w.put(ptr->data(), ptr->size() * sizeof(float)))) return false;
+    }
+    return true;
+}
+bool readTimeline(ProjectRead& r, Session::Impl::ProjectTimeline& t, int sr) {
+    uint8_t playing = 0, stopping = 0;
+    if (!r.value(t.samples) || !r.value(t.bars) || !r.value(t.tempo) ||
+        !r.value(t.pos) || !r.value(t.tapePos) || !r.value(t.rate) ||
+        !r.value(playing) || !r.value(stopping) ||
+        !validTimeline(t.samples, t.bars, t.tempo, t.pos, t.tapePos, t.rate, sr) ||
+        playing > 1 || stopping > 1) return false;
+    t.playing = playing; t.stopping = stopping;
+    for (int i = 0; i < Session::kTracks; ++i) {
+        uint8_t has = 0;
+        if (!r.value(has) || has > 1 || (has && t.samples <= 0)) return false;
+        t.has[(size_t)i] = has != 0;
+        if (!has) continue;
+        auto ptr = std::make_shared<std::vector<float>>((size_t)t.samples * 2);
+        if (!r.get(ptr->data(), ptr->size() * sizeof(float))) return false;
+        t.clips[(size_t)i] = std::move(ptr);
+    }
+    return true;
+}
+bool writeProjectFile(const std::string& dir, int slot, const Session::Impl::ProjectSnapshot& s, int sr) {
+    namespace fs = std::filesystem;
+    if (dir.empty() || s.appState.empty() || s.appState.size() > 65536) return false;
+    std::error_code ec; fs::create_directories(dir, ec);
+    if (ec) return false;
+    const auto path = projectPath(dir, slot), tmp = path + ".tmp", backup = path + ".bak";
+    ProjectWrite w(tmp);
+    const uint32_t rate = (uint32_t)sr, len = (uint32_t)s.appState.size();
+    bool ok = w.value(kProjectMagic) && w.value(kProjectVersion) && w.value(rate) &&
+              w.value(len) && w.put(s.appState.data(), len);
+    std::array<uint8_t, 65536> chunk{};
+    for (int i = 0; i < Session::kTracks && ok; ++i) {
+        const auto& src = s.samplePaths[(size_t)i];
+        uint32_t size = 0;
+        if (!src.empty()) {
+            const auto n = fs::file_size(src, ec);
+            if (ec || n == 0 || n > kSampleMax) { ok = false; break; }
+            size = (uint32_t)n;
+        }
+        ok = w.value(size);
+        if (!ok || !size) continue;
+        std::ifstream input(src, std::ios::binary);
+        if (!input) { ok = false; break; }
+        for (uint32_t left = size; left && ok;) {
+            const auto n = (size_t)std::min<uint32_t>(left, (uint32_t)chunk.size());
+            input.read((char*)chunk.data(), (std::streamsize)n);
+            ok = !!input && w.put(chunk.data(), n);
+            left -= (uint32_t)n;
+        }
+    }
+    ok = ok && validTimeline(s.current.samples, s.current.bars, s.current.tempo,
+                             s.current.pos, s.current.tapePos, s.current.rate, sr)
+          && writeTimeline(w, s.current);
+    const uint8_t compose = s.hasCompose ? 1 : 0;
+    ok = ok && w.value(compose);
+    if (ok && compose) ok = validTimeline(s.compose.samples, s.compose.bars, s.compose.tempo,
+                                         s.compose.pos, s.compose.tapePos, s.compose.rate, sr)
+                           && writeTimeline(w, s.compose);
+    for (const auto& scene : s.savedScenes) {
+        if (!ok) break;
+        const uint8_t filled = scene.filled;
+        ok = w.value(filled);
+        if (!filled || !ok) continue;
+        ok = scene.samples > 0 && scene.samples <= sr * 180 &&
+             scene.bars > 0 && scene.bars <= 32 &&
+             std::isfinite(scene.tempo) && scene.tempo >= 30.f && scene.tempo <= 300.f &&
+             w.value(scene.samples) && w.value(scene.bars) && w.value(scene.tempo);
+        for (int t = 0; t < Session::kTracks && ok; ++t) {
+            const auto& ptr = scene.clips[(size_t)t];
+            const uint8_t has = scene.has[(size_t)t];
+            if (has && (!ptr || ptr->size() != (size_t)scene.samples * 2)) { ok = false; break; }
+            ok = w.value(has) && (!has || w.put(ptr->data(), ptr->size() * sizeof(float)));
+        }
+    }
+    const uint32_t n = (uint32_t)s.arrangement.size();
+    ok = ok && n <= 64 && w.value(n);
+    for (int slotIndex : s.arrangement) {
+        const uint8_t index = (uint8_t)slotIndex;
+        ok = ok && slotIndex >= 0 && slotIndex < Session::kScenes && w.value(index);
+    }
+    const int32_t active = s.active, queued = s.queued, step = s.songStep;
+    const uint8_t song = s.songPlaying;
+    ok = ok && w.value(active) && w.value(queued) && w.value(step) &&
+         w.value(s.pendingAt) && w.value(song);
+    if (ok) {
+        const uint64_t checksum = w.hash;
+        w.out.write((const char*)&checksum, sizeof(checksum));
+        w.out.flush(); ok = !!w.out;
+    }
+    w.out.close();
+    if (!ok) { fs::remove(tmp, ec); return false; }
+    // On a replaced slot, preserve the old archive until the new one is committed.
+    fs::remove(backup, ec);
+    const bool hadOld = fs::exists(path, ec);
+    if (hadOld) { fs::rename(path, backup, ec); if (ec) { fs::remove(tmp, ec); return false; } }
+    fs::rename(tmp, path, ec);
+    if (ec) { if (hadOld) { std::error_code ignored; fs::rename(backup, path, ignored); }
+              fs::remove(tmp, ec); return false; }
+    if (hadOld) fs::remove(backup, ec);
+    return true;
+}
+bool readProjectFile(const std::string& file, Session::Impl::ProjectSnapshot& snap,
+                     std::array<std::vector<uint8_t>, Session::kTracks>& assets, int sr) {
+    ProjectRead r(file);
+    uint32_t magic = 0, ver = 0, rate = 0, metaLen = 0;
+    if (!r.value(magic) || !r.value(ver) || !r.value(rate) || !r.value(metaLen) ||
+        magic != kProjectMagic || ver != kProjectVersion ||
+        rate != (uint32_t)sr || metaLen == 0 || metaLen > 65536) return false;
+    snap.appState.resize(metaLen);
+    if (!r.get(snap.appState.data(), metaLen)) return false;
+    for (auto& asset : assets) {
+        uint32_t len = 0;
+        if (!r.value(len) || len > kSampleMax) return false;
+        asset.resize(len);
+        if (len && !r.get(asset.data(), len)) return false;
+    }
+    if (!readTimeline(r, snap.current, sr)) return false;
+    uint8_t compose = 0;
+    if (!r.value(compose) || compose > 1) return false;
+    snap.hasCompose = compose;
+    if (compose && !readTimeline(r, snap.compose, sr)) return false;
+    for (auto& scene : snap.savedScenes) {
+        uint8_t filled = 0;
+        if (!r.value(filled) || filled > 1) return false;
+        scene.filled = filled;
+        if (!filled) continue;
+        if (!r.value(scene.samples) || !r.value(scene.bars) || !r.value(scene.tempo) ||
+            scene.samples <= 0 || scene.samples > sr * 180 || scene.bars < 1 ||
+            scene.bars > 32 || !std::isfinite(scene.tempo) ||
+            scene.tempo < 30.f || scene.tempo > 300.f) return false;
+        for (int t = 0; t < Session::kTracks; ++t) {
+            uint8_t has = 0;
+            if (!r.value(has) || has > 1) return false;
+            scene.has[(size_t)t] = has;
+            if (!has) continue;
+            auto ptr = std::make_shared<std::vector<float>>((size_t)scene.samples * 2);
+            if (!r.get(ptr->data(), ptr->size() * sizeof(float))) return false;
+            scene.clips[(size_t)t] = std::move(ptr);
+        }
+    }
+    uint32_t n = 0;
+    if (!r.value(n) || n > 64) return false;
+    for (uint32_t i = 0; i < n; ++i) {
+        uint8_t idx = 0; if (!r.value(idx) || idx >= Session::kScenes ||
+             !snap.savedScenes[(size_t)idx].filled) return false;
+        snap.arrangement.push_back(idx);
+    }
+    int32_t active = 0, queued = 0, step = 0; uint8_t song = 0;
+    if (!r.value(active) || !r.value(queued) || !r.value(step) ||
+        !r.value(snap.pendingAt) || !r.value(song) ||
+        active < -1 || active >= Session::kScenes || queued < -1 ||
+        queued >= Session::kScenes || step < -1 || step >= (int)n ||
+        song > 1 || !std::isfinite(snap.pendingAt) ||
+        (active >= 0 && !snap.savedScenes[(size_t)active].filled) ||
+        (queued >= 0 && !snap.savedScenes[(size_t)queued].filled) ||
+        (song && (n == 0 || step < 0))) return false;
+    snap.active = active; snap.queued = queued; snap.songStep = step; snap.songPlaying = song;
+    const uint64_t computed = r.hash;
+    uint64_t stored = 0;
+    r.in.read((char*)&stored, sizeof(stored));
+    if (!r.in || stored != computed) return false;
+    char extra = 0; r.in.read(&extra, 1);
+    return r.in.eof(); // reject incomplete, corrupt and trailing data
+}
+}  // namespace
+
+bool Session::projectExists(int slot) const {
+    if (slot < 0 || slot >= kProjectSlots || d->dataDir.empty()) return false;
+    std::error_code ec; return std::filesystem::is_regular_file(projectPath(d->dataDir, slot), ec);
+}
+int Session::projectOperation() const { return d->projectOp.load(); }
+bool Session::saveProject(int slot, std::vector<uint8_t> meta,
+                          const std::array<std::string, kTracks>& paths) {
+    if (slot < 0 || slot >= kProjectSlots || d->dataDir.empty() ||
+        meta.empty() || meta.size() > 65536) return false;
+    int state = d->projectOp.load();
+    while (state != 1 && state != 3) {
+        if (d->projectOp.compare_exchange_weak(state, 1)) break;
+    }
+    if (d->projectOp.load() != 1 || state == 1 || state == 3) return false;
+    d->post([this, slot, meta = std::move(meta), paths]() mutable {
+        if (d->freeRec || d->freeArmed || d->sampling || d->armedWait) {
+            d->projectOp = -1; return;
+        }
+        for (const auto& t : d->tracks) if (t->clipRec) { d->projectOp = -1; return; }
+        auto snapshot = d->captureProject(std::move(meta), paths);
+        const auto folder = d->dataDir;
+        const int rate = d->sr;
+        d->job([this, slot, folder, rate, snapshot = std::move(snapshot)]() mutable {
+            d->projectOp = writeProjectFile(folder, slot, snapshot, rate) ? 2 : -1;
+        });
+    });
+    return true;
+}
+bool Session::loadProject(int slot) {
+    if (slot < 0 || slot >= kProjectSlots || !projectExists(slot)) return false;
+    int state = d->projectOp.load();
+    while (state != 1 && state != 3) {
+        if (d->projectOp.compare_exchange_weak(state, 3)) break;
+    }
+    if (d->projectOp.load() != 3 || state == 1 || state == 3) return false;
+    const auto folder = d->dataDir;
+    d->job([this, slot, folder] {
+        Impl::ProjectSnapshot snap;
+        std::array<std::vector<uint8_t>, kTracks> assets;
+        const bool valid = readProjectFile(projectPath(folder, slot), snap, assets, d->sr);
+        if (!valid) { d->projectOp = -2; return; }
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const std::string target = folder + "/project_assets/slot_" + std::to_string(slot + 1);
+        fs::create_directories(target, ec);
+        if (ec) { d->projectOp = -2; return; }
+        std::array<std::string, kTracks> paths{};
+        for (int t = 0; t < kTracks; ++t) {
+            const auto& raw = assets[(size_t)t];
+            if (raw.empty()) continue;
+            const auto asset = target + "/track_" + std::to_string(t + 1) + ".wav";
+            const auto temp = asset + ".tmp";
+            std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+            if (!out) { d->projectOp = -2; return; }
+            out.write((const char*)raw.data(), (std::streamsize)raw.size());
+            out.flush();
+            const bool good = !!out; out.close();
+            if (!good) { d->projectOp = -2; return; }
+            // A loaded sample may still be in use; replace the original
+            // atomically and let the worker load it after the project callback.
+            fs::rename(temp, asset, ec);
+            if (ec) {
+                fs::remove(asset, ec); ec.clear();
+                fs::rename(temp, asset, ec);
+            }
+            if (ec) { d->projectOp = -2; return; }
+            paths[(size_t)t] = asset;
+        }
+        auto result = std::make_shared<LoadedProject>();
+        result->slot = slot; result->appState = std::move(snap.appState);
+        result->samplePaths = std::move(paths);
+        d->post([this, snap = std::move(snap), result]() mutable {
+            d->installProject(std::move(snap));
+            { std::lock_guard<std::mutex> lock(d->projectMtx); d->projectReady = result; }
+            d->projectOp = 4;
+        });
+    });
+    return true;
+}
+bool Session::takeLoadedProject(LoadedProject& output) {
+    std::lock_guard<std::mutex> lock(d->projectMtx);
+    if (!d->projectReady) return false;
+    output = std::move(*d->projectReady);
+    d->projectReady.reset();
+    return true;
+}
+void Session::clearSample(int t) {
+    if (t < 0 || t >= kTracks) return;
+    d->post([this,t] {
+        auto& track = *d->tracks[(size_t)t];
+        d->releaseAll(track);
+        d->bury(std::move(track.sampler));
+        { std::lock_guard<std::mutex> lock(track.infoMtx);
+          track.label.clear(); track.peaks.clear(); track.orig.reset(); track.slices.clear(); }
+    });
 }
 
 // ---- microphone sampling ----
