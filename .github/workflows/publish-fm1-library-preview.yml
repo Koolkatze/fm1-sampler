@@ -54,24 +54,24 @@ jobs:
       - name: Stage and check APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.3-preview.apk
-          unzip -t dist/FM1-Sampler-Library-0.38.3-preview.apk | tail -n 1
-          sha256sum dist/FM1-Sampler-Library-0.38.3-preview.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.4-preview.apk
+          unzip -t dist/FM1-Sampler-Library-0.38.4-preview.apk | tail -n 1
+          sha256sum dist/FM1-Sampler-Library-0.38.4-preview.apk
       - name: Publish on GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v0.38-library-preview.4
+          TAG: v0.38-library-preview.5
         run: |
           cat > release-notes.md <<'EOF'
-          ## FM1 Sampler 0.38.3 — HOME library navigation
+          ## FM1 Sampler 0.38.4 — PRESETS inline browser and auto-loaded WAVs
 
-          **Download and install the attached `FM1-Sampler-Library-0.38.3-preview.apk`.**
+          **Download and install the attached `FM1-Sampler-Library-0.38.4-preview.apk` after backing up your previous projects and loops.**
 
-          - **HOME folder/import icon:** opens the actual Android file explorer. Select a ZIP from anywhere: the app automatically extracts it to FM1-SAMPLER/PACKS/<pack name>, with every original subfolder retained. Select a single audio file: the app imports and loads it as a sample.
-          - **HOME:** BACK and ENTER are the only navigation buttons. The read-only icon to the left of the selected name identifies root (file cabinet), a folder, or an audio file (waveform).
-          - **Library browser:** BACK and ENTER appear to the left of the file list. Each row has a non-interactive icon directly beside its name, identifying folders and samples.
+          - **HOME LIBRARY icon:** opens the existing FM1-SAMPLER root INSIDE the app. It does not launch Android's file explorer. External imports remain a separate explicit action in the EDIT view.
+          - **HOME:** BACK and ENTER are the only navigation buttons. The read-only icon beside the selected filename identifies root, folder, playable WAV, or other file.
+          - **Physical FM-1 PRESETS knob:** scrolls one item at a time only within the current directory, including folders and files; a selected WAV is loaded immediately as the active track preset without pressing ENTER. ENTER only enters directories; BACK returns one directory level. No separate library browser overlay.
           - **PROJECT > EXPORT ALL LOOPS:** export all currently recorded tracks as WAV stems plus MASTER.wav to public `Download/FM1-SAMPLER/EXPORTED LOOPS/`, visible in Android Files. MediaStore keeps previous exports; original loops and projects are not altered.
-          - Preserves ENTER and BACK for nested packs, imports and sample loading.
+          - Preserves ENTER and BACK for deeply nested packs and imports. ENTER on a WAV is intentionally a no-op.
           - On first launch, creates the `FM1-SAMPLER` root inside the application's private files directory.
           - Opens the library at `FM1-SAMPLER /`, with four permanent folders: `PROYECTOS`, `OFFICIAL`, `SAVED`, and `PACKS`.
           - `SAVED/LOOPS` holds named loop recordings; `SAVED/RECORDINGS` holds microphone takes; `SAVED/IMPORTS` holds individual audio imports.
@@ -79,7 +79,7 @@ jobs:
           - `OFFICIAL` holds the app's bundled Bass, Drums, Keys and Pads instruments.
           - Every imported ZIP is extracted to `FM1-SAMPLER/PACKS/<pack name>/`, preserving its original folder hierarchy and **all** source files. Compatible compressed audio also gets a playable WAV copy.
           - The ZIP source selected in Downloads, USB, Google Drive, etc. is retained in its original location; Android does not allow us to silently move/delete another provider's document.
-          - The library keeps the `ENTER >` and `< BACK` controls for unlimited folder depth.
+          - HOME retains `ENTER` and `BACK` controls for unlimited folder depth; PRESETS selects and immediately loads WAVs.
           - Attempts to migrate older samples, packs, recordings, scenes and FMP2 project files from the **same package** without overwriting existing files.
           - Preserves eight tracks, USB MIDI control, loop transport, 12 scenes, COMPOSE and SONG mode, tape FX, and complete project saves.
 
@@ -94,9 +94,9 @@ jobs:
           Source: [FM1 Sampler library changes](https://github.com/Koolkatze/fm1-sampler/pull/3).
           EOF
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.3-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.4-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md --prerelease
           else
-            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.3-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.3 — HOME root, folders and samples browser"               --notes-file release-notes.md               --prerelease
+            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.4-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.4 — HOME root, folders and samples browser"               --notes-file release-notes.md               --prerelease
           fi
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets,isPrerelease             --jq '{url: .url, isPrerelease: .isPrerelease, files: [.assets[].name]}'
