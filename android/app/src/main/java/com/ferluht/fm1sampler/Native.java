@@ -14,6 +14,9 @@ public final class Native {
     public static native byte[] tick(long h, long nowMs);
     public static native boolean wantFile(long h);
     public static native boolean wantPack(long h);
+    public static native boolean wantLoopExport(long h);
+    public static native boolean exportLoops(long h, String temporaryDirectory);
+    public static native int loopExportStatus(long h);
     public static native int takeDialogRequest(long h);
     public static native void submitName(long h, int kind, String name);
     public static native void refreshLibrary(long h);
