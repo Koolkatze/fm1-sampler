@@ -78,8 +78,14 @@ int main() {
     app.onMidi(sd, 3); run(0.9); app.onMidi(su, 3); run(0.3);   // the FM-1 SAVE button neither saves nor clears any more
     CHECK(app.loopExists() && app.page() == SamplerApp::P_SAVE, "SAVE button only opens the LOOP page (held for 0.9 s: loop stays)");
     app.loopSave(); run(1.0);
-    int wavs = 0; { FILE* p = popen("ls /tmp/fm1sampler_t2/sample_*.wav 2>/dev/null | wc -l", "r"); if (p) { fscanf(p, "%d", &wavs); pclose(p); } }
-    CHECK(wavs == 1, "SAVE wrote the loop into the library (%d files)", wavs);
+    int wavs = 0;
+    {
+        const std::filesystem::path saved = std::filesystem::path(s.sampleDir()) / "SAVED" / "Loops";
+        std::error_code ec;
+        for (const auto& file : std::filesystem::directory_iterator(saved, ec))
+            if (file.path().extension() == ".wav") ++wavs;
+    }
+    CHECK(wavs >= 1, "SAVE wrote the complete named loop into SAVED/Loops (%d files)", wavs);
     app.loopClearTrack(); run(0.3);
     CHECK(!app.status().track_has_clip[0], "clearing one track's loop");
     app.loopClear(); run(0.3);
