@@ -6,6 +6,7 @@ on:
     paths:
       - 'android/app/build.gradle'
       - 'android/app/src/main/java/**'
+      - 'android/app/src/test/java/**'
       - 'engine/**'
       - 'firmware/app/ctrl.c'
       - 'firmware/hosttest/ctrl_host.c'
@@ -43,6 +44,13 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - name: Verify FM1-SAMPLER whole-library backup and safe restore
+        run: |
+          mkdir -p /tmp/fm1-backup-java-test
+          javac -d /tmp/fm1-backup-java-test \
+            android/app/src/main/java/com/ferluht/fm1sampler/LibraryBackupArchive.java \
+            android/app/src/test/java/com/ferluht/fm1sampler/LibraryBackupArchiveHostTest.java
+          java -cp /tmp/fm1-backup-java-test com.ferluht.fm1sampler.LibraryBackupArchiveHostTest
       - name: Install Android toolchain
         run: |
           echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
@@ -62,37 +70,37 @@ jobs:
       - name: Stage and check APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.5-preview.apk
-          unzip -t dist/FM1-Sampler-Library-0.38.5-preview.apk | tail -n 1
-          sha256sum dist/FM1-Sampler-Library-0.38.5-preview.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.6-preview.apk
+          unzip -t dist/FM1-Sampler-Library-0.38.6-preview.apk | tail -n 1
+          sha256sum dist/FM1-Sampler-Library-0.38.6-preview.apk
       - name: Publish on GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v0.38-library-preview.6
+          TAG: v0.38-library-preview.7
         run: |
           cat > release-notes.md <<'EOF'
-          ## FM1 Sampler 0.38.5 — Restored LIBRARY and NOTE REPEAT triplets
+          ## FM1 Sampler 0.38.6 — Portable SAVE BACKUP / IMPORT BACKUP
 
-          **Installable APK:** `FM1-Sampler-Library-0.38.5-preview.apk` (Android debug prerelease).
+          **Installable Android APK:** `FM1-Sampler-Library-0.38.6-preview.apk`.
 
-          - **HOME folder icon LIBRARY:** opens the original in-app library panel (not Android's external document browser). Its four root directories, file-type icons, ENTER/BACK controls and **+ IMPORT ZIP** are restored.
-          - **IMPORT ZIP** opens Android's document picker specifically to select an external ZIP, then extracts the archive under `FM1-SAMPLER/PACKS` without deleting the source ZIP.
-          - **PRESETS knob and library touch selection** share one cursor. Moving to a WAV immediately loads it into the selected track as a preset. ENTER only opens selected folders; BACK goes up one directory.
-          - **OCT+ + OCT- together** (in either press order) instantly shows the NOTE REPEAT rate page. No long press or PLAY is required to open the menu; K1 chooses the rate.
-          - **All six straight and six triplet note divisions:** 1/1, 1/1T, 1/2, 1/2T, 1/4, 1/4T, 1/8, 1/8T, 1/16, 1/16T, 1/32, 1/32T. A triplet repeat lasts 2/3 of the corresponding straight division at the session BPM.
-          - **OCT+ + PLAY** remains momentary NOTE REPEAT; **OCT- + PLAY** remains immediate loop restart. Releasing PLAY returns to the original loop without altering saved audio.
-          - Existing FMP2 project archives and WAV loops remain compatible. Old project setting v2 straight divisions are remapped to their equivalent v3 index on load; no samples or audio data are removed.
-          - **Firmware source:** `firmware/app/ctrl.c` marks both octave buttons as consumed in the menu combination, so releasing them does not shift the keyboard. Host firmware simulation is included in CI. The repository's previously bundled `.fwsc` **has not been rebuilt**, and this APK **does not flash firmware**. A physical FM-1 must run firmware forwarding OCT+ / OCT- USB MIDI Note On/Off to detect the combination.
-          - Separate debugging note: debug-signed GitHub APKs may not share a stable key. **Never uninstall an old version containing irreplaceable project/loop data without a tested backup.** Package ID for this APK is `com.ferluht.fm1sampler.scenes`.
+          - Inside **HOME → LIBRARY**, alongside **+ IMPORT ZIP**, two buttons now work: **SAVE BACKUP** and **IMPORT BACKUP**.
+          - **SAVE BACKUP** lets you choose a user-owned ZIP location through Android's Create Document picker (Downloads, Documents, USB or compatible cloud). The ZIP contains the full already-saved FM1-SAMPLER library: complete FMP2 project slots, current saved scene/SONG files, loops WAVs, recordings, imported audio, OFFICIAL instruments, PACKS, nested folders and non-audio files.
+          - **IMPORT BACKUP** picks a ZIP and verifies every file with SHA-256 and a versioned manifest, rejecting corrupted archives, duplicates and unsafe paths before restoration.
+          - **KEEP EXISTING** merges only missing files. **REPLACE** requires additional confirmation, and safeguards previous originals in an independent FM1-SAMPLER-RECOVERY directory. No silent overwrite.
+          - Backup operations are asynchronous and blocked during recording or a full-project save/load. Reopen the app after importing to load restored files.
+          - The in-app LIBRARY panel, IMPORT ZIP, PRESETS auto-load navigation, OCT+ / OCT- note-repeat menu, straight and triplet divisions, MIDI transport and complete saved projects are retained.
+          - **Save the active project BEFORE saving a backup:** unsaved in-memory playback/loop changes are not files yet, and therefore cannot be included in a file backup.
+          - **Same signing caveat:** GitHub debug releases can have different signing keys. Do NOT uninstall a prior app with irreplaceable projects/loops until a saved backup is verified and accessible outside the app. Use this portable ZIP to migrate between APK packages without requiring ADB.
+          - **Firmware:** no physical FM-1 flash is performed; only Android app code changes are in this release.
 
-          **Validation:** Automated engine/navigation/audio tests, FM-1 controller source host simulation, and Android APK compilation. Hardware behavior remains unverified on the actual device.
+          **Verification:** Host C++ and FM-1 MIDI panel tests; standalone host Java tests for exact backup round trips, KEEP vs REPLACE, preserved originals, path traversal and invalid archives; Android Gradle APK compilation. Physical Android document provider operations are not yet validated on a real device.
 
           Source: [FM1 Sampler development](https://github.com/Koolkatze/fm1-sampler/pull/3).
           EOF
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.5-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.6-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md --prerelease
           else
-            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.5-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.5 — LIBRARY restored and triplet NOTE REPEAT"               --notes-file release-notes.md               --prerelease
+            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.6-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.6 — Portable library backup and restore"               --notes-file release-notes.md               --prerelease
           fi
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets,isPrerelease             --jq '{url: .url, isPrerelease: .isPrerelease, files: [.assets[].name]}'
