@@ -89,6 +89,7 @@ void SamplerUI::frame(uint32_t now) {
     const float tb = 44, left = 176, right = 252;
     if (!editor_) {   // the cassette deck fills the screen; the old sample / page editor stays one tap away (EDIT)
         deck({0, 0, W_, H_});
+        if (sheetOpen_) librarySheet();
         if (projectOpen_) {
             projectSheet();
             if (projectSlotsMode_) projectSlotsSheet();
@@ -99,6 +100,7 @@ void SamplerUI::frame(uint32_t now) {
     trackList({MARGIN, tb + MARGIN, left - MARGIN, H_ - tb - 2 * MARGIN});
     sampleArea({left + MARGIN, tb + MARGIN, W_ - left - right - 2 * MARGIN, H_ - tb - 2 * MARGIN});
     pagePanel({W_ - right, tb + MARGIN, right - MARGIN, H_ - tb - 2 * MARGIN});
+    if (sheetOpen_) librarySheet();
 }
 
 void SamplerUI::topBar(Rect r) {
@@ -295,8 +297,8 @@ void SamplerUI::pageView(Rect r) {
         break; }
     case P::P_CUE: {
         head = std::string("NOTE REPEAT: ") + kn[0].value;
-        text(w.x + 8, cy - 8, 13, kOrange, "HOLD OCT+ + PLAY", 0, true);
-        text(w.x + 8, cy + 16, 10, kDim, "CHANGE K1 WHILE PLAYING", 0, false);
+        text(w.x + 8, cy - 8, 12, kOrange, "OCT+ + OCT- : RATE MENU", 0, true);
+        text(w.x + 8, cy + 16, 10, kDim, "K1: STRAIGHT / TRIPLET   OCT+ + PLAY: REPEAT", 0, false);
         break; }
     case P::P_LEN: {   // the loop as bars: one block per bar with its beats, the orange playhead
         const int bars = std::max(1, st_.loopBars), shown = std::min(bars, 16);
@@ -616,8 +618,8 @@ void SamplerUI::deck(Rect r) {
         stroke(help, R_CONTROL, theme::OUTLINE, 1);
         text(help.x + 7, help.y + 9, 9, kPaper,
              "OCT− + PLAY/STOP: RESTART LOOP", 0, true);
-        text(help.x + 7, help.y + 23, 8.6f, kDim,
-             "OCT+ + PLAY/STOP    NOTE REPEAT  (K1: 1/1-1/32)", 0, true);
+        text(help.x + 7, help.y + 23, 7.7f, kDim,
+             "OCT+ + PLAY: REPEAT   OCT+ + OCT-: RATE MENU (K1)", 0, true);
         line(help.x + 7, help.y + 29, help.x + help.w - 7, help.y + 29, kLine, 1);
         // Notes can arrive in separate USB/BLE callbacks. These strings show
         // their arrival and which modifier is still held; they do not generate
@@ -660,11 +662,11 @@ void SamplerUI::deck(Rect r) {
     const uint32_t micCol = mic == 1 || mic == 2 ? kOrange : kPaper;
     icon(4, mx, 56, kPaper);  tap({mx - 32, 28, 64, 56}, [this] { setLight(!theme::light); });
     icon(5, mx, 120, micCol); tap({mx - 32, 92, 64, 56}, [this] { app_.micSample(); });
-    // HOME folder icon returns to the library's internal root; external
-    // imports remain available separately in the EDIT screen.
+    // HOME folder icon restores the familiar library page with IMPORT ZIP,
+    // while the physical PRESETS knob continues using the same directory cursor.
     icon(6, mx, 184, kPaper);
     text(mx, 211, 8.5f, kDim, "LIBRARY", 1, true);
-    tap({mx - 32, 156, 64, 56}, [this] { app_.browserRoot(); });
+    tap({mx - 32, 156, 64, 56}, [this] { openLibrary(); });
     icon(7, mx, 248, projectOpen_ ? kOrange : kPaper); tap({mx - 32, 220, 64, 56}, [this] { projectOpen_ = true; });
     // the sample of this track, its page and the four knobs of the page
     sampleView({x0, 14, w0, 118});
@@ -834,61 +836,40 @@ void SamplerUI::pagePanel(Rect r) {
 void SamplerUI::openLibrary() {
     app_.refreshLibrary();
     app_.browserRoot();
-    sheetOpen_ = false; // never open a separate browser overlay
+    projectOpen_ = false;
+    sheetOpen_ = true;
+    browseDir_.clear();
+    sheetScroll_ = 0;
+    buildBrowserRows();
 }
 
 void SamplerUI::buildBrowserRows() {
-    namespace fs = std::filesystem;
+    // One authoritative cursor for the FM-1 PRESETS encoder AND this sheet.
+    // Do not create a second directory scanner with different audio loading
+    // rules; all WAVs selected here load as a preset immediately.
+    const std::string& dir = app_.browserDir();
+    const bool changedDir = browseDir_ != dir;
+    const int oldSelected = browseSelected_;
+    if (changedDir) sheetScroll_ = 0.f;
+    browseDir_ = dir;
     browseRows_.clear();
-    browseSelected_ = 0;
-    sheetScroll_ = 0;
-    const fs::path root(app_.session().sampleDir());
-    const auto& lib = app_.library();
-    std::error_code ec;
-    const fs::path current = root / browseDir_;
-    if (browseDir_.empty()) {
-        for (const char* name : {"PROYECTOS", "OFFICIAL", "SAVED", "PACKS"})
-            browseRows_.push_back({name, name, -1, true});
-    } else {
-        if (browseDir_ == "PROYECTOS" &&
-            std::any_of(lib.begin(), lib.end(), [](const SamplerApp::Entry& e) {
-                return e.pack == "PROYECTOS" && e.folder == "Embedded";
-            }))
-            browseRows_.push_back({"Embedded", "PROYECTOS/Embedded", -1, true});
-        if (fs::is_directory(current, ec)) {
-            for (const auto& item : fs::directory_iterator(current, fs::directory_options::skip_permission_denied, ec)) {
-                if (!item.is_directory(ec)) continue;
-                const fs::path rel = item.path().lexically_relative(root);
-                browseRows_.push_back({item.path().filename().string(), rel.generic_string(), -1, true});
-            }
-            for (const auto& item : fs::directory_iterator(current, fs::directory_options::skip_permission_denied, ec)) {
-                if (!item.is_regular_file(ec)) continue;
-                const auto abs = item.path().string();
-                const auto match = std::find_if(lib.begin(), lib.end(),
-                    [&](const SamplerApp::Entry& e) { return e.path == abs; });
-                const int entry = match == lib.end() ? -1 : (int)(match - lib.begin());
-                // Preserve non-audio contents of imported ZIPs in the browser.
-                browseRows_.push_back({item.path().filename().string(), abs, entry, false});
-            }
-        }
-        for (int i = 0; i < (int)lib.size(); ++i) {
-            const auto& e = lib[(size_t)i];
-            if (e.pack + "/" + e.folder != browseDir_) continue;
-            const fs::path file(e.path);
-            if (file.parent_path() == current) continue;
-            browseRows_.push_back({e.label + ".wav", e.path, i, false});
-        }
+    for (const auto& row : app_.browserItems())
+        browseRows_.push_back({row.label, row.path, row.entry, row.directory});
+    browseSelected_ = app_.browserIndex();
+    constexpr float rowHeight = 36.f;
+    if (browseSelected_ >= 0 && (changedDir || browseSelected_ != oldSelected) && sheetList_.h > 0) {
+        const float y = rowHeight * browseSelected_;
+        if (y < sheetScroll_) sheetScroll_ = y;
+        else if (y + rowHeight > sheetScroll_ + sheetList_.h)
+            sheetScroll_ = y + rowHeight - sheetList_.h;
     }
-    std::sort(browseRows_.begin(), browseRows_.end(), [](const BrowserRow& x, const BrowserRow& y) {
-        if (x.directory != y.directory) return x.directory;
-        return x.label < y.label;
-    });
 }
 
-void SamplerUI::browserBack() { app_.browserBack(); }
-void SamplerUI::browserEnter() { app_.browserEnter(); }
+void SamplerUI::browserBack() { app_.browserBack(); buildBrowserRows(); }
+void SamplerUI::browserEnter() { app_.browserEnter(); buildBrowserRows(); }
 
 void SamplerUI::librarySheet() {
+    buildBrowserRows(); // reflect live physical PRESETS movement on the phone
     rrect({0, 0, W_, H_}, 0, theme::withAlpha(BG, 215));
     tap({0, 0, W_, H_}, [this] { sheetOpen_ = false; });
     const Rect box{W_ * 0.17f, 12, W_ * 0.66f, H_ - 24};
@@ -923,12 +904,12 @@ void SamplerUI::librarySheet() {
             rrect({sheetList_.x, y + 1, sheetList_.w, rh - 2}, R_CONTROL, RAISED);
             stroke({sheetList_.x, y + 1, sheetList_.w, rh - 2}, R_CONTROL, ACCENT, 1.1f);
         }
-        icon(row.directory ? 9 : 10,
+        icon(row.directory ? 9 : row.entry >= 0 ? 10 : 7,
              sheetList_.x + 20, y + rh / 2, selected ? ACCENT : TEXT);
         text(sheetList_.x + 42, y + 13, 11, selected ? ACCENT : TEXT,
              fit(row.label, sheetList_.w - 70, 11), 0, selected);
         text(sheetList_.x + 42, y + 29, 8.3f, DIM,
-             row.directory ? "FOLDER / ENTER >" : row.entry >= 0 ? "WAV / ENTER TO LOAD" : "ORIGINAL FILE (PRESERVED)", 0, false);
+             row.directory ? "FOLDER / ENTER >" : row.entry >= 0 ? "WAV / AUTO LOADS AS PRESET" : "OTHER FILE (PRESERVED)", 0, false);
     }
     endClip();
     if (browseRows_.empty())
@@ -944,7 +925,10 @@ void SamplerUI::librarySheet() {
         [this, rh] {
             if (sheetMoved_ > 8) return;
             const int index = (int)((sheetLastY_ - sheetList_.y + sheetScroll_) / rh);
-            if (index >= 0 && index < (int)browseRows_.size()) browseSelected_ = index;
+            if (index >= 0 && index < (int)browseRows_.size()) {
+                app_.browserSelect(index);
+                buildBrowserRows();
+            }
         });
 
     button({box.x + 15, box.y + box.h - 37, 135, 28}, "+ IMPORT ZIP", false,
@@ -952,7 +936,7 @@ void SamplerUI::librarySheet() {
     text(box.x + 163, box.y + box.h - 22, 9, DIM,
          browseRows_.empty() ? "0 FILES" :
          std::to_string(browseSelected_ + 1) + "/" + std::to_string(browseRows_.size()) +
-             "  -  ARROWS TO OPEN / GO BACK", 0, false);
+             "  -  PRESETS SELECTS / WAV AUTO LOADS", 0, false);
 }
 
 // PROJECT: original loop actions on the left; scene / song sequencer on the
