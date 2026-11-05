@@ -72,7 +72,7 @@ jobs:
       - name: Publish APK in new GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v0.37-scenes-preview.9
+          TAG: v0.37-scenes-preview.10
         run: |
           cat > release-notes.md <<'EOF'
           ## FM1 Sampler — complete projects (COMPOSE + LOOPS + SONG)
@@ -99,7 +99,7 @@ jobs:
           - Retains the cassette-tape icon with split white/black and orange dot.
           - LOOP MODE C1–B1, SONG MODE, Project scene persistence and the original sample editor remain.
           - Package: `com.ferluht.fm1sampler.scenes`.
-          - Preview version: 0.37.8-scenes-test (versionCode 45).
+          - Preview version: 0.37.9-scenes-test (versionCode 46).
 
           Validation: host tests exercise non-simultaneous physical OCT/PLAY MIDI callbacks, strict modifier ordering, diagnostic event rendering, NOTE REPEAT / restart, exact restoration of recorded loops, scene/song switching and both Light/Dark modes. Android compilation uses the updated MIDI receiver.
 
