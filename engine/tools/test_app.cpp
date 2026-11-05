@@ -86,6 +86,20 @@ int main() {
             if (file.path().extension() == ".wav") ++wavs;
     }
     CHECK(wavs >= 1, "SAVE wrote the complete named loop into SAVED/LOOPS (%d files)", wavs);
+    // Export is a frozen audio-thread snapshot written asynchronously;
+    // track stems and the mix must exist independently of current state.
+    const std::string exportDir = "/tmp/fm1sampler_t2/public_export_staging";
+    CHECK(s.exportLoops(exportDir), "export recorded loop to staging starts");
+    for (int k = 0; k < 80 && s.loopExportStatus() == 1; ++k) run(0.05);
+    CHECK(s.loopExportStatus() == 2, "snapshot export finishes successfully");
+    {
+        std::vector<float> wav; int rate = 0;
+        CHECK(readWav(exportDir + "/TRACK_01.wav", wav, rate) &&
+              rate == sr && !wav.empty(),
+              "export WAV stem is playable and retains the original sample rate");
+        CHECK(std::filesystem::exists(exportDir + "/MASTER.wav"),
+              "export also writes the full-length master WAV");
+    }
     app.loopClearTrack(); run(0.3);
     CHECK(!app.status().track_has_clip[0], "clearing one track's loop");
     app.loopClear(); run(0.3);
@@ -699,49 +713,49 @@ int main() {
                     crumb = op.text;
             return crumb;
         };
-        CHECK(hasText("ROOT") && hasText("FOLDERS") && hasText("SAMPLES"),
-              "HOME shows the always-visible archive, folder and waveform navigation");
-        click(40.f, 34.f);  // HOME archive icon opens the ROOT browser
-        CHECK(hasText("ENTER >") && hasText("< BACK") &&
-              hasText("ROOT") && hasText("FOLDERS") && hasText("SAMPLES"),
-              "FM1-SAMPLER browser includes ENTER/BACK, archive, folder and waveform icons");
+        CHECK(hasText("BACK") && hasText("ENTER") &&
+              hasText("FM1-SAMPLER") && !hasText("FOLDERS") && !hasText("SAMPLES"),
+              "HOME has BACK/ENTER and one file-type indicator, not category buttons");
+        click(143.f, 26.f);  // the root archive icon is read-only
+        CHECK(!hasText("+ IMPORT ZIP"), "file-type icon has no touch action");
+        click(220.f, 26.f);  // selecting the filename opens the browser
+        CHECK(hasText("ENTER >") && hasText("< BACK"),
+              "browser navigation buttons sit left of the file names");
         CHECK(hasText("PROYECTOS") && hasText("OFFICIAL") &&
               hasText("SAVED") && hasText("PACKS") && breadcrumb() == "FM1-SAMPLER /",
-              "FM1-SAMPLER always opens at its four permanent top-level folders");
+              "FM1-SAMPLER opens with all four directories");
         // Alphabetical folder order: OFFICIAL, PACKS, PROYECTOS, SAVED.
-        click(285.f, 165.f); click(660.f, 65.f);
+        click(285.f, 165.f); click(200.f, 165.f);
         CHECK(breadcrumb() == "FM1-SAMPLER / PACKS", "ENTER visits PACKS");
-        click(285.f, 129.f); click(660.f, 65.f);
+        click(285.f, 129.f); click(200.f, 165.f);
         CHECK(breadcrumb() == "FM1-SAMPLER / PACKS/My Imported ZIP" ||
               breadcrumb() == "FM1-SAMPLER / PACKS / My Imported ZIP",
               "ENTER visits the imported ZIP's own folder");
-        click(285.f, 129.f); click(660.f, 65.f);
-        CHECK(breadcrumb().find("/Drums") != std::string::npos, "ENTER visits a nested Drums subfolder");
-        click(555.f, 65.f);
+        click(285.f, 129.f); click(200.f, 165.f);
+        CHECK(breadcrumb().find("/Drums") != std::string::npos,
+              "ENTER visits nested Drums subfolder");
+        click(200.f, 126.f);
         CHECK(breadcrumb().find("My Imported ZIP") != std::string::npos &&
               breadcrumb().find("/Drums") == std::string::npos,
-              "BACK returns precisely one level from a nested pack folder");
-        click(555.f, 65.f); click(555.f, 65.f);
+              "BACK returns exactly one level from nested folder");
+        click(200.f, 126.f); click(200.f, 126.f);
         CHECK(breadcrumb() == "FM1-SAMPLER /",
-              "BACK returns from PACKS to the FM1-SAMPLER root");
-        // Side navigation is functional: FOLDERS keeps only directories;
-        // SAMPLES shows all WAVs globally at root; ROOT resets to four folders.
-        click(200.f, 194.f);  // sidebar folder icon
-        CHECK(hasText("OFFICIAL") && hasText("PACKS") && breadcrumb() == "FM1-SAMPLER /",
-              "FOLDERS sidebar lists directories and preserves root");
-        click(200.f, 256.f);  // sidebar waveform icon
-        CHECK(hasText("WAV / ENTER TO LOAD") && !hasText("EMPTY FOLDER"),
-              "SAMPLES sidebar indexes real playable WAVs, not decorative icons");
-        click(200.f, 132.f);  // sidebar archive icon
-        CHECK(hasText("PROYECTOS") && hasText("OFFICIAL") &&
-              hasText("SAVED") && hasText("PACKS") && breadcrumb() == "FM1-SAMPLER /",
-              "ROOT sidebar returns to FM1-SAMPLER top-level directories");
-        click(660.f, 29.f);  // close browser; HOME buttons remain visible
-        CHECK(hasText("ROOT") && hasText("FOLDERS") && hasText("SAMPLES"),
-              "HOME retains category shortcuts after closing the browser");
-        click(115.f, 34.f);  // HOME waveform opens playable samples globally
-        CHECK(hasText("WAV / ENTER TO LOAD"),
-              "HOME waveform button directly opens the global playable samples list");
+              "BACK returns from PACKS to FM1-SAMPLER root");
+        click(660.f, 29.f); // close the library
+        CHECK(hasText("BACK") && hasText("ENTER") && !hasText("+ IMPORT ZIP"),
+              "HOME navigation stays available without modal category tabs");
+        click(40.f, 26.f); // HOME BACK at root selects archive/root
+        CHECK(hasText("FM1-SAMPLER"), "HOME BACK exposes library root");
+        click(91.f, 26.f); // HOME ENTER from root opens folder selector
+        CHECK(hasText("+ IMPORT ZIP"), "HOME ENTER opens the actual directory list");
+        click(660.f, 29.f);
+        // PROJECT menu exposes EXPORT LOOP alongside SAVE/LOAD PROJECT.
+        click(351.f, 248.f);
+        CHECK(hasText("SAVE PROJECT") && hasText("LOAD PROJECT") &&
+              hasText("EXPORT LOOP"), "PROJECT has three independent save/load/export actions");
+        click(351.f, 67.f);
+        CHECK(app.wantLoopExport() && !app.wantLoopExport(),
+              "EXPORT LOOP sends exactly one request to Android's shared-download exporter");
     }
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL OK", fails);
     return fails ? 1 : 0;
