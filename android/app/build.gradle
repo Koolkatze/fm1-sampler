@@ -2,7 +2,7 @@ plugins { id 'com.android.application' }
 android {
     namespace 'com.ferluht.fm1sampler'
     compileSdk 34
-    defaultConfig { applicationId 'com.ferluht.fm1sampler'; minSdk 23; targetSdk 30; versionCode 44; versionName "0.37.7" }
+    defaultConfig { applicationId 'com.ferluht.fm1sampler'; minSdk 23; targetSdk 30; versionCode 45; versionName "0.37.8" }
     signingConfigs { debug { enableV1Signing = true; enableV2Signing = true } }
     // The GitHub-built preview installs separately from production / CUE FM-1 Sampler.
     buildTypes {

@@ -72,12 +72,22 @@ jobs:
       - name: Publish APK in new GitHub prerelease
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v0.37-scenes-preview.8
+          TAG: v0.37-scenes-preview.9
         run: |
           cat > release-notes.md <<'EOF'
-          ## FM1 Sampler Scenes — composition restoration and strict physical shortcuts
+          ## FM1 Sampler — complete projects (COMPOSE + LOOPS + SONG)
 
           **Install the attached `FM1-Sampler-Scenes-SongMode.apk` on Android.**
+
+          ### NEW: save and reload complete project sessions
+
+          - **PROJECT > SAVE PROJECT / LOAD PROJECT:** eight independent named-numbered project slots, with a slot picker. Replacing an existing save or loading over your current work requires a second confirmation.
+          - Every complete project stores the precise current eight-track recorded clips; an independent copy of COMPOSE even if the save is made in LOOP/SONG mode; all 12 saved scenes and their original loop audio; the ordered SONG arrangement and its current playback position; the selected scene, live loop transport and tempo.
+          - All eight sample-source WAV files are embedded inside each self-contained `.fm1p` archive and rehydrated on load, with the original sample names. Sample ranges and processing, synth modes, tuning, envelope, LFO, arpeggiator, filters, sidechain, mix, sends, global effects, loop speed/source and NOTE REPEAT division are saved.
+          - Archives are atomically committed (old project preserved until new file is complete) with a 64-bit whole-file integrity checksum; corrupted/truncated files are rejected without changing the active project.
+          - Song-mode saves reopen in SONG, mid-song playback resumes, and HOME/EXIT afterward restores the correct COMPOSE loops instead of replacing them with the active scene. Save/load is refused during active recording to avoid capturing incomplete takes.
+          - Project files live in the phone application's private storage as `project_1.fm1p` through `project_8.fm1p`. These local saves are NOT automatic external backups. An uninstall can erase all projects. Preserve existing recordings before removing a differently-signed debug APK.
+          - Includes regression tests saving/loading both COMPOSE and SONG while retaining embedded WAVs, clips, scene bank, arrangements, user settings, sample names, theme UI, and rejection of a deliberately corrupt project file.
 
           - **Compact shortcut help on the phone's main deck:** the exact label **OCT− + PLAY/STOP: RESTART LOOP** is shown above OCT+ + PLAY/STOP (NOTE REPEAT, K1=1/1..1/32). Use the small HIDE/INFO control to collapse/reopen; the preference persists between app launches. The guide adopts the existing Light/Dark palette and does not trigger any audio action. There are **no new OCT buttons on the phone**.
           - **Physical OCT− held first, THEN PLAY/STOP:** restart the loop immediately on PLAY/STOP press. Pressing OCT− after PLAY/STOP is already down does not trigger restart.
@@ -89,7 +99,7 @@ jobs:
           - Retains the cassette-tape icon with split white/black and orange dot.
           - LOOP MODE C1–B1, SONG MODE, Project scene persistence and the original sample editor remain.
           - Package: `com.ferluht.fm1sampler.scenes`.
-          - Preview version: 0.37.7-scenes-test (versionCode 44).
+          - Preview version: 0.37.8-scenes-test (versionCode 45).
 
           Validation: host tests exercise non-simultaneous physical OCT/PLAY MIDI callbacks, strict modifier ordering, diagnostic event rendering, NOTE REPEAT / restart, exact restoration of recorded loops, scene/song switching and both Light/Dark modes. Android compilation uses the updated MIDI receiver.
 
@@ -115,7 +125,7 @@ jobs:
             gh release create "$TAG" dist/FM1-Sampler-Scenes-SongMode.apk \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
-              --title "FM1 Sampler Scenes — physical MIDI receiver diagnostics" \
+              --title "FM1 Sampler — save complete projects with all clips, song and samples" \
               --notes-file release-notes.md \
               --prerelease
           fi
