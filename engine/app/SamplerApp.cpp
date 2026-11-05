@@ -26,6 +26,10 @@ const char* kArpRate[] = {"OFF", "1", "2", "2T", "4", "4T", "8", "8T", "16", "16
 const char* kArpPatt[] = {"UP", "DOWN", "UPDN", "CONV", "RAND"};
 const char* kLfoTarget[] = {"PITCH", "FILTER", "VOLUME", "PAN"};
 const char* kLfoShape[] = {"SINE", "TRI", "SQUARE", "S&H"};
+// Straight and triplet values alternate: T lasts 2/3 of its straight counterpart.
+const char* kCueRates[] = {"1/1", "1/1T", "1/2", "1/2T", "1/4", "1/4T",
+                           "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/32T"};
+const char* cueRateName(int index) { return kCueRates[std::max(0, std::min(11, index))]; }
 std::vector<uint8_t> n14(int v) { return {(uint8_t)(v >> 7 & 127), (uint8_t)(v & 127)}; }
 std::vector<uint8_t> col(uint16_t c) { return {(uint8_t)(c >> 14 & 3), (uint8_t)(c >> 7 & 127), (uint8_t)(c & 127)}; }
 void cat(std::vector<uint8_t>& a, const std::vector<uint8_t>& b) { a.insert(a.end(), b.begin(), b.end()); }
@@ -209,6 +213,12 @@ void SamplerApp::browse(int delta) {
     browserIndex_ = ((start + step) % n + n) % n;
     browserTouchedAt_ = nowMs_;
     loadBrowserSelection();
+}
+void SamplerApp::browserSelect(int index) {
+    if (index < 0 || index >= (int)browserItems_.size()) return;
+    browserIndex_ = index;
+    browserTouchedAt_ = nowMs_;
+    loadBrowserSelection(); // touching a WAV also loads it, just like PRESETS
 }
 void SamplerApp::browserEnter() {
     const BrowserItem* chosen = browserSelected();
@@ -447,7 +457,9 @@ SamplerApp::Knobs SamplerApp::knobs(Page p) {
         break;
     }
     case P_CUE:
-        k[0] = choice("RATE", &cueDivision_, {"1/1", "1/2", "1/4", "1/8", "1/16", "1/32"},
+        k[0] = choice("RATE", &cueDivision_,
+                      {"1/1", "1/1T", "1/2", "1/2T", "1/4", "1/4T",
+                       "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/32T"},
                       [this] { if (cueActive_) s_.setCue(true, cueDivision_); });
         // Keep the remaining encoders inert during the momentary beat-repeat.
         break;
@@ -561,13 +573,14 @@ void SamplerApp::stopSong() {
 namespace {
 struct FullProjectSettings {
     uint32_t magic = 0x32505041;  // APP2
-    uint32_t version = 2, bytes = sizeof(FullProjectSettings);
+    // v3 changes only the NOTE REPEAT subdivision enum. v2 projects remain loadable.
+    uint32_t version = 3, bytes = sizeof(FullProjectSettings);
     std::array<SamplerApp::TrackState, SamplerApp::kTracks> tracks{};
     SamplerApp::ScaleState scale{};
     float reverbSize = .7f, reverbWet = .35f, delayTime = .4f, delayFeedback = .45f;
     float exciter = 0.f, lofi = 0.f, wobble = 0.f, loopSpeed = 2.f / 3.f, micThreshold = .452f;
     int32_t loopSource = 1, selectedTrack = 0, page = 0;
-    int32_t selectedScene = 0, selectedSongStep = -1, cueDivision = 2;
+    int32_t selectedScene = 0, selectedSongStep = -1, cueDivision = 4;
     uint8_t sceneTrackMask = 0xff, performance = 0, songMode = 0, reserved = 0;
     uint32_t songSize = 0;
     std::array<int32_t, 64> songOrder{};
@@ -648,11 +661,13 @@ void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
     }
     FullProjectSettings m{};
     std::memcpy(&m, project.appState.data(), sizeof(m));
-    if (m.magic != 0x32505041 || m.version != 2 || m.bytes != sizeof(m) ||
-        m.songSize > 64 || m.selectedTrack < 0 || m.selectedTrack >= kTracks ||
+    if (m.magic != 0x32505041 || (m.version != 2 && m.version != 3) ||
+        m.bytes != sizeof(m) || m.songSize > 64 ||
+        m.selectedTrack < 0 || m.selectedTrack >= kTracks ||
         m.page < 0 || m.page >= kPages || m.selectedScene < 0 ||
         m.selectedScene >= Session::kScenes || m.selectedSongStep < -1 ||
-        m.selectedSongStep >= (int)m.songSize || m.cueDivision < 0 || m.cueDivision > 5 ||
+        m.selectedSongStep >= (int)m.songSize || m.cueDivision < 0 ||
+        m.cueDivision > (m.version == 2 ? 5 : 11) ||
         m.performance > 1 || m.songMode > 1) {
         say("PROJECT SETTINGS CORRUPT"); return;
     }
@@ -665,7 +680,10 @@ void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
     loopSpeed_ = m.loopSpeed; micThr_ = m.micThreshold; loopSrc_ = m.loopSource;
     track_ = m.selectedTrack; page_ = (Page)m.page;
     selectedScene_ = m.selectedScene; songSelected_ = m.selectedSongStep;
-    sceneTracks_ = m.sceneTrackMask; cueDivision_ = m.cueDivision;
+    sceneTracks_ = m.sceneTrackMask;
+    cueDivision_ = m.version == 2 ? m.cueDivision * 2 : m.cueDivision;
+    // v2 saved 0..5 as straight divisions. v3 interleaves T values,
+    // keeping the original rhythmic choice without losing old projects.
     sceneKeys_ = m.performance; songMode_ = m.songMode;
     songOrder_.clear();
     for (uint32_t i = 0; i < m.songSize; ++i) songOrder_.push_back(m.songOrder[i]);
@@ -733,7 +751,7 @@ void SamplerApp::restartLoop() {
     say("LOOP FROM START");
 }
 void SamplerApp::setCueDivision(int division) {
-    cueDivision_ = std::max(0, std::min(5, division));
+    cueDivision_ = std::max(0, std::min(11, division));
     if (cueActive_) s_.setCue(true, cueDivision_);
 }
 void SamplerApp::cueHold(bool down) {
@@ -909,20 +927,23 @@ void SamplerApp::button(int b, bool down) {
     if (wasDown == down) return; // duplicate MIDI Note On/Off must not toggle transport
     lastLed_ = ~0ull;
     if (down) held_ |= mask; else held_ &= ~mask;
-    if (b == OCT_UP) {
-        if (down) {
-            octUpAt_ = nowMs_;
+    if (b == OCT_UP || b == OCT_DOWN) {
+        if (b == OCT_UP && down) octUpAt_ = nowMs_;
+        // The two Note On events can arrive in either order or in separate
+        // USB MIDI callbacks. Show the RATE menu as soon as both are held.
+        const uint32_t octBoth = (1u << OCT_UP) | (1u << OCT_DOWN);
+        if (down && (held_ & octBoth) == octBoth && !cueSelect_) {
             cueReturnPage_ = page_;
-        } else {
+            cueSelect_ = true;
+            page_ = P_CUE;
+        }
+        if (b == OCT_UP && !down) {
             cueHold(false);
             if (cueSelect_) page_ = cueReturnPage_;
             cueSelect_ = false;
         }
-        return;   // octave changes arrive separately as EV_SCALE on short standalone taps
-    }
-    if (b == OCT_DOWN) {
-        // Modifier only: never trigger an action by pressing OCT- AFTER PLAY.
-        // The transport action is decided exactly once at PLAY/STOP key-down.
+        // Releasing only OCT- leaves the menu visible while OCT+ is held.
+        // Neither modifier changes PLAY/STOP until PLAY is actually pressed.
         return;
     }
     if (b == PLAY || b == STOP) {
@@ -1182,7 +1203,7 @@ void SamplerApp::draw(uint32_t now) {
     std::string line;
     if (mic_ == 1) line = "MIC: WAITING FOR SOUND";
     else if (mic_ == 2) line = fmt("MIC: RECORDING %.1fS", st_.sampleSeconds);
-    else if (cueActive_) line = std::string("NOTE REPEAT 1/") + std::to_string(1 << cueDivision_) + "  REPEATING";
+    else if (cueActive_) line = std::string("NOTE REPEAT ") + cueRateName(cueDivision_) + "  REPEATING";
     else if (cueSelect_) line = "NOTE REPEAT: K1 RATE, HOLD PLAY";
     else if (!toast().empty()) line = toast();
     else if (browserTouchedAt_ && now - browserTouchedAt_ < 4000) {
@@ -1221,7 +1242,7 @@ void SamplerApp::draw(uint32_t now) {
         rects_[70 + i] = ~0ull;
         rect(70 + i, cx, cy + 38, bw, 3, ACCENT);
     }
-    const char* hint = mic_ == 1 ? (page_ == P_SAVE ? "K4 = TRIGGER LEVEL  LINE = THRESHOLD" : "K1 = TRIGGER LEVEL  LINE = THRESHOLD") : mic_ == 2 ? "RECORDING  K1 ON LOOP PAGE STOPS"  : page_ == P_CUE ? "K1 RATE LIVE  OCT+ + HOLD PLAY" : page_ == P_LEN ? "TURN K1: X2 OR /2  THE LOOP REPEATS" : page_ == P_SAVE ? "SAVE AND CLEAR LOOPS: PROJECT MENU ON THE PHONE" : page_ == P_KEY ? "KEYS FOLLOW THE KEY  CHANGE ANY TIME"
+    const char* hint = mic_ == 1 ? (page_ == P_SAVE ? "K4 = TRIGGER LEVEL  LINE = THRESHOLD" : "K1 = TRIGGER LEVEL  LINE = THRESHOLD") : mic_ == 2 ? "RECORDING  K1 ON LOOP PAGE STOPS"  : page_ == P_CUE ? "OCT+ + OCT- MENU   K1 RATE / TRIPLETS" : page_ == P_LEN ? "TURN K1: X2 OR /2  THE LOOP REPEATS" : page_ == P_SAVE ? "SAVE AND CLEAR LOOPS: PROJECT MENU ON THE PHONE" : page_ == P_KEY ? "KEYS FOLLOW THE KEY  CHANGE ANY TIME"
                      : "SEL TRACK  PRE BROWSE  ALG ALGORITHM";
     drawText(90, 12, 228, 1, DIM, BLACK, hint, 38);
     needClear_ = false;
@@ -1251,7 +1272,7 @@ void SamplerApp::hero(uint32_t now, const Knobs& k) {
             for (int i = 0; i < n; i++) { float v = 0; for (int j = i * per; j < std::min(ln, (i + 1) * per); j++) v = std::max(v, live[j]); column(i, x0 + i * 4, 3, (int)(std::min(1.f, v * 1.1f) * H) + 1, i * per < ln ? PAPER : BAR, false); }
         }
     } else if (page_ == P_CUE) {
-        drawText(100, x0, y0 + 8, 3, ACCENT, BLACK, std::string("1/") + std::to_string(1 << cueDivision_), 9);
+        drawText(100, x0, y0 + 8, 3, ACCENT, BLACK, cueRateName(cueDivision_), 9);
         drawText(101, x0, y0 + 32, 2, PAPER, BLACK, cueActive_ ? "NOTE REPEAT" : "OCT+ + HOLD PLAY", 18);
     } else if (page_ == P_LEN) {   // the loop length in big letters
         char b[32];
