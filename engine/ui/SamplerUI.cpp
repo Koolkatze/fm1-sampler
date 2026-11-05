@@ -583,6 +583,7 @@ void SamplerUI::deck(Rect r) {
     rrect({0, 0, W_, H_}, 0, kBg);
     const int t = app_.track();
     const bool recOn = st_.freeRecording || st_.track_clip_rec[t], armed = st_.freeArmed, hasLoop = app_.loopExists() && st_.loopSamples > 0;
+    const int mic = app_.micState();
     // One grid: margin M, three zones (tape and transport on the left, tools in the middle, sample and knobs on the right, timeline below).
     // Every icon sits on a 64 px pitch; the bottom icon of the tools column stands on the transport row.
     const float M = 24, zr = W_ - M, x0 = 440, w0 = zr - x0, mx = 351;
