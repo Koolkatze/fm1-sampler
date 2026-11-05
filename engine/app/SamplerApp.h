@@ -67,6 +67,7 @@ public:
     void browserEnter();
     void browserBack();
     void browserRoot();
+    void browserSelect(int index);             // shared touch and PRESETS cursor, auto-loads selected WAV
     void loadEntry(int index);                    // at once, on the selected track
     void refreshLibrary();
     void importFile(const std::string& wavPath);  // a file picked from the disk (already copied into the data dir as a WAV)
@@ -86,7 +87,7 @@ public:
     void transportSet(bool play);                 // phone PLAY / STOP keys
     void cueHold(bool down);                     // momentary CUE from the phone touch controls
     void restartLoop();                           // OCT- + PLAY or STOP: immediate restart, no long press
-    void setCueDivision(int division);            // 0..5 selects 1/1..1/32 on phone or K1
+    void setCueDivision(int division);            // 0..11: 1/1,1/1T,...1/32,1/32T
     int cueDivision() const { return cueDivision_; }
     bool cueModifierHeld() const { return !!(held_ & (1u << OCT_UP)); }
     bool octDownModifierHeld() const { return !!(held_ & (1u << OCT_DOWN)); }
@@ -252,7 +253,7 @@ private:
     int heldNote_[128];
     int keyNotes_[128][3] = {}; int keyCount_[128] = {};
     bool fwDirty_ = true; uint32_t lenAt_ = 0;
-    int cueDivision_ = 2;                 // 1/4 default, selectable 1/1..1/32
+    int cueDivision_ = 4;                 // 1/4 default, interleaved straight / triplet up to 1/32T
     bool cueActive_ = false, cueSelect_ = false;
     uint32_t octUpAt_ = 0;
     bool playModified_ = false;
