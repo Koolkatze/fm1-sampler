@@ -126,6 +126,14 @@ with no ENTER required; ENTER is reserved for entering folders and BACK for
 the parent directory. Closing LIBRARY returns to HOME, retaining navigation
 state. No second independent folder list or selection state is used.
 
+## HOME track badge position (0.38.7)
+
+The selected-track badge **T1–T8** is now large, orange and placed
+immediately **to the left of the SAMPLE waveform viewer**, rather than
+being a small label next to the dark/light theme icon. It stays visible even
+when no sample is loaded and still acts as a touch control: tapping cycles
+to the next track. Physical SELECT encoder behavior is unchanged.
+
 ## SAVE BACKUP / IMPORT BACKUP (0.38.6)
 
 The HOME folder icon opens the **LIBRARY** page containing three independent
