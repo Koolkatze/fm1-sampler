@@ -707,6 +707,7 @@ int main() {
               "FM1-SAMPLER always opens at its four permanent top-level folders");
         // Alphabetical folder order: OFFICIAL, PACKS, PROYECTOS, SAVED.
         click(285.f, 165.f); click(660.f, 65.f);
+        fprintf(stderr, "DBG browser after PACKS: [%s]\n", breadcrumb().c_str());
         CHECK(breadcrumb() == "FM1-SAMPLER / PACKS", "ENTER visits PACKS");
         click(285.f, 129.f); click(660.f, 65.f);
         CHECK(breadcrumb() == "FM1-SAMPLER / PACKS/My Imported ZIP" ||
