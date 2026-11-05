@@ -127,7 +127,12 @@ public:
     void clearSample(int track);
     void setLoopSpeed(float speed);       // 0.25..2, tape speed of all loops together; 1 = locked to the transport
     void setLoopSource(int src);          // what the loop records: 0 microphone, 1 the track's sound
-    bool saveClip(int track, const std::string& name = ""); // exact named loop in samples/SAVED/Loops
+    bool saveClip(int track, const std::string& name = ""); // named loop in SAVED/LOOPS
+    // Export the current recorded loops to a temporary directory as WAV stems
+    // plus MASTER.wav. A consistent audio-thread snapshot is written off-thread.
+    // Android publishes these WAVs via MediaStore, so they appear in Files.
+    bool exportLoops(const std::string& directory);
+    int loopExportStatus() const; // 0 idle; 1 working; 2 done; -1 no loops/recording; -2 I/O failure
     int loopPeaks(int track /* -1 = all tracks mixed */, float* out, int maxBins) const;
 
     // ---- microphone sampling ----
