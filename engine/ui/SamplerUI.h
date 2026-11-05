@@ -53,6 +53,15 @@ private:
     void sampleArea(Rect r);
     void pagePanel(Rect r);
     void librarySheet();
+    void openLibrary();
+    void buildBrowserRows();
+    void browserBack();
+    void browserEnter();
+    struct BrowserRow {
+        std::string label, path;
+        int entry = -1;
+        bool directory = false;
+    };
     void projectSheet();
     void projectSlotsSheet();
 
@@ -66,6 +75,9 @@ private:
     Session::Status st_{};
     bool linkMidi_ = false, linkAudio_ = false, sheetOpen_ = false, editor_ = false, projectOpen_ = false;
     float sheetScroll_ = 0, sheetLastY_ = 0, sheetMoved_ = 0;
+    std::string browseDir_;   // path under files/samples, empty means archive root
+    std::vector<BrowserRow> browseRows_;
+    int browseSelected_ = 0;
     Rect sheetList_{0, 0, 0, 0};
     uint32_t clearArmed_ = 0, sceneSaveAt_ = 0, sceneDeleteAt_ = 0;
     int sceneArmedSlot_ = -1, deleteArmedSlot_ = -1;
