@@ -730,6 +730,7 @@ int main() {
                       fs::copy_options::overwrite_existing);
         app.refreshLibrary();
         app.browserRoot();
+        app.selectTrack(0);
         SamplerUI browser(app);
         browser.setSize(860.f, 400.f, 0.f, 0.f);
         browser.frame(now);
@@ -746,6 +747,17 @@ int main() {
         CHECK(hasText("BACK") && hasText("ENTER") && hasText("FM1-SAMPLER") &&
               !hasText("+ IMPORT ZIP"),
               "HOME shows only inline BACK/ENTER and a filename, no modal browser");
+        bool largeLeftBadge = false;
+        for (const auto& op : browser.ops())
+            if (op.type == UiOp::TEXT && op.text == "T1" &&
+                op.f[0] > 395 && op.f[0] < 440 && op.f[1] < 140 &&
+                op.f[2] >= 20)
+                largeLeftBadge = true;
+        CHECK(largeLeftBadge,
+              "enlarged T1 track indicator is immediately LEFT of the sample waveform");
+        click(410.f, 80.f);
+        CHECK(app.track() == 1 && hasText("T2"),
+              "touching large waveform-side T1/T2 badge cycles selected track");
         click(351.f, 184.f);
         CHECK(app.browserDir().empty() && !app.wantFile() &&
               hasText("+ IMPORT ZIP") && hasText("OFFICIAL") &&
@@ -754,6 +766,14 @@ int main() {
         click(205.f, 365.f); // actual + IMPORT ZIP button in library sheet
         CHECK(app.wantPack() && !app.wantPack() && !app.wantFile(),
               "library + IMPORT ZIP requests ZIP picker without changing the sample cursor");
+        CHECK(hasText("SAVE BACKUP") && hasText("IMPORT BACKUP"),
+              "LIBRARY footer presents both portable backup controls");
+        click(349.f, 365.f);
+        CHECK(app.takeDialogRequest() == 4,
+              "SAVE BACKUP requests Android Create Document for a full library ZIP");
+        click(537.f, 365.f);
+        CHECK(app.takeDialogRequest() == 5,
+              "IMPORT BACKUP requests Android Open Document and verified restore");
         app.browserBack(); // deselect to show the archive root itself
         enc(6, 1); // first item: OFFICIAL
         CHECK(app.browserSelected() && app.browserSelected()->label == "OFFICIAL",
