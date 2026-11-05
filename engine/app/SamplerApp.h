@@ -213,6 +213,7 @@ private:
     std::string browserDir_; // Relative to FM1-SAMPLER root
     std::vector<BrowserItem> browserItems_;
     int browserIndex_ = -1;
+    uint32_t browserTouchedAt_ = 0; // selected folder/file shown temporarily on physical FM-1 LCD
     // Absolute assignment paths survive library rebuilds. Entry indices
     // are UI cursors only; they must never determine what audio gets archived.
     std::array<std::string, kTracks> trackSourcePaths_{};
