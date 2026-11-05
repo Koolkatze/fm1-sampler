@@ -72,30 +72,42 @@ fail without exposing a partially imported pack.
 FMP2 projects remain self-contained: eight tracks, sample audio, clips,
 COMPOSE, twelve scenes, SONG order, effects, settings and transport.
 
-## HOME navigation and file-type indicators (0.38.2)
+## HOME navigator: read-only icons and BACK/ENTER (0.38.2)
 
-Three **always-visible touch buttons** occupy the top-left corner of the
-cassette HOME page, immediately **left of the active sample name**:
+In the top-left of HOME, the **BACK** and **ENTER** buttons are the only
+navigation controls. Immediately to their right, ONE non-interactive symbol
+indicates the selected item: archive drawers for the `FM1-SAMPLER` root,
+a folder icon for a directory, or a waveform for a sample/audio file. Its
+name is displayed directly to the right. Tap the name to open the full list.
+The icons DO NOT act as filters or buttons.
 
-- **Archive icon / ROOT** opens `FM1-SAMPLER /` at the four primary folders.
-- **Folder icon / FOLDERS** opens a directory-only view, starting from root.
-- **Waveform icon / SAMPLES** opens the global index of playable WAV samples
-  from `OFFICIAL`, `PACKS`, `SAVED`, and all their nested folders.
+Inside the full library, BACK and ENTER are in a narrow left column;
+each entry has its own non-interactive folder/waveform icon immediately before
+its name. The breadcrumb shows the current location. BACK goes to the parent
+folder and ENTER opens the selected subfolder, or loads a playable WAV.
+The imported ZIP's non-audio files are preserved but cannot be loaded as sound.
 
-The exact same three icons appear as **real buttons in a vertical sidebar**
-immediately to the **left of folder and sample names** in the browser. They
-switch views without closing the navigator. ROOT jumps to the library root;
-FOLDERS shows subdirectories of the selected directory; SAMPLES shows WAVs in
-that directory (or all WAVs when at the root). Unlike previous releases,
-they are interactive controls, not decorative indicators.
+## EXPORT ALL LOOPS (0.38.2)
 
-Tap a row to select it; `ENTER >` opens the selected folder, at any depth,
-or loads a selected WAV. `< BACK` exits one directory level. From the root,
-`< BACK` closes the browser. The ROOT/mixed view retains the original ZIP
-entries, including non-audio files; these are never played as samples.
+The **PROJECT** page has three separate actions: SAVE PROJECT,
+LOAD PROJECT, and **EXPORT ALL LOOPS**. Export captures all eight current
+recorded loop tracks (only populated tracks become WAVs) and creates a
+16-bit stereo `TRACK_01.wav` ... `TRACK_08.wav` per recorded track,
+plus a `MASTER.wav` sum of those clips. Recorded stems are exported at
+their original amplitude; if the summed master clips, only that master
+is peak-limited.
 
-Opening the library by tapping the active sample label still starts at ROOT.
-The sample on the selected track is not changed until loading a playable WAV.
+Android 10+ publishes these copies to the **public** location
+`Downloads/FM1-SAMPLER/EXPORTED LOOPS/`, visible in the phone's Files
+application or via USB. Exported filenames have unique timestamp prefixes
+so re-exporting never replaces previous files. The source loops, saved
+projects, private WAVs and backups are never removed or modified.
+This public export does not make the main private library public.
+
+Exports are asynchronous. The command may reject an active recording, a
+session with no recorded loops, or a duplicate request. Check that a success
+message appears and the WAV files are visible before relying on the export
+as your sole backup.
 
 ## Updating from earlier preview builds
 
