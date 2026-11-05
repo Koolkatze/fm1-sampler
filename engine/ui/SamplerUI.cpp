@@ -72,16 +72,16 @@ void SamplerUI::button(Rect r, const std::string& label, bool on, std::function<
 void SamplerUI::toggleTouchCueModifier() {
     if (cueTouchArmed_) {
         if (cueTouchPlay_) {
-            app_.button(SamplerApp::PLAY, false);
+            app_.playButtonTouch( false);
             cueTouchPlay_ = false;
         }
-        app_.button(SamplerApp::OCT_UP, false);
+        app_.cueModifierTouch( false);
         app_.gotoPage(cueTouchReturn_);
         cueTouchArmed_ = false;
     } else {
         cueTouchReturn_ = app_.page();
         cueTouchArmed_ = true;
-        app_.button(SamplerApp::OCT_UP, true);
+        app_.cueModifierTouch( true);
         app_.gotoPage(SamplerApp::P_CUE);
     }
 }
@@ -125,14 +125,14 @@ void SamplerUI::topBar(Rect r) {
         [this](float, float) {
             if (app_.cueModifierHeld()) {
                 cueTouchPlay_ = true;
-                app_.button(SamplerApp::PLAY, true);
+                app_.playButtonTouch( true);
             } else {
                 playHeld_ = true; playLongFired_ = false; playHeldAt_ = now_;
             }
         }, {},
         [this] {
             if (cueTouchPlay_) {
-                app_.button(SamplerApp::PLAY, false);
+                app_.playButtonTouch( false);
                 cueTouchPlay_ = false;
                 return;
             }
@@ -633,14 +633,14 @@ void SamplerUI::deck(Rect r) {
                 [this](float, float) {
                     if (app_.cueModifierHeld()) {
                         cueTouchPlay_ = true;
-                        app_.button(SamplerApp::PLAY, true);
+                        app_.playButtonTouch( true);
                     } else {
                         playHeld_ = true; playLongFired_ = false; playHeldAt_ = now_;
                     }
                 }, {},
                 [this] {
                     if (cueTouchPlay_) {
-                        app_.button(SamplerApp::PLAY, false);
+                        app_.playButtonTouch( false);
                         cueTouchPlay_ = false;
                         return;
                     }
