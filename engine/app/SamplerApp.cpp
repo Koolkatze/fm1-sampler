@@ -207,6 +207,7 @@ void SamplerApp::browse(int delta) {
     const int step = delta > 0 ? 1 : -1;
     const int start = browserIndex_ < 0 ? (step > 0 ? -1 : 0) : browserIndex_;
     browserIndex_ = ((start + step) % n + n) % n;
+    browserTouchedAt_ = nowMs_;
     loadBrowserSelection();
 }
 void SamplerApp::browserEnter() {
@@ -214,18 +215,21 @@ void SamplerApp::browserEnter() {
     if (!chosen || !chosen->directory) return; // ENTER never loads an audio file
     browserDir_ = chosen->path;
     rebuildBrowser();
+    browserTouchedAt_ = nowMs_;
     loadBrowserSelection(); // selecting the first WAV in a directory also loads it
 }
 void SamplerApp::browserBack() {
-    if (browserDir_.empty()) { browserIndex_ = -1; return; }
+    if (browserDir_.empty()) { browserIndex_ = -1; browserTouchedAt_ = nowMs_; return; }
     const std::string prior = browserDir_;
     const size_t slash = browserDir_.find_last_of('/');
     browserDir_ = slash == std::string::npos ? "" : browserDir_.substr(0, slash);
     rebuildBrowser(prior); // highlight the folder just exited
+    browserTouchedAt_ = nowMs_;
 }
 void SamplerApp::browserRoot() {
     browserDir_.clear();
     rebuildBrowser();
+    browserTouchedAt_ = nowMs_;
 }
 void SamplerApp::loadEntry(int i) {
     if (i < 0 || i >= (int)lib_.size()) return;
@@ -1181,9 +1185,14 @@ void SamplerApp::draw(uint32_t now) {
     else if (cueActive_) line = std::string("NOTE REPEAT 1/") + std::to_string(1 << cueDivision_) + "  REPEATING";
     else if (cueSelect_) line = "NOTE REPEAT: K1 RATE, HOLD PLAY";
     else if (!toast().empty()) line = toast();
-    else if (auditionAt_) { const Entry& e = lib_[(size_t)libCursor_]; line = ">" + e.label + "  " + e.group; }
+    else if (browserTouchedAt_ && now - browserTouchedAt_ < 4000) {
+        const BrowserItem* item = browserSelected();
+        line = item ? std::string(item->directory ? "[DIR] " : item->entry >= 0 ? "[WAV] " : "[FILE] ") + item->label
+                    : "FM1-SAMPLER /";
+    }
     else line = std::string(kAlgo[ts_[track_].algo]) + "  " + loopText();
-    const bool hot = cueActive_ || cueSelect_ || !toast().empty() || mic_ || auditionAt_ || st_.freeRecording || recNow || st_.freeArmed;
+    const bool browserNotice = browserTouchedAt_ && now - browserTouchedAt_ < 4000;
+    const bool hot = cueActive_ || cueSelect_ || !toast().empty() || browserNotice || mic_ || st_.freeRecording || recNow || st_.freeArmed;
     const bool hasLoopBar = loopAny_ && st_.loopSamples > 0;
     const int px = (int)(st_.track_has_clip[track_] ? st_.clipPos[track_] * 216 : (hasLoopBar ? st_.pos / st_.loopSamples * 216 : 0));
     static int lastPx = -1; if (px != lastPx) { lastPx = px; rects_[24] = ~0ull; }   // the bar is redrawn under the growing fill
