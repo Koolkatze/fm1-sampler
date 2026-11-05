@@ -136,11 +136,93 @@ void SamplerApp::refreshLibrary() {
     libCursor_ = 0;
     for (size_t i = 0; i < lib_.size(); ++i)
         if (lib_[i].path == selected) { libCursor_ = (int)i; break; }
+    rebuildBrowser();  // keep the current directory and selected row after imports
 }
-void SamplerApp::browse(int d) {
-    if (lib_.empty()) return;
-    libCursor_ = ((libCursor_ + (d > 0 ? 1 : -1)) % (int)lib_.size() + (int)lib_.size()) % (int)lib_.size();
-    auditionAt_ = nowMs_ + 250;
+
+// The physical PRESETS knob and the phone's BACK/ENTER share ONE cursor.
+// Directory entries are listed alongside the original filenames: folders
+// first, then files; compatible WAVs map to live sampler library entries.
+void SamplerApp::rebuildBrowser(const std::string& preferred) {
+    namespace fs = std::filesystem;
+    std::string previous = preferred;
+    if (previous.empty() && browserSelected()) previous = browserSelected()->path;
+    browserItems_.clear();
+    browserIndex_ = -1;
+    const fs::path root(s_.sampleDir());
+    std::error_code ec;
+    if (browserDir_.empty()) {
+        // The four permanent library folders remain navigable when empty.
+        for (const char* name : {"PROYECTOS", "OFFICIAL", "SAVED", "PACKS"})
+            browserItems_.push_back({name, name, -1, true});
+    } else {
+        const fs::path current = root / browserDir_;
+        if (browserDir_ == "PROYECTOS") {
+            for (const Entry& e : lib_) if (e.pack == "PROJECT") {
+                browserItems_.push_back({"Embedded", "PROYECTOS/Embedded", -1, true});
+                break;
+            }
+        }
+        if (browserDir_ == "PROYECTOS/Embedded") {
+            for (int i = 0; i < (int)lib_.size(); ++i) {
+                const Entry& e = lib_[(size_t)i];
+                if (e.pack == "PROJECT") browserItems_.push_back({e.label + ".wav", e.path, i, false});
+            }
+        } else if (fs::is_directory(current, ec)) {
+            for (const fs::directory_entry& file :
+                 fs::directory_iterator(current, fs::directory_options::skip_permission_denied, ec)) {
+                if (file.is_directory(ec)) {
+                    const fs::path rel = file.path().lexically_relative(root);
+                    browserItems_.push_back({file.path().filename().string(), rel.generic_string(), -1, true});
+                } else if (file.is_regular_file(ec)) {
+                    const std::string path = file.path().string();
+                    const auto match = std::find_if(lib_.begin(), lib_.end(),
+                        [&](const Entry& e) { return e.path == path; });
+                    const int entry = match == lib_.end() ? -1 : (int)(match - lib_.begin());
+                    browserItems_.push_back({file.path().filename().string(), path, entry, false});
+                }
+                if (ec) ec.clear();
+            }
+        }
+    }
+    std::sort(browserItems_.begin(), browserItems_.end(), [](const BrowserItem& x, const BrowserItem& y) {
+        if (x.directory != y.directory) return x.directory;
+        return x.label < y.label;
+    });
+    if (browserItems_.empty()) return;
+    browserIndex_ = 0;
+    for (int i = 0; i < (int)browserItems_.size(); ++i) {
+        if (browserItems_[(size_t)i].path == previous) { browserIndex_ = i; break; }
+    }
+}
+void SamplerApp::loadBrowserSelection() {
+    const BrowserItem* chosen = browserSelected();
+    if (chosen && !chosen->directory && chosen->entry >= 0)
+        loadEntry(chosen->entry); // immediate load, not a delayed audition
+}
+void SamplerApp::browse(int delta) {
+    if (!delta || browserItems_.empty()) return;
+    const int n = (int)browserItems_.size();
+    const int start = browserIndex_ < 0 ? (delta > 0 ? -1 : 0) : browserIndex_;
+    browserIndex_ = ((start + delta) % n + n) % n;
+    loadBrowserSelection();
+}
+void SamplerApp::browserEnter() {
+    const BrowserItem* chosen = browserSelected();
+    if (!chosen || !chosen->directory) return; // ENTER never loads an audio file
+    browserDir_ = chosen->path;
+    rebuildBrowser();
+    loadBrowserSelection(); // selecting the first WAV in a directory also loads it
+}
+void SamplerApp::browserBack() {
+    if (browserDir_.empty()) { browserIndex_ = -1; return; }
+    const std::string prior = browserDir_;
+    const size_t slash = browserDir_.find_last_of('/');
+    browserDir_ = slash == std::string::npos ? "" : browserDir_.substr(0, slash);
+    rebuildBrowser(prior); // highlight the folder just exited
+}
+void SamplerApp::browserRoot() {
+    browserDir_.clear();
+    rebuildBrowser();
 }
 void SamplerApp::loadEntry(int i) {
     if (i < 0 || i >= (int)lib_.size()) return;
@@ -948,7 +1030,7 @@ void SamplerApp::tick(uint32_t now) {
     if (now - lastLoss_ > 4000 && now - lastRaise_ > 2000 && gap_ > 16) { gap_ = std::max<uint32_t>(16, gap_ * 9 / 10); lastRaise_ = now; }
     if (now - lastPing_ >= 500) { lastPing_ = now; pingId_ = (pingId_ + 1) & 0x3fff; sysex(5, n14(pingId_)); }
     // audition: the cursor rested, load the entry on the selected track and play it
-    if (auditionAt_ && now >= auditionAt_) loadEntry(libCursor_);
+    // PRESETS loads the selected WAV synchronously into the sampler queue; no delayed audition.
     if (st_.sampleVersion != lastSampleVersion_) {   // a sample landed on a track: give it this track's settings
         lastSampleVersion_ = st_.sampleVersion;
         // A user choosing a different sample clears tuning at selection time.
