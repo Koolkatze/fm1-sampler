@@ -256,7 +256,9 @@ struct Session::Impl {
         const size_t fade = std::min<size_t>(o.size() / 4, (size_t)sr / 200 * 2);
         for (size_t i = 0; i < fade; i += 2) { const float k = (float)i / fade; o[i] *= k; o[i + 1] *= k; o[o.size() - 2 - i] *= k; o[o.size() - 1 - i] *= k; }
         char name[64]; snprintf(name, sizeof name, "/sample_%lld.wav", (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
-        const std::string path = (dataDir.empty() ? "." : dataDir) + name;
+        const std::string directory = (sampleDir.empty() ? dataDir : sampleDir + "/SAVED/Recordings");
+        std::error_code ec; std::filesystem::create_directories(directory, ec);
+        const std::string path = directory + name;
         writeWav16(path, o, sr);
         { std::lock_guard<std::mutex> l(sampleMtx); samplePath = path; pending = true; a_pending = true; }
         a_sampleState = 0;
