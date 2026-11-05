@@ -2,7 +2,7 @@ name: FM1 physical OCT MIDI firmware validation
 
 on:
   push:
-    branches: [feature/scene-launcher-song-mode]
+    branches: [feature/scene-launcher-song-mode, feature/oneshot-packs-on-scenes]
     paths:
       - "firmware/app/ctrl.c"
       - "firmware/hosttest/ctrl_host.c"
