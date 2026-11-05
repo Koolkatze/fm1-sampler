@@ -19,6 +19,7 @@ public final class Native {
     public static native int loopExportStatus(long h);
     public static native int takeDialogRequest(long h);
     public static native void submitName(long h, int kind, String name);
+    public static native boolean backupReady(long h); // no recording or full-project write/read underway
     public static native void refreshLibrary(long h);
     public static native void importFile(long h, String path);
     public static native void say(long h, String message);
