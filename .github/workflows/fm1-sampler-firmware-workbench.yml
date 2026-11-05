@@ -55,29 +55,30 @@ jobs:
             throw 'JieLi 2.5.3 cannot be downloaded from the vendor CDN on this runner. No firmware will be released.'
           }
           Write-Host "Installer SHA-256: $((Get-FileHash $installer -Algorithm SHA256).Hash)"
-          # The official vendor executable identifies as Inno Setup 2.5.3.
-          # Install on this ephemeral Windows runner, then verify toolchain
-          # files by SHA-256 against firmware/sdk/manifest.json (Build.ps1).
-          $sig = Get-AuthenticodeSignature -FilePath $installer
-          Write-Host "Installer signature: $($sig.Status)"
-          $setup = Start-Process -FilePath $installer -ArgumentList @(
-            '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-',
-            '/DIR=C:\JL\pi32'
-          ) -Wait -PassThru
-          if ($setup.ExitCode -ne 0) {
-            throw "Official JieLi 2.5.3 installer failed with code $($setup.ExitCode)."
-          }
-          $candidates = @(
-            'C:\JL\pi32\bin\clang.exe',
-            'C:\JL\pi32\pi32\bin\clang.exe'
-          )
-          $clang = @($candidates | Where-Object {
-            (Test-Path $_) -and (Test-Path (Join-Path (Split-Path $_ -Parent) 'pi32v2-ld.exe'))
-          } | Select-Object -First 1)
-          if ($clang.Count -ne 1) {
-            throw 'JieLi 2.5.3 installed but no pi32v2 clang/ld files found; no firmware will be published.'
-          }
-          $toolchain = Split-Path -Parent (Split-Path -Parent $clang[0])
+          # Extract this Inno Setup vendor package without starting a GUI
+          # installer (which can hang indefinitely on a CI server). Pin the
+          # innoextract Windows ZIP by SHA-256 before invoking it.
+          $extractUrl = 'https://constexpr.org/innoextract/files/innoextract-1.9/innoextract-1.9-windows.zip'
+          $zip = Join-Path $env:RUNNER_TEMP 'innoextract-1.9-windows.zip'
+          curl.exe --fail --location --retry 3 --connect-timeout 20 --max-time 120 --output $zip $extractUrl
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download official innoextract.' }
+          $expected = '6989342c9b026a00a72a38f23b62a8e6a22cc5de69805cf47d68ac2fec993065'
+          $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Unverified innoextract checksum: $actual" }
+          $toolsDir = Join-Path $env:RUNNER_TEMP 'innoextract'
+          Expand-Archive -LiteralPath $zip -DestinationPath $toolsDir -Force
+          $extractor = @(Get-ChildItem -LiteralPath $toolsDir -Filter innoextract.exe -Recurse -File | Select-Object -First 1)
+          if ($extractor.Count -ne 1) { throw 'Innoextract executable missing from verified package.' }
+          $destination = Join-Path $env:RUNNER_TEMP 'jieli-pi32'
+          New-Item -ItemType Directory -Force -Path $destination | Out-Null
+          & $extractor[0].FullName -d $destination $installer | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw 'JieLi Inno installer cannot be extracted without executing it. No firmware is published.' }
+          $clang = @(Get-ChildItem -LiteralPath $destination -Recurse -Filter clang.exe -File |
+            Where-Object { $_.Directory.Name -eq 'bin' -and (Test-Path (Join-Path $_.DirectoryName 'pi32v2-ld.exe')) } |
+            Select-Object -First 1)
+          if ($clang.Count -ne 1) { throw 'No matching pi32v2 clang and ld in vendor installer contents.' }
+          $toolchain = Split-Path -Parent $clang[0].DirectoryName
+          Write-Host "Toolchain extracted at $toolchain; pinned file hashes will be checked by Build.ps1"
           "FM1_PI32_TOOLCHAIN=$toolchain" >> $env:GITHUB_ENV
           Write-Host "Extracted toolchain at $toolchain"
       - name: Build complete flashable FM1 Sampler firmware and Workbench
