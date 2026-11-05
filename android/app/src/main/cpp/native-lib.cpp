@@ -197,6 +197,12 @@ FN(void, submitName)(JNIEnv* env, jclass, jlong h, jint kind, jstring name) {
     { std::lock_guard<std::mutex> l(e.surfaceMtx); e.app->submitName((int)kind, c); }
     env->ReleaseStringUTFChars(name, c);
 }
+FN(jboolean, backupReady)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h);
+    std::lock_guard<std::mutex> l(e.surfaceMtx);
+    const int op = e.session.projectOperation();
+    return !e.app->recordingNow() && e.app->micState() == 0 && op != 1 && op != 3;
+}
 FN(void, refreshLibrary)(JNIEnv*, jclass, jlong h) {
     auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
     e.app->refreshLibrary();
