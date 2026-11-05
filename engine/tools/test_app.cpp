@@ -299,6 +299,42 @@ int main() {
 
         // Project sheet must render two separate columns in both existing themes.
         SamplerUI ui(app); ui.setSize(860.f, 400.f, 0.f, 0.f);
+        ui.openProject(false);
+        ui.setShortcutHelpVisible(true);
+        for (bool light : {true, false}) {
+            theme::apply(light);
+            ui.frame(now + 1);
+            bool restart = false, repeat = false, hide = false;
+            for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+                restart |= op.text == "OCT- + PLAY/STOP    RESTART LOOP";
+                repeat |= op.text.find("NOTE REPEAT") != std::string::npos &&
+                          op.text.find("OCT+ + PLAY/STOP") != std::string::npos;
+                hide |= op.text == "HIDE";
+            }
+            CHECK(restart && repeat && hide,
+                  "physical shortcuts legend says NOTE REPEAT and shows both commands in %s mode",
+                  light ? "light" : "dark");
+        }
+        theme::apply(true);
+        ui.frame(now + 3);
+        ui.touch(0, 294, 84, now + 3);
+        ui.touch(2, 294, 84, now + 3);
+        CHECK(!ui.shortcutHelpVisible(), "HIDE chip collapses shortcut legend");
+        ui.frame(now + 4);
+        bool hasInfo = false, hasRepeat = false;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+            hasInfo |= op.text == "INFO";
+            hasRepeat |= op.text.find("OCT+ + PLAY/STOP") != std::string::npos;
+        }
+        CHECK(hasInfo && !hasRepeat, "collapsed legend displays only the compact INFO button");
+        {
+            SamplerUI restoredHelp(app);
+            CHECK(!restoredHelp.shortcutHelpVisible(),
+                  "shortcut visibility survives app UI recreation");
+        }
+        ui.touch(0, 297, 69, now + 4);
+        ui.touch(2, 297, 69, now + 4);
+        CHECK(ui.shortcutHelpVisible(), "INFO chip reopens physical shortcuts");
         ui.openProject(true);
         for (bool light : {true, false}) {
             theme::apply(light);
