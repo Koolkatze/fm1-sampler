@@ -137,22 +137,57 @@ int main() {
       hold(SamplerApp::OCT_UP, false); run(0.04);
       CHECK(app.page() == originalPage, "releasing OCT+ restores the previous page");
 
-      // Real touchscreen path: CUE is a visible momentary pad on the deck,
-      // not an inaccessible tiny tab. Its K1 division is editable live.
+      // OCT+ is the CUE modifier. PLAY only repeats while held. K1 can be
+      // changed live and the original loop must never be overwritten.
+      std::vector<float> before(64), after(64);
+      s.loopPeaks(0, before.data(), (int)before.size());
+      const auto savedLoopLength = app.status().loopSamples;
+      // Enter immediately: waiting for OCT+ long hold must NOT be required.
+      hold(SamplerApp::OCT_UP, true);
+      hold(SamplerApp::PLAY, true);
+      run(0.05);
+      CHECK(app.cueActive(), "OCT+ and PLAY starts CUE without a prior 2-second hold");
+      enc(2, 1); run(0.08);
+      CHECK(app.cueDivision() == 5 && app.cueActive(),
+            "physical K1 selects 1/32 during held PLAY");
+      enc(2, -5); run(0.08);
+      CHECK(app.cueDivision() == 4 && app.cueActive(),
+            "physical K1 changes rate live while PLAY stays held");
+      hold(SamplerApp::PLAY, false); run(0.05);
+      CHECK(!app.cueActive() && app.status().playing, "releasing PLAY alone restores normal loop");
+      hold(SamplerApp::OCT_UP, false);
+      s.loopPeaks(0, after.data(), (int)after.size());
+      float diff = 0.f;
+      for (size_t i = 0; i < before.size(); ++i)
+          diff = std::max(diff, std::fabs(after[i] - before[i]));
+      CHECK(diff < 1.e-6f && app.status().loopSamples == savedLoopLength,
+            "CUE never modifies the recorded loop audio or duration (diff %.8f)", diff);
+
+      // Android single-touch operation: tap OCT+ to latch the modifier,
+      // then hold PLAY. K1 on the CUE page chooses the subdivisions.
       SamplerUI touchUi(app);
       touchUi.setSize(860.f, 400.f, 0.f, 0.f);
       touchUi.frame(now);
-      touchUi.touch(0, 236.f, 248.f, now);
-      CHECK(app.cueActive() && app.page() == SamplerApp::P_CUE,
-            "Android touchscreen CUE starts immediately on press in composition mode");
+      touchUi.touch(0, 294.f, 248.f, now);
+      touchUi.touch(2, 294.f, 248.f, now);
+      CHECK(app.cueModifierHeld() && app.page() == SamplerApp::P_CUE,
+            "Android OCT+ button arms CUE rate selection, without playing");
+      CHECK(!app.cueActive(), "arming OCT+ alone does not repeat audio");
+      touchUi.frame(now);
+      touchUi.touch(0, 44.f, 248.f, now);
+      CHECK(app.cueActive(), "Android OCT+ plus held PLAY starts BPM-locked CUE");
       app.knobs(SamplerApp::P_CUE)[0].set(1.f);
       run(0.05);
       CHECK(app.cueDivision() == 5 && app.cueActive(),
-            "Android CUE rate changes live through K1");
-      touchUi.touch(2, 236.f, 248.f, now);
+            "Android K1 changes the subdivision live during held PLAY");
+      touchUi.touch(2, 44.f, 248.f, now);
       run(0.04);
       CHECK(!app.cueActive() && app.status().playing,
-            "Android touchscreen CUE releases back to running loop");
+            "Android releasing PLAY stops CUE but original loop continues");
+      touchUi.frame(now);
+      touchUi.touch(0, 294.f, 248.f, now);
+      touchUi.touch(2, 294.f, 248.f, now);
+      CHECK(!app.cueModifierHeld(), "Android OCT+ modifier can be disarmed");
 
       s.seek(0.7f); run(0.05);
       touchUi.frame(now);
@@ -164,10 +199,19 @@ int main() {
             "Android holding PLAY for one second restarts the loop");
       touchUi.setEditor(true); touchUi.frame(now);
       touchUi.touch(0, 365.f, 22.f, now);
-      CHECK(app.cueActive(), "the editor also has a dedicated momentary CUE pad");
       touchUi.touch(2, 365.f, 22.f, now);
+      CHECK(app.cueModifierHeld(), "editor OCT+ toggles the same CUE modifier");
+      touchUi.frame(now);
+      touchUi.touch(0, 25.f, 22.f, now);
+      CHECK(app.cueActive(), "editor OCT+ plus held PLAY repeats the current segment");
+      touchUi.touch(2, 25.f, 22.f, now);
       run(0.03);
-      CHECK(!app.cueActive(), "editor CUE releases cleanly");
+      CHECK(!app.cueActive() && app.status().playing,
+            "editor releasing PLAY exits CUE without stopping the loop");
+      touchUi.frame(now);
+      touchUi.touch(0, 365.f, 22.f, now);
+      touchUi.touch(2, 365.f, 22.f, now);
+      CHECK(!app.cueModifierHeld(), "editor OCT+ disarms");
       // The hardware also differentiates a short tap from a timed 1s hold.
       s.seek(0.7f); run(0.04);
       hold(SamplerApp::PLAY, true); run(1.05);
