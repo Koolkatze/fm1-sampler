@@ -103,6 +103,7 @@ public:
     void launchScene(int slot);            // quantized to the next bar
     void startSong(const std::vector<int>& order);
     void stopSong();
+    void cancelSceneLaunch();  // leave LOOP mode without stopping currently audible loops
     void saveArrangement(const std::vector<int>& order);
     void setLoopSpeed(float speed);       // 0.25..2, tape speed of all loops together; 1 = locked to the transport
     void setLoopSource(int src);          // what the loop records: 0 microphone, 1 the track's sound
