@@ -54,8 +54,7 @@ private:
     void sampleArea(Rect r);
     void pagePanel(Rect r);
     void librarySheet();
-    void openLibrary(int mode = 0);
-    void setBrowserMode(int mode);
+    void openLibrary();
     void buildBrowserRows();
     void browserBack();
     void browserEnter();
@@ -78,9 +77,8 @@ private:
     bool linkMidi_ = false, linkAudio_ = false, sheetOpen_ = false, editor_ = false, projectOpen_ = false;
     float sheetScroll_ = 0, sheetLastY_ = 0, sheetMoved_ = 0;
     std::string browseDir_;   // path relative to FM1-SAMPLER, empty means root
-    int browseMode_ = 0; // 0 ROOT (folders + original files), 1 FOLDERS, 2 playable SAMPLES
     std::vector<BrowserRow> browseRows_;
-    int browseSelected_ = 0;
+    int browseSelected_ = -1; // -1 means currently viewing the root or directory itself
     Rect sheetList_{0, 0, 0, 0};
     uint32_t clearArmed_ = 0, sceneSaveAt_ = 0, sceneDeleteAt_ = 0;
     int sceneArmedSlot_ = -1, deleteArmedSlot_ = -1;
