@@ -934,6 +934,7 @@ void SamplerUI::browserBack() {
 }
 
 void SamplerUI::browserEnter() {
+    fprintf(stderr, "DBG browserEnter dir=%s mode=%d row=%d total=%zu\\n", browseDir_.c_str(), browseMode_, browseSelected_, browseRows_.size());
     if (browseRows_.empty() || browseSelected_ < 0 || browseSelected_ >= (int)browseRows_.size()) return;
     const BrowserRow selected = browseRows_[(size_t)browseSelected_];
     if (selected.directory) {
