@@ -677,6 +677,7 @@ void SamplerApp::lenAction(bool dbl) {   // loop x2 (the content repeats) or /2;
     if (dbl) { s_.loopDouble(); say("LOOP DOUBLED"); } else { s_.loopHalve(); say("LOOP HALVED"); }
 }
 void SamplerApp::loopSave(const std::string& name) {
+    if (recordingNow() || mic_ != 0) { say("FINISH RECORDING FIRST"); return; }
     if (!s_.saveClip(track_, name.empty() ? "Loop Track " + std::to_string(track_ + 1) : name)) {
         say("NO LOOP TO SAVE"); return;
     }
