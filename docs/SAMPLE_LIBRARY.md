@@ -37,32 +37,29 @@ All four top-level folders are visible **even while empty**. Existing
 `FM1-SAMPLER` content is not cleared on an app update. Folders are created
 on first launch (Android does not execute application code at install time).
 
-## Importar ZIP desde el icono de carpeta de HOME (0.38.3)
+## Exploración interna de archivos (0.38.4)
 
-Pulsa el **icono de carpeta** de HOME (junto al micrófono y al icono
-de proyectos). Abre directamente el **explorador de documentos de Android**
-para elegir cualquier archivo accesible en Descargas, almacenamiento del
-teléfono, USB o proveedor compatible.
+El icono **LIBRARY** de HOME abre la raíz **FM1-SAMPLER** dentro del propio
+sampler: **no lanza** el explorador de archivos de Android.
 
-- Si seleccionas un **.zip**, la aplicación lo identifica por extensión,
-  tipo de contenido o firma `PK` y lo descomprime automáticamente en
-  `FM1-SAMPLER/PACKS/<nombre del ZIP>/`, conservando **todas** las
-  carpetas internas, samples, loops y archivos adicionales.
-- Si seleccionas un **archivo de audio individual**, se importa en
-  `FM1-SAMPLER/SAVED/IMPORTS/` y se carga en la pista seleccionada.
-- El archivo de origen seleccionado mediante Android **se conserva**;
-  importar nunca borra ni mueve el original fuera de Descargas/USB/Drive.
-- **No se requiere buscar otro botón de importar ZIP** en el navegador
-  interno de la biblioteca. El acceso principal es la carpeta de HOME.
+El control físico **PRESETS** mueve la selección por carpetas y archivos
+del directorio actual, exactamente un elemento por giro.
+Un **WAV seleccionado se carga automáticamente como preset en la pista
+activa**: no es necesario pulsar ENTER. El botón **ENTER** sirve
+exclusivamente para entrar en carpetas, y **BACK** regresa un nivel.
 
-En PROYECTO, **EXPORT ALL LOOPS** tiene una finalidad distinta: publica
-las pistas grabadas y su mezcla maestra en
-`Downloads/FM1-SAMPLER/EXPORTED LOOPS/`, accesible desde Files.
+La importación desde Descargas/USB/Drive continúa existiendo como acción
+explícita **LOAD FILE FROM DISK** en EDIT. Un ZIP importado se descomprime
+en FM1-SAMPLER/PACKS con sus carpetas y contenidos completos. El archivo
+externo original permanece sin modificaciones.
+
+En PROYECTO, **EXPORT ALL LOOPS** publica las pistas grabadas y su mezcla
+maestra en `Downloads/FM1-SAMPLER/EXPORTED LOOPS/`, accesible desde Files.
 
 ## ZIP import
 
-Tap `+ IMPORT ZIP` in the library and select any ZIP from Android's
-system document picker. The archive may come from Downloads, removable USB,
+Use the explicit external **LOAD FILE FROM DISK** control in EDIT and select
+any ZIP from Android's system document picker. The archive may come from Downloads, removable USB,
 Google Drive, or another compatible document provider.
 
 The app unpacks the complete archive into
@@ -94,20 +91,24 @@ fail without exposing a partially imported pack.
 FMP2 projects remain self-contained: eight tracks, sample audio, clips,
 COMPOSE, twelve scenes, SONG order, effects, settings and transport.
 
-## HOME navigator: read-only icons and BACK/ENTER (0.38.2)
+## HOME navigator: PRESETS auto-load; ENTER folders; BACK parent (0.38.4)
 
-In the top-left of HOME, the **BACK** and **ENTER** buttons are the only
-navigation controls. Immediately to their right, ONE non-interactive symbol
-indicates the selected item: archive drawers for the `FM1-SAMPLER` root,
-a folder icon for a directory, or a waveform for a sample/audio file. Its
-name is displayed directly to the right. Tap the name to open the full list.
-The icons DO NOT act as filters or buttons.
+HOME shows BACK and ENTER, followed by **one read-only file-type icon** and
+the **name of the currently selected item**. The symbol identifies the root,
+a directory, a playable WAV or another preserved file. There is **no
+separate modal file browser or Android DocumentsUI** when navigating the
+FM1-SAMPLER library.
 
-Inside the full library, BACK and ENTER are in a narrow left column;
-each entry has its own non-interactive folder/waveform icon immediately before
-its name. The breadcrumb shows the current location. BACK goes to the parent
-folder and ENTER opens the selected subfolder, or loads a playable WAV.
-The imported ZIP's non-audio files are preserved but cannot be loaded as sound.
+- Rotate physical **PRESETS**: move **one file or folder** within the current
+  directory. A selected WAV loads directly into the active sampler track.
+- **ENTER**: enter a selected folder. ENTER on a WAV is intentionally a no-op:
+  the selected WAV is already loaded.
+- **BACK**: return one folder level, highlighting the folder just left.
+- **LIBRARY** icon: return to the in-app FM1-SAMPLER root.
+
+Non-audio files imported as part of ZIP packs remain visible without being
+mistaken for playable WAV samples. External file imports remain available
+from the separate EDIT action, not from directory navigation.
 
 ## EXPORT ALL LOOPS (0.38.2)
 
