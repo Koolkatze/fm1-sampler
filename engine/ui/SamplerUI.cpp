@@ -101,7 +101,16 @@ void SamplerUI::topBar(Rect r) {
     rrect(pl, R_CONTROL, RAISED);
     if (st_.playing) { rrect({pl.x + 15, cy - 8, 5, 16}, 0, ACCENT); rrect({pl.x + 24, cy - 8, 5, 16}, 0, ACCENT); }
     else tri(pl.x + 16, cy - 9, pl.x + 16, cy + 9, pl.x + 30, cy, TEXT);
-    tap(pl, [this] { app_.transportPlay(); });
+    hit(pl,
+        [this](float, float) { playHeld_ = true; playLongFired_ = false; playHeldAt_ = now_; },
+        {},
+        [this] {
+            if (playHeld_ && !playLongFired_ && now_ - playHeldAt_ >= 1000U)
+                app_.restartLoop();
+            else if (playHeld_ && !playLongFired_)
+                app_.transportPlay();
+            playHeld_ = false;
+        });
     x += 52;
     // REC: arms the first take on a clean looper, overdub afterwards
     Rect rc{x, 6, 86, r.h - 12};
@@ -118,6 +127,14 @@ void SamplerUI::topBar(Rect r) {
     x += 62;
     button({x, 6, 56, r.h - 12}, "DECK", false, [this] { editor_ = false; }, 11);
     x += 70;
+    // CUE must remain directly playable in the legacy composition editor too.
+    const Rect cu{x, 6, 56, r.h - 12};
+    rrect(cu, R_CONTROL, app_.cueActive() ? ACCENT : RAISED);
+    text(cu.x + cu.w / 2, cy, 10, app_.cueActive() ? ON_ACCENT : TEXT, "CUE", 1, true);
+    hit(cu,
+        [this](float, float) { app_.gotoPage(SamplerApp::P_CUE); app_.cueHold(true); },
+        {}, [this] { app_.cueHold(false); });
+    x += 62;
     text(x, cy - 6, 12, st_.freeRecording || recOn || armed ? ACCENT : TEXT, app_.loopText(), 0, true);
     text(x, cy + 11, 9.5f, DIM, std::string("LOOP SOURCE: ") + (app_.knobs(SamplerApp::P_SAVE)[1].value), 0, false);
     tap({x - 4, 0, 200, r.h}, [this] { auto k = app_.knobs(SamplerApp::P_SAVE); k[1].step(k[1].norm > 0.5f ? -1 : 1); });
