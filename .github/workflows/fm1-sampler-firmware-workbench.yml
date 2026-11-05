@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build and verify physical controller (USB and BLE)
+      - name: Build and verify USB physical controller
         shell: bash
         run: |
           set -euo pipefail
@@ -122,7 +122,7 @@ jobs:
       - name: Upload verifiable Windows build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: FM1-Sampler-Workbench-with-USB-BLE-OCT-firmware
+          name: FM1-Sampler-Workbench-with-USB-OCT-firmware
           path: dist/*
           if-no-files-found: error
       - name: Publish firmware and Workbench prerelease (only after validation)
@@ -137,7 +137,7 @@ jobs:
 
           - FM1-Sampler-OCT-MIDI.fwsc is a newly built firmware package, not a renamed older image.
           - FM1-Sampler-Workbench-OCT-MIDI.html embeds exactly this package and its verified update loader.
-          - Physical OCT−, OCT+ and PLAY/STOP emit independent MIDI Note On/Off over USB and BLE.
+          - Physical OCT−, OCT+ and PLAY/STOP emit independent MIDI Note On/Off over USB.
           - K1 emits relative CC for NOTE REPEAT.
           - The host firmware tests, cross-compiled native firmware checks, package layout and Web package checks passed.
 
