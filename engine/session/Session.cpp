@@ -114,6 +114,7 @@ struct Session::Impl {
         std::array<std::string, kTracks> samplePaths;
     };
     std::atomic<int> projectOp{0};
+    std::atomic<int> loopExportOp{0};
     mutable std::mutex projectMtx;
     std::shared_ptr<Session::LoadedProject> projectReady;
     bool projectRestored = false;
@@ -1176,6 +1177,60 @@ bool Session::saveClip(int t, const std::string& name) {
     });
     return true;
 }
+bool Session::exportLoops(const std::string& directory) {
+    // Only one export at a time. A frozen copy-on-write view of the recorded
+    // tracks is captured on the audio callback; no disk I/O runs there.
+    if (directory.empty()) return false;
+    int prior = d->loopExportOp.load();
+    do {
+        if (prior == 1) return false;
+    } while (!d->loopExportOp.compare_exchange_weak(prior, 1));
+    d->post([this, directory] {
+        if (d->freeRec || d->freeArmed || d->sampling || d->armedWait) {
+            d->loopExportOp = -1; return;
+        }
+        for (const auto& t : d->tracks)
+            if (t->clipRec) { d->loopExportOp = -1; return; }
+        std::array<std::shared_ptr<const std::vector<float>>, kTracks> snapshot{};
+        size_t longest = 0;
+        for (int i = 0; i < kTracks; ++i) {
+            const auto& tr = *d->tracks[(size_t)i];
+            if (!tr.clipHas || !tr.clip || tr.clip->empty()) continue;
+            snapshot[(size_t)i] = tr.clip; // COW: subsequent overdubs cannot change it
+            longest = std::max(longest, tr.clip->size());
+        }
+        if (!longest) { d->loopExportOp = -1; return; }
+        const int rate = d->sr;
+        d->job([this, snapshot = std::move(snapshot), directory, rate, longest] {
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            fs::create_directories(directory, ec);
+            if (ec) { d->loopExportOp = -2; return; }
+            std::vector<float> mix(longest, 0.f);
+            bool ok = true;
+            for (int i = 0; i < kTracks; ++i) {
+                const auto& clip = snapshot[(size_t)i];
+                if (!clip) continue;
+                char file[32];
+                std::snprintf(file, sizeof(file), "/TRACK_%02d.wav", i + 1);
+                if (!writeWav16(directory + file, *clip, rate)) { ok = false; break; }
+                for (size_t j = 0; j < clip->size(); ++j) mix[j] += (*clip)[j];
+            }
+            if (ok) {
+                // Preserve each stem at its exact recorded level; limit only
+                // the sum so an exported master cannot clip at 16-bit PCM.
+                float peak = 0.f;
+                for (float v : mix) peak = std::max(peak, std::fabs(v));
+                if (peak > 1.f) for (float& v : mix) v /= peak;
+                ok = writeWav16(directory + "/MASTER.wav", mix, rate);
+            }
+            d->loopExportOp = ok ? 2 : -2;
+        });
+    });
+    return true;
+}
+int Session::loopExportStatus() const { return d->loopExportOp.load(); }
+
 int Session::loopPeaks(int track, float* out, int maxBins) const {
     const int n = std::min(maxBins, kLoopBins);
     for (int i = 0; i < n; i++) out[i] = track < 0 ? d->a_lpk[i].load() : d->a_tpk[std::min(track, kTracks - 1)][i].load();
