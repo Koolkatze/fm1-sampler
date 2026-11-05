@@ -224,6 +224,9 @@ int main() {
       CHECK(app.status().playing, "PLAY alone no longer has a timed restart");
       hold(SamplerApp::PLAY, false); run(0.04);
       CHECK(!app.status().playing, "PLAY alone retains normal transport on release");
+      // Restore the tape to a running state before the next scene-recording test.
+      // This was previously done by the now-removed phone STOP test.
+      app.transportSet(true); run(0.15);
       app.loopClear(); run(0.3); }
     {   // Live C1/D1 scenes, independent track groups, ordered song, persistence and light/dark UI.
         app.selectTrack(0); app.loopClear(); run(0.2);
