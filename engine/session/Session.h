@@ -4,6 +4,7 @@
 // Threads: the audio thread calls process(). Everything else may be called from any other thread; changes reach the audio thread
 // through a command queue drained at the start of each block. status() and the peak views are lock-free.
 #pragma once
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -91,7 +92,9 @@ public:
     void seek(float fraction);            // move the playhead to a place of the loop (0..1): all loops share it
     void setLoopSpeed(float speed);       // 0.25..2, tape speed of all loops together; 1 = locked to the transport
     void setLoopSource(int src);          // what the loop records: 0 microphone, 1 the track's sound
-    bool saveClip(int track);             // the loop of `track` as sample_*.wav in the data dir
+    bool saveClip(int track, const std::string& name); // save a named WAV in samples/SAVED/Loops
+    void saveProject(const std::string& name, const std::string& appState, const std::array<std::string, kTracks>& samplePaths);
+    void loadProjectClips(const std::string& name);
     int loopPeaks(int track /* -1 = all tracks mixed */, float* out, int maxBins) const;
 
     // ---- microphone sampling ----
