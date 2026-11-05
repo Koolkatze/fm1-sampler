@@ -111,7 +111,7 @@ void SamplerApp::refreshLibrary() {
         const fs::path p(path);
         std::string name = p.stem().string();
         if (name.rfind("sample_", 0) == 0) name.erase(0, 7);
-        lib_.push_back({name, "Recordings", path, false, "SAVED", "Recordings"});
+        lib_.push_back({name, "Recordings", path, false, "SAVED", "RECORDINGS"});
     }
     std::sort(lib_.begin(), lib_.end(), [](const Entry& a, const Entry& b) {
         if (a.pack != b.pack) return a.pack < b.pack;
