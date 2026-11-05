@@ -66,6 +66,26 @@ void SamplerUI::button(Rect r, const std::string& label, bool on, std::function<
     tap(r, std::move(f));
 }
 
+// On a single-touch phone the OCT+ button latches the modifier. PLAY remains
+// momentary and its release always ends CUE. Physical OCT+/PLAY behaves the
+// same way without a latch.
+void SamplerUI::toggleTouchCueModifier() {
+    if (cueTouchArmed_) {
+        if (cueTouchPlay_) {
+            app_.button(SamplerApp::PLAY, false);
+            cueTouchPlay_ = false;
+        }
+        app_.button(SamplerApp::OCT_UP, false);
+        app_.gotoPage(cueTouchReturn_);
+        cueTouchArmed_ = false;
+    } else {
+        cueTouchReturn_ = app_.page();
+        cueTouchArmed_ = true;
+        app_.button(SamplerApp::OCT_UP, true);
+        app_.gotoPage(SamplerApp::P_CUE);
+    }
+}
+
 // ---- frame ----
 void SamplerUI::frame(uint32_t now) {
     now_ = now;
@@ -102,9 +122,20 @@ void SamplerUI::topBar(Rect r) {
     if (st_.playing) { rrect({pl.x + 15, cy - 8, 5, 16}, 0, ACCENT); rrect({pl.x + 24, cy - 8, 5, 16}, 0, ACCENT); }
     else tri(pl.x + 16, cy - 9, pl.x + 16, cy + 9, pl.x + 30, cy, TEXT);
     hit(pl,
-        [this](float, float) { playHeld_ = true; playLongFired_ = false; playHeldAt_ = now_; },
-        {},
+        [this](float, float) {
+            if (app_.cueModifierHeld()) {
+                cueTouchPlay_ = true;
+                app_.button(SamplerApp::PLAY, true);
+            } else {
+                playHeld_ = true; playLongFired_ = false; playHeldAt_ = now_;
+            }
+        }, {},
         [this] {
+            if (cueTouchPlay_) {
+                app_.button(SamplerApp::PLAY, false);
+                cueTouchPlay_ = false;
+                return;
+            }
             if (playHeld_ && !playLongFired_ && now_ - playHeldAt_ >= 1000U)
                 app_.restartLoop();
             else if (playHeld_ && !playLongFired_)
@@ -127,13 +158,11 @@ void SamplerUI::topBar(Rect r) {
     x += 62;
     button({x, 6, 56, r.h - 12}, "DECK", false, [this] { editor_ = false; }, 11);
     x += 70;
-    // CUE must remain directly playable in the legacy composition editor too.
+    // OCT+ is a latch for touch-only operation: hold PLAY for CUE, K1 is rate.
     const Rect cu{x, 6, 56, r.h - 12};
-    rrect(cu, R_CONTROL, app_.cueActive() ? ACCENT : RAISED);
-    text(cu.x + cu.w / 2, cy, 10, app_.cueActive() ? ON_ACCENT : TEXT, "CUE", 1, true);
-    hit(cu,
-        [this](float, float) { app_.gotoPage(SamplerApp::P_CUE); app_.cueHold(true); },
-        {}, [this] { app_.cueHold(false); });
+    rrect(cu, R_CONTROL, cueTouchArmed_ ? ACCENT : RAISED);
+    text(cu.x + cu.w / 2, cy, 10, cueTouchArmed_ ? ON_ACCENT : TEXT, "OCT+", 1, true);
+    tap(cu, [this] { toggleTouchCueModifier(); });
     x += 62;
     text(x, cy - 6, 12, st_.freeRecording || recOn || armed ? ACCENT : TEXT, app_.loopText(), 0, true);
     text(x, cy + 11, 9.5f, DIM, std::string("LOOP SOURCE: ") + (app_.knobs(SamplerApp::P_SAVE)[1].value), 0, false);
@@ -601,26 +630,26 @@ void SamplerUI::deck(Rect r) {
             icon(i, cx, ty, on ? kOrange : kPaper);
             if (on) rrect({cx - 12, ty + 17, 24, 2.7f}, 0, kOrange);
             hit({cx - 32, ty - 28, 64, 58},
-                [this](float, float) { playHeld_ = true; playLongFired_ = false; playHeldAt_ = now_; },
-                {},
+                [this](float, float) {
+                    if (app_.cueModifierHeld()) {
+                        cueTouchPlay_ = true;
+                        app_.button(SamplerApp::PLAY, true);
+                    } else {
+                        playHeld_ = true; playLongFired_ = false; playHeldAt_ = now_;
+                    }
+                }, {},
                 [this] {
+                    if (cueTouchPlay_) {
+                        app_.button(SamplerApp::PLAY, false);
+                        cueTouchPlay_ = false;
+                        return;
+                    }
                     if (playHeld_ && !playLongFired_ && now_ - playHeldAt_ >= 1000U)
                         app_.restartLoop();
                     else if (playHeld_ && !playLongFired_)
                         app_.transportSet(true);
                     playHeld_ = false;
                 });
-        } else if (i == 3) {
-            // Dedicated momentary CUE on the MAIN composition screen as
-            // well as in the CUE page: no tiny hidden page tab required.
-            const bool active = app_.cueActive();
-            rrect({cx - 29, ty - 23, 58, 46}, R_CONTROL, active ? kOrange : kLine);
-            text(cx, ty, 13, active ? kBg : kPaper, "CUE", 1, true);
-            hit({cx - 32, ty - 28, 64, 58},
-                [this](float, float) {
-                    app_.gotoPage(SamplerApp::P_CUE);
-                    app_.cueHold(true);
-                }, {}, [this] { app_.cueHold(false); });
         } else {
             icon(i, cx, ty, i == 2 ? kOrange : on ? kOrange : kPaper);
             if (on) rrect({cx - 12, ty + 17, 24, 2.7f}, 0, kOrange);
@@ -628,9 +657,16 @@ void SamplerUI::deck(Rect r) {
             tap({cx - 32, ty - 28, 64, 58}, [this, i] {
                 if (i == 1) app_.transportSet(false);
                 else if (i == 2) app_.loopRecord();
+                else if (i == 3) app_.loopClearTrack();
             });
         }
     }
+    // The fourth transport key stays CLEAR. OCT+ is a separate, visible
+    // modifier (tap to arm/disarm on a single-touch phone), not a CUE shortcut.
+    const Rect octCue{270, ty - 28, 48, 58};
+    rrect(octCue, R_CONTROL, cueTouchArmed_ ? kOrange : kLine);
+    text(octCue.x + octCue.w * 0.5f, ty, 10, cueTouchArmed_ ? kBg : kPaper, "OCT+", 1, true);
+    tap(octCue, [this] { toggleTouchCueModifier(); });
     // tools in the middle: theme, microphone, file from disk, project
     const uint32_t micCol = mic == 1 || mic == 2 ? kOrange : kPaper;
     icon(4, mx, 56, kPaper);  tap({mx - 32, 28, 64, 56}, [this] { setLight(!theme::light); });
