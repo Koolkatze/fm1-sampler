@@ -93,7 +93,7 @@ public:
     void seek(float fraction);            // move the playhead to a place of the loop (0..1): all loops share it
     void setLoopSpeed(float speed);       // 0.25..2, tape speed of all loops together; 1 = locked to the transport
     void setLoopSource(int src);          // what the loop records: 0 microphone, 1 the track's sound
-    bool saveClip(int track, const std::string& name); // save a named WAV in samples/SAVED/Loops
+    bool saveClip(int track, const std::string& name = ""); // save a named WAV in samples/SAVED/Loops
     void saveProject(const std::string& name, const std::string& appState, const std::array<std::string, kTracks>& samplePaths);
     void loadProjectClips(const std::string& name);
     int loopPeaks(int track /* -1 = all tracks mixed */, float* out, int maxBins) const;
