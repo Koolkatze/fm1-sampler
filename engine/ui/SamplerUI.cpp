@@ -16,13 +16,24 @@ namespace {
 float clamp01(float v) { return std::min(1.f, std::max(0.f, v)); }
 std::string num(const char* f, double v) { char b[48]; snprintf(b, sizeof b, f, v); return b; }
 const SamplerApp::Page kTabs[] = {SamplerApp::P_HOME, SamplerApp::P_FX, SamplerApp::P_ENV, SamplerApp::P_LFO, SamplerApp::P_ARP, SamplerApp::P_SEQ, SamplerApp::P_MIX, SamplerApp::P_KEY, SamplerApp::P_SAVE, SamplerApp::P_LEN, SamplerApp::P_CUE};
-const char* kTabName[] = {"SAMPLE", "FX", "ENV", "LFO", "ARP", "TAPE", "MIX", "KEY", "LOOP", "LEN", "CUE"};
+const char* kTabName[] = {"SAMPLE", "FX", "ENV", "LFO", "ARP", "TAPE", "MIX", "KEY", "LOOP", "LEN", "REPEAT"};
 }  // namespace
 
 SamplerUI::SamplerUI(SamplerApp& app) : app_(app) {
     FILE* f = fopen((app_.session().dataDir() + "/theme").c_str(), "r");   // the chosen theme survives restarts; light is the default
     if (f) { char c = 0; if (fread(&c, 1, 1, f) == 1) theme::apply(c != 'd'); fclose(f); }
+    FILE* help = fopen((app_.session().dataDir() + "/shortcut_help").c_str(), "r");
+    if (help) {
+        char value = '1';
+        if (fread(&value, 1, 1, help) == 1) shortcutHelpVisible_ = value != '0';
+        fclose(help);
+    }
     syncColors();
+}
+void SamplerUI::setShortcutHelpVisible(bool on) {
+    shortcutHelpVisible_ = on;
+    FILE* f = fopen((app_.session().dataDir() + "/shortcut_help").c_str(), "w");
+    if (f) { fputc(on ? '1' : '0', f); fclose(f); }
 }
 void SamplerUI::setLight(bool on) {
     theme::apply(on); syncColors();
@@ -567,7 +578,32 @@ void SamplerUI::deck(Rect r) {
         const std::string ts = app_.toast();
         text(M, 66, 12, !ts.empty() ? kOrange : kDim, !ts.empty() ? fit(ts, mx - M - 20, 12) : hasLoop || st_.freeRecording ? std::string(cnt) : "No loop", 0, true);
     }
-    cassette({M - 4, 86, 292, 150});
+    // Compact two-line legend for the FM-1 physical buttons. It is NOT a
+    // software OCT control: tapping the small HIDE/INFO chip only changes
+    // whether the information is displayed.
+    if (shortcutHelpVisible_) {
+        const Rect help{M - 4, 76, 292, 29};
+        rrect(help, R_CONTROL, theme::SURFACE);
+        stroke(help, R_CONTROL, theme::OUTLINE, 1);
+        text(help.x + 7, help.y + 9, 9, kPaper,
+             "OCT- + PLAY/STOP    RESTART LOOP", 0, true);
+        text(help.x + 7, help.y + 23, 8.6f, kDim,
+             "OCT+ + PLAY/STOP    NOTE REPEAT  (K1: 1/1-1/32)", 0, true);
+        const Rect hide{help.x + help.w - 39, help.y + 1, 38, 15};
+        rrect(hide, R_CONTROL, theme::RAISED);
+        text(hide.x + hide.w / 2, hide.y + hide.h / 2, 8, kPaper, "HIDE", 1, true);
+        tap(hide, [this] { setShortcutHelpVisible(false); });
+        // Only the decorative cassette is reduced slightly, never the
+        // transport keys, timeline or other interactive controls.
+        cassette({M - 4, 106, 292, 130});
+    } else {
+        cassette({M - 4, 86, 292, 150});
+        const Rect show{M + 254, 61, 38, 17};
+        rrect(show, R_CONTROL, theme::SURFACE);
+        stroke(show, R_CONTROL, theme::OUTLINE, 1);
+        text(show.x + show.w / 2, show.y + show.h / 2, 8, kPaper, "INFO", 1, true);
+        tap(show, [this] { setShortcutHelpVisible(true); });
+    }
     // transport: play, stop, record / overdub, clear the loop of this track; the active one is orange and underlined
     const float ty = 248;
     for (int i = 0; i < 4; i++) {
