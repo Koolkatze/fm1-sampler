@@ -752,10 +752,10 @@ int main() {
         // PROJECT menu exposes EXPORT LOOP alongside SAVE/LOAD PROJECT.
         click(351.f, 248.f);
         CHECK(hasText("SAVE PROJECT") && hasText("LOAD PROJECT") &&
-              hasText("EXPORT LOOP"), "PROJECT has three independent save/load/export actions");
+              hasText("EXPORT ALL LOOPS"), "PROJECT has three independent save/load/export actions");
         click(351.f, 67.f);
         CHECK(app.wantLoopExport() && !app.wantLoopExport(),
-              "EXPORT LOOP sends exactly one request to Android's shared-download exporter");
+              "EXPORT ALL LOOPS sends exactly one request to Android's shared-download exporter");
     }
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL OK", fails);
     return fails ? 1 : 0;
