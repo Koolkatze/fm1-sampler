@@ -1,0 +1,141 @@
+name: Build FM1 Sampler firmware + flash Workbench (verified package)
+
+on:
+  push:
+    branches: [feature/scene-launcher-song-mode]
+    paths:
+      - 'firmware/app/**'
+      - 'firmware/hosttest/**'
+      - 'firmware/sdk/**'
+      - 'firmware/tools/**'
+      - 'firmware/FLASHING_FM1_SAMPLER.md'
+      - '.github/workflows/fm1-sampler-firmware-workbench.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fm1-sampler-firmware-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-controller:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and verify physical controller (USB and BLE)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p firmware/build/host
+          cc -std=c11 -O2 -DFM1_HOST_TEST -I firmware/sdk/include \
+            -I firmware/app -I firmware/app/synth \
+            firmware/hosttest/ctrl_host.c -lm -o firmware/build/host/ctrl_host
+          (cd firmware/build/host && ./ctrl_host)
+
+  build-firmware-and-workbench:
+    needs: verify-controller
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out exact FM1 Sampler sources
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Retrieve official JieLi toolchain 2.5.3
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:RUNNER_TEMP 'jieli-2.5.3.exe'
+          $url = 'https://jl-update.oss-cn-shenzhen.aliyuncs.com/2.5.3.exe'
+          Write-Host "Downloading original JieLi 2.5.3 installer from the vendor"
+          $res = curl.exe --fail --location --retry 3 --connect-timeout 25 --max-time 300 --output $installer $url
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path $installer)) {
+            throw 'JieLi 2.5.3 cannot be downloaded from the vendor CDN on this runner. No firmware will be released.'
+          }
+          Write-Host "Installer SHA-256: $((Get-FileHash $installer -Algorithm SHA256).Hash)"
+          $seven = 'C:\Program Files\7-Zip\7z.exe'
+          if (!(Test-Path $seven)) { throw '7-Zip not available on Windows runner.' }
+          $dst = Join-Path $env:RUNNER_TEMP 'jieli-extracted'
+          New-Item -ItemType Directory -Path $dst -Force | Out-Null
+          & $seven x $installer "-o$dst" -y | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw 'The vendor installer is not extractable with 7-Zip. No unverified installer was executed.' }
+          $clang = @(Get-ChildItem -LiteralPath $dst -Recurse -Filter clang.exe -File -ErrorAction SilentlyContinue |
+                     Where-Object { $_.Directory.Name -eq 'bin' -and (Test-Path (Join-Path $_.DirectoryName 'pi32v2-ld.exe')) } |
+                     Select-Object -First 1)
+          if ($clang.Count -ne 1) {
+            throw 'Could not extract a complete pi32/bin JieLi 2.5.3 toolchain. Supply the matching vendor toolchain locally to build; no old firmware will be repackaged.'
+          }
+          $toolchain = Split-Path -Parent $clang[0].DirectoryName
+          # Build.ps1 verifies the SHA-256 of each of the 22 toolchain files
+          # against firmware/sdk/manifest.json before compiling.
+          "FM1_PI32_TOOLCHAIN=$toolchain" >> $env:GITHUB_ENV
+          Write-Host "Extracted toolchain at $toolchain"
+      - name: Build complete flashable FM1 Sampler firmware and Workbench
+        shell: pwsh
+        env:
+          FM1_SOURCE_URL: https://github.com/${{ github.repository }}/archive/${{ github.sha }}.zip
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # This script checks SDK hashes, compiler hashes, generated ELF,
+          # bootloader/package layout, and browser-embedded firmware checksum.
+          & ./firmware/sdk/Build.ps1 -Package -Toolchain $env:FM1_PI32_TOOLCHAIN -SourceUrl $env:FM1_SOURCE_URL
+          if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { throw 'Firmware build failed.' }
+      - name: Verify firmware/loader and integrated browser Workbench
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $f = Get-Content 'firmware/build/dx7/firmware-report.json' -Raw | ConvertFrom-Json
+          $p = Get-Content 'firmware/build/dx7/package-report.json' -Raw | ConvertFrom-Json
+          $w = Get-Content 'firmware/build/dx7/web-package-report.json' -Raw | ConvertFrom-Json
+          if (!$f.passed -or !$p.fits -or !$w.integrated -or $w.hardware_validated) {
+            throw 'Firmware package failed verification, or has unexpected hardware-validation status.'
+          }
+          $fw = 'firmware/build/dx7/generated/FM1_OFFICIAL_OPEN.fwsc'
+          $html = 'firmware/build/official-web/FM1-Official-Open-Source.html'
+          if (!(Test-Path $fw) -or (Get-Item $fw).Length -lt 65536 -or
+              !(Test-Path $html) -or (Get-Item $html).Length -lt 300000) {
+            throw 'Missing generated firmware or embedded Workbench.'
+          }
+          $actual = (Get-FileHash $fw -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $w.firmware_sha256) { throw 'Workbench/firmware package hash mismatch' }
+          if (!(Select-String -Path $html -Pattern 'FM1_PACKAGE' -Quiet)) {
+            throw 'Workbench is missing the embedded firmware payload.'
+          }
+          New-Item -ItemType Directory -Path 'dist' -Force | Out-Null
+          Copy-Item $fw 'dist/FM1-Sampler-OCT-MIDI.fwsc'
+          Copy-Item $html 'dist/FM1-Sampler-Workbench-OCT-MIDI.html'
+          Copy-Item 'firmware/build/dx7/firmware-report.json' 'dist/firmware-report.json'
+          Copy-Item 'firmware/build/dx7/package-report.json' 'dist/package-report.json'
+          Copy-Item 'firmware/build/dx7/web-package-report.json' 'dist/web-package-report.json'
+          Get-FileHash 'dist/*' -Algorithm SHA256 | Format-Table | Out-Host
+      - name: Upload verifiable Windows build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: FM1-Sampler-Workbench-with-USB-BLE-OCT-firmware
+          path: dist/*
+          if-no-files-found: error
+      - name: Publish firmware and Workbench prerelease (only after validation)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = 'vFM1-Sampler-OCT-MIDI-preview.1'
+          @'
+          FM1 Sampler firmware + Workbench, built from matching source/SDK.
+
+          - FM1-Sampler-OCT-MIDI.fwsc is a newly built firmware package, not a renamed older image.
+          - FM1-Sampler-Workbench-OCT-MIDI.html embeds exactly this package and its verified update loader.
+          - Physical OCT−, OCT+ and PLAY/STOP emit independent MIDI Note On/Off over USB and BLE.
+          - K1 emits relative CC for NOTE REPEAT.
+          - The host firmware tests, cross-compiled native firmware checks, package layout and Web package checks passed.
+
+          HARDWARE VALIDATION: NOT PERFORMED. Flashing firmware can erase data or make the device unusable.
+          Back up all device projects/presets/samples before attempting an update, confirm the FM-1
+          board product/update identity and use desktop Chrome/Edge Web MIDI with SysEx permitted.
+          The built-in updater may refuse other installed firmware; never disable identity checks
+          or bypass the official loader.
+          '@ | Set-Content -LiteralPath release-notes.txt -Encoding utf8
+          gh release create $tag 'dist/FM1-Sampler-OCT-MIDI.fwsc' 'dist/FM1-Sampler-Workbench-OCT-MIDI.html' 'dist/firmware-report.json' 'dist/package-report.json' 'dist/web-package-report.json' --repo "$env:GITHUB_REPOSITORY" --target "$env:GITHUB_SHA" --title 'FM1 Sampler — OCT MIDI firmware + Workbench (hardware-unverified)' --notes-file release-notes.txt --prerelease
