@@ -69,6 +69,10 @@ void SamplerUI::button(Rect r, const std::string& label, bool on, std::function<
 // ---- frame ----
 void SamplerUI::frame(uint32_t now) {
     now_ = now;
+    if (playHeld_ && !playLongFired_ && now - playHeldAt_ >= 1000U) {
+        playLongFired_ = true;
+        app_.restartLoop();
+    }
     st_ = app_.status();
     syncColors();
     ops_.clear(); hits_.clear();
@@ -573,21 +577,41 @@ void SamplerUI::deck(Rect r) {
     for (int i = 0; i < 4; i++) {
         const float cx = M + 20 + i * 64;
         const bool on = i == 0 ? st_.playing : i == 2 ? recOn : false;
-        if (i == 0 && app_.page() == SamplerApp::P_CUE) {
-            // In the CUE page, the PLAY control is momentary. Releasing the
-            // finger restores the main loop without altering its timeline.
+        if (i == 0) {
+            // PLAY: a short tap plays; a one-second hold restarts the loop.
+            // Do not change transport on finger-down: the gesture must be
+            // unambiguous even when playback is already running.
+            icon(i, cx, ty, on ? kOrange : kPaper);
+            if (on) rrect({cx - 12, ty + 17, 24, 2.7f}, 0, kOrange);
+            hit({cx - 32, ty - 28, 64, 58},
+                [this](float, float) { playHeld_ = true; playLongFired_ = false; playHeldAt_ = now_; },
+                {},
+                [this] {
+                    if (playHeld_ && !playLongFired_ && now_ - playHeldAt_ >= 1000U)
+                        app_.restartLoop();
+                    else if (playHeld_ && !playLongFired_)
+                        app_.transportSet(true);
+                    playHeld_ = false;
+                });
+        } else if (i == 3) {
+            // Dedicated momentary CUE on the MAIN composition screen as
+            // well as in the CUE page: no tiny hidden page tab required.
             const bool active = app_.cueActive();
             rrect({cx - 29, ty - 23, 58, 46}, R_CONTROL, active ? kOrange : kLine);
             text(cx, ty, 13, active ? kBg : kPaper, "CUE", 1, true);
             hit({cx - 32, ty - 28, 64, 58},
-                [this](float, float) { app_.cueHold(true); },
-                {},
-                [this] { app_.cueHold(false); });
+                [this](float, float) {
+                    app_.gotoPage(SamplerApp::P_CUE);
+                    app_.cueHold(true);
+                }, {}, [this] { app_.cueHold(false); });
         } else {
             icon(i, cx, ty, i == 2 ? kOrange : on ? kOrange : kPaper);
             if (on) rrect({cx - 12, ty + 17, 24, 2.7f}, 0, kOrange);
             if (i == 2 && armed && (now_ / 400) % 2 == 0) rrect({cx - 12, ty + 17, 24, 2.7f}, 0, kOrange);
-            tap({cx - 32, ty - 28, 64, 58}, [this, i] { if (i == 0) app_.transportSet(true); else if (i == 1) app_.transportSet(false); else if (i == 2) app_.loopRecord(); else app_.loopClearTrack(); });
+            tap({cx - 32, ty - 28, 64, 58}, [this, i] {
+                if (i == 1) app_.transportSet(false);
+                else if (i == 2) app_.loopRecord();
+            });
         }
     }
     // tools in the middle: theme, microphone, file from disk, project
@@ -886,12 +910,17 @@ void SamplerUI::projectSheet() {
 
     // Performance mode selector. Selecting LOOP enables the physical C1..B1
     // scene bank, while SONG keeps the keyboard available for playing notes.
-    const float half = (w - 5) / 2;
-    button({x, Y(1), half, H(29)}, "LOOP MODE", !app_.songMode(),
-           [this] { app_.setSongMode(false); }, 11);
-    button({x + half + 5, Y(1), half, H(29)}, "SONG MODE", app_.songMode(),
-           [this] { app_.setSongMode(true); }, 11);
+    const float third = (w - 10) / 3;
+    button({x, Y(1), third, H(29)}, "COMPOSE", !app_.performanceActive(),
+           [this] { app_.exitPerformanceMode(); projectOpen_ = false; editor_ = false; }, 10);
+    button({x + third + 5, Y(1), third, H(29)}, "LOOP MODE",
+           app_.performanceActive() && !app_.songMode(),
+           [this] { app_.setSongMode(false); }, 10);
+    button({x + 2 * (third + 5), Y(1), third, H(29)}, "SONG MODE",
+           app_.performanceActive() && app_.songMode(),
+           [this] { app_.setSongMode(true); }, 10);
     text(x, Y(42), 10, DIM,
+         !app_.performanceActive() ? "COMPOSITION: KEYS PLAY NOTES" :
          app_.songMode() ? "SELECT A PAD TO BUILD THE SONG" : "C1..B1  /  LIVE SCENE LAUNCH", 0, true);
 
     // Twelve pitched launch pads. Grey is empty; accent is active, outlined
@@ -934,7 +963,7 @@ void SamplerUI::projectSheet() {
     const bool saved = app_.sceneSaved(slot);
     const bool saveArmed = saved && sceneArmedSlot_ == slot && now_ < sceneSaveAt_;
     const bool delArmed = saved && deleteArmedSlot_ == slot && now_ < sceneDeleteAt_;
-    const float aw = (w - 8) / 3;
+    const float aw = (w - 12) / 4;
     button({x, Y(163), aw, H(29)},
            saveArmed ? "CONFIRM SAVE" : saved ? "REPLACE" : "SAVE SCENE",
            saveArmed, [this, saved, saveArmed, slot] {
@@ -947,7 +976,9 @@ void SamplerUI::projectSheet() {
            }, 10);
     button({x + aw + 4, Y(163), aw, H(29)}, "LAUNCH", false,
            [this, slot] { app_.setSongMode(false); app_.selectScene(slot, true); }, 10);
-    button({x + 2 * (aw + 4), Y(163), aw, H(29)},
+    button({x + 2 * (aw + 4), Y(163), aw, H(29)}, "EXIT", false,
+           [this] { app_.exitPerformanceMode(); projectOpen_ = false; editor_ = false; }, 10);
+    button({x + 3 * (aw + 4), Y(163), aw, H(29)},
            delArmed ? "CONFIRM DEL" : "DELETE", delArmed,
            [this, saved, delArmed, slot] {
                if (!saved) return;
@@ -990,6 +1021,7 @@ void SamplerUI::projectSheet() {
     button({x + 2 * (ew + 4), Y(261), ew, H(27)}, "MOVE <", false, [this] { app_.songMove(-1); }, 9);
     button({x + 3 * (ew + 4), Y(261), ew, H(27)}, "MOVE >", false, [this] { app_.songMove(+1); }, 9);
 
+    const float half = (w - 5) / 2;
     button({x, Y(298), half, H(30)}, "PLAY SONG", st_.songPlaying,
            [this] { app_.setSongMode(true); app_.playSong(); }, 11);
     button({x + half + 5, Y(298), half, H(30)}, "STOP", false,
