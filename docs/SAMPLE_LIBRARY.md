@@ -72,7 +72,7 @@ fail without exposing a partially imported pack.
 FMP2 projects remain self-contained: eight tracks, sample audio, clips,
 COMPOSE, twelve scenes, SONG order, effects, settings and transport.
 
-## HOME navigation and category filters (0.38.1)
+## HOME navigation and file-type indicators (0.38.2)
 
 Three **always-visible touch buttons** occupy the top-left corner of the
 cassette HOME page, immediately **left of the active sample name**:
