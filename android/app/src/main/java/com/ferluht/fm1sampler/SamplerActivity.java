@@ -77,7 +77,7 @@ public class SamplerActivity extends Activity {
     /** Native FM-1 graphics keep their aesthetic; use Android's actual keyboard to name files. */
     void nameDialog(int kind) {
         if (kind == 3) {
-            File dir = new File(getFilesDir(), "projects");
+            File dir = new File(StorageLayout.projects(this), "projects");
             File[] all = dir.listFiles(f -> f.isDirectory() && new File(f, "project.state").isFile());
             if (all == null || all.length == 0) {
                 Native.say(backend.engine, "NO SAVED PROJECTS");
@@ -115,7 +115,7 @@ public class SamplerActivity extends Activity {
             Native.say(backend.engine, "IMPORTING PACK...");
             new Thread(() -> {
                 try {
-                    File out = PackImport.importZip(this, uri, new File(getFilesDir(), "samples"));
+                    File out = PackImport.importZip(this, uri, StorageLayout.root(this));
                     Native.refreshLibrary(backend.engine);
                     Native.say(backend.engine, "PACK: " + out.getName());
                 } catch (Exception e) {
@@ -129,7 +129,7 @@ public class SamplerActivity extends Activity {
         Native.say(backend.engine, "READING THE FILE...");
         new Thread(() -> {
             try {
-                File folder = new File(getFilesDir(), "samples/SAVED/Imports");
+                File folder = StorageLayout.imports(this);
                 folder.mkdirs();
                 File out = AudioImport.importTo(this, uri, folder);
                 Native.importFile(backend.engine, out.getAbsolutePath());
