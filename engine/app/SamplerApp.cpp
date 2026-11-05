@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <type_traits>
 
 namespace {
 constexpr uint16_t rgb(int r, int g, int b) { return (uint16_t)((r >> 3) << 11 | (g >> 2) << 5 | (b >> 3)); }
@@ -99,7 +101,7 @@ void SamplerApp::loadEntry(int i) {
     libCursor_ = i; auditionAt_ = 0;
     const Entry& e = lib_[(size_t)i];
     TrackState& t = ts_[track_];
-    t.entry = i; t.start = 0.f; t.end = 1.f;
+    t.entry = i; t.tuned = false; t.start = 0.f; t.end = 1.f;
     if (e.kit) t.algo = 3; else if (t.algo == 3) t.algo = 0;
     previewAfterLoad_ = true;
     s_.loadSamplePath(e.path, e.kit, track_);
@@ -414,6 +416,125 @@ void SamplerApp::stopSong() {
     say("SONG STOPPED");
 }
 
+
+// ---- full project: all UI/music parameters and embedded sample source paths ----
+// The engine writes an atomic FMP2 archive on its worker and captures all
+// loop/scene buffers on one audio callback. This app section contains only
+// trivially-copyable musical state, never pointers or MIDI connection handles.
+namespace {
+struct FullProjectSettings {
+    uint32_t magic = 0x32505041;  // APP2
+    uint32_t version = 2, bytes = sizeof(FullProjectSettings);
+    std::array<SamplerApp::TrackState, SamplerApp::kTracks> tracks{};
+    SamplerApp::ScaleState scale{};
+    float reverbSize = .7f, reverbWet = .35f, delayTime = .4f, delayFeedback = .45f;
+    float exciter = 0.f, lofi = 0.f, wobble = 0.f, loopSpeed = 2.f / 3.f, micThreshold = .452f;
+    int32_t loopSource = 1, selectedTrack = 0, page = 0;
+    int32_t selectedScene = 0, selectedSongStep = -1, cueDivision = 2;
+    uint8_t sceneTrackMask = 0xff, performance = 0, songMode = 0, reserved = 0;
+    uint32_t songSize = 0;
+    std::array<int32_t, 64> songOrder{};
+};
+static_assert(std::is_trivially_copyable_v<FullProjectSettings>);
+}
+bool SamplerApp::fullProjectExists(int slot) const { return s_.projectExists(slot); }
+bool SamplerApp::saveFullProject(int slot) {
+    if (recordingNow() || mic_ != 0) { say("FINISH RECORDING FIRST"); return false; }
+    if (slot < 0 || slot >= Session::kProjectSlots) return false;
+    FullProjectSettings m{};
+    m.tracks = ts_; m.scale = scale_;
+    m.reverbSize = reverbSize_; m.reverbWet = reverbDw_;
+    m.delayTime = delayTime_; m.delayFeedback = delayFb_;
+    m.exciter = exciter_; m.lofi = lofi_; m.wobble = wobble_;
+    m.loopSpeed = loopSpeed_; m.micThreshold = micThr_; m.loopSource = loopSrc_;
+    m.selectedTrack = track_; m.page = (int)page_;
+    m.selectedScene = selectedScene_; m.selectedSongStep = songSelected_;
+    m.cueDivision = cueDivision_;
+    m.sceneTrackMask = sceneTracks_; m.performance = sceneKeys_; m.songMode = songMode_;
+    m.songSize = (uint32_t)std::min<size_t>(64, songOrder_.size());
+    for (uint32_t i = 0; i < m.songSize; ++i) m.songOrder[i] = songOrder_[i];
+    std::array<std::string, kTracks> sources{};
+    for (int i = 0; i < kTracks; ++i) {
+        const int index = ts_[(size_t)i].entry;
+        if (index >= 0 && index < (int)lib_.size())
+            sources[(size_t)i] = lib_[(size_t)index].path;
+        else if (hasSample(i)) {
+            say("SAMPLE SOURCE MISSING ON TRACK " + std::to_string(i + 1));
+            return false; // never silently save a project without its sound
+        }
+        if (!sources[(size_t)i].empty() && !std::filesystem::exists(sources[(size_t)i])) {
+            say("SAMPLE FILE MISSING ON TRACK " + std::to_string(i + 1));
+            return false;
+        }
+    }
+    std::vector<uint8_t> bytes(sizeof(m));
+    std::memcpy(bytes.data(), &m, bytes.size());
+    if (!s_.saveProject(slot, std::move(bytes), sources)) {
+        say("PROJECT BUSY OR INVALID"); return false;
+    }
+    say("SAVING PROJECT " + std::to_string(slot + 1));
+    return true;
+}
+bool SamplerApp::loadFullProject(int slot) {
+    if (recordingNow() || mic_ != 0) { say("FINISH RECORDING FIRST"); return false; }
+    if (!s_.loadProject(slot)) { say("EMPTY PROJECT OR BUSY"); return false; }
+    say("LOADING PROJECT " + std::to_string(slot + 1));
+    return true;
+}
+void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
+    if (project.appState.size() != sizeof(FullProjectSettings)) {
+        say("PROJECT SETTINGS INCOMPATIBLE"); return;
+    }
+    FullProjectSettings m{};
+    std::memcpy(&m, project.appState.data(), sizeof(m));
+    if (m.magic != 0x32505041 || m.version != 2 || m.bytes != sizeof(m) ||
+        m.songSize > 64 || m.selectedTrack < 0 || m.selectedTrack >= kTracks ||
+        m.page < 0 || m.page >= kPages || m.selectedScene < 0 ||
+        m.selectedScene >= Session::kScenes || m.selectedSongStep < -1 ||
+        m.selectedSongStep >= (int)m.songSize || m.cueDivision < 0 || m.cueDivision > 5 ||
+        m.performance > 1 || m.songMode > 1) {
+        say("PROJECT SETTINGS CORRUPT"); return;
+    }
+    // These scene/transport flags match the engine snapshot restored on the
+    // same audio callback. Changing COMPOSE/LOOP/SONG here must not restart it.
+    ts_ = m.tracks; scale_ = m.scale;
+    reverbSize_ = m.reverbSize; reverbDw_ = m.reverbWet;
+    delayTime_ = m.delayTime; delayFb_ = m.delayFeedback;
+    exciter_ = m.exciter; lofi_ = m.lofi; wobble_ = m.wobble;
+    loopSpeed_ = m.loopSpeed; micThr_ = m.micThreshold; loopSrc_ = m.loopSource;
+    track_ = m.selectedTrack; page_ = (Page)m.page;
+    selectedScene_ = m.selectedScene; songSelected_ = m.selectedSongStep;
+    sceneTracks_ = m.sceneTrackMask; cueDivision_ = m.cueDivision;
+    sceneKeys_ = m.performance; songMode_ = m.songMode;
+    songOrder_.clear();
+    for (uint32_t i = 0; i < m.songSize; ++i) songOrder_.push_back(m.songOrder[i]);
+    scenesLoaded_ = true;
+    cueActive_ = cueSelect_ = playModified_ = false;
+    held_ = 0; mic_ = 0; micTrack_ = 0;
+    auditionAt_ = 0; previewNote_ = -1; previewAfterLoad_ = false; commitAt_ = 0;
+    pending_.clear(); pendingBytes_ = 0; needClear_ = true; fwDirty_ = true;
+    refreshLibrary(); // regenerate entry indices for self-contained source WAVs
+    for (int i = 0; i < kTracks; ++i) {
+        ts_[(size_t)i].entry = -1;
+        const std::string& path = project.samplePaths[(size_t)i];
+        if (path.empty()) {
+            s_.clearSample(i); continue;
+        }
+        const std::string title = "P" + std::to_string(project.slot + 1) +
+                                  " TRACK " + std::to_string(i + 1);
+        lib_.push_back({title, "Project", path, ts_[(size_t)i].algo == 3});
+        ts_[(size_t)i].entry = (int)lib_.size() - 1;
+        s_.loadSamplePath(path, ts_[(size_t)i].algo == 3, i);
+    }
+    libCursor_ = std::max(0, ts_[(size_t)track_].entry);
+    applyFx();
+    s_.setLoopSource(loopSrc_);
+    s_.setLoopSpeed(loopSpeedOf(loopSpeed_));
+    s_.setMicThreshold(micThrOf(micThr_));
+    for (int t = 0; t < kTracks; ++t) applyAll(t);
+    say("PROJECT " + std::to_string(project.slot + 1) + " RESTORED");
+}
+
 // ---- looper, recorder ----
 void SamplerApp::endRecording() {
     if (st_.freeArmed || st_.freeRecording) { s_.freeRecord(track_, false); say(st_.freeArmed && !st_.freeRecording ? "CANCELLED" : "LOOP SET"); }
@@ -702,6 +823,18 @@ void SamplerApp::tick(uint32_t now) {
     if (fwDirty_) { fwDirty_ = false; sysex(6, {7, (uint8_t)scale_.root, (uint8_t)(scale_.octave + 3), (uint8_t)scale_.mode}, true); }
     if (repaintAt_ && now >= repaintAt_) { repaintAt_ = repaintAt_ + 2500 < now + 2500 && repaintCount_++ < 1 ? now + 2500 : 0; needClear_ = true; }
     st_ = s_.status();
+    Session::LoadedProject loadedProject;
+    if (s_.takeLoadedProject(loadedProject)) {
+        applyLoadedProject(loadedProject);
+        st_ = s_.status();
+    }
+    const int projectState = s_.projectOperation();
+    if (projectState != lastProjectOperation_) {
+        lastProjectOperation_ = projectState;
+        if (projectState == 2) say("FULL PROJECT SAVED");
+        else if (projectState == -1) say("PROJECT SAVE FAILED");
+        else if (projectState == -2) say("PROJECT LOAD FAILED");
+    }
     if (!scenesLoaded_ && st_.arrangementLoaded) {
         scenesLoaded_ = true;
         songOrder_.clear();
@@ -724,7 +857,8 @@ void SamplerApp::tick(uint32_t now) {
     if (auditionAt_ && now >= auditionAt_) loadEntry(libCursor_);
     if (st_.sampleVersion != lastSampleVersion_) {   // a sample landed on a track: give it this track's settings
         lastSampleVersion_ = st_.sampleVersion;
-        if (st_.sampleTrack >= 0 && st_.sampleTrack < kTracks) ts_[st_.sampleTrack].tuned = false;   // a new sample: its pitch is unknown again
+        // A user choosing a different sample clears tuning at selection time.
+        // Do not reset saved per-track tuning when archived WAVs are reloaded.
         for (int i = 0; i < kTracks; i++) if (hasSample(i)) applyAll(i);   // several samples can land between two ticks (start-up): every track gets its settings, not only the last
         if (previewAfterLoad_ && st_.sampleTrack == track_) { previewAfterLoad_ = false; previewNote_ = 60; previewTrack_ = track_; s_.noteOn(track_, 60, 100); previewOffAt_ = now + 900; }
     }

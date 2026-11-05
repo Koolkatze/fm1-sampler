@@ -108,6 +108,12 @@ public:
     void songMove(int direction);
     void playSong();
     void stopSong();
+    // Complete project slots: source WAV, current performance clips, COMPOSE,
+    // all scenes, SONG order/position, track settings, and transport.
+    bool saveFullProject(int slot);
+    bool loadFullProject(int slot);
+    bool fullProjectExists(int slot) const;
+    int fullProjectOperation() const { return s_.projectOperation(); }
     std::string toast() const { return nowMs_ < toastUntil_ ? toast_ : ""; }
     void say(const std::string& t) { toast_ = t; toastUntil_ = nowMs_ + 1800; }
     // mixer and per-track state
@@ -163,6 +169,7 @@ private:
     void applyAll(int t);
     void applyAlgo(int t); void applyEnv(int t); void applyLfo(int t); void applyHome(int t, bool commit = false); void applyArp(int t); void applyRoot(int t); void applySeq(int t); void applyMix(int t);
     void applyFx();
+    void applyLoadedProject(const Session::LoadedProject& project);
     void queueCommit(int t);
     Knob cont(const char* name, float* v, std::function<std::string(float)> fmt, std::function<void()> apply, float stepSize = 0.02f, bool commit = false);
     Knob choice(const char* name, int* v, std::vector<std::string> opts, std::function<void()> apply);
@@ -190,6 +197,7 @@ private:
     uint8_t sceneTracks_ = 0xff;   // which loop tracks to capture in the selected pad
     std::vector<int> songOrder_;
     int mic_ = 0, micTrack_ = 0;
+    int lastProjectOperation_ = 0;
     int lastSampleVersion_ = 0, lastSampleFails_ = 0;
     uint32_t commitAt_ = 0; int commitTrack_ = -1;
     std::string toast_; uint32_t toastUntil_ = 0;
