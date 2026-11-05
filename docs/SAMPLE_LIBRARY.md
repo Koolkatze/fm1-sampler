@@ -72,15 +72,30 @@ fail without exposing a partially imported pack.
 FMP2 projects remain self-contained: eight tracks, sample audio, clips,
 COMPOSE, twelve scenes, SONG order, effects, settings and transport.
 
-## Navigation
+## HOME navigation and category filters (0.38.1)
 
-Opening the library **always starts at `FM1-SAMPLER /`**. It shows
-`OFFICIAL`, `PACKS`, `PROYECTOS` and `SAVED`.
+Three **always-visible touch buttons** occupy the top-left corner of the
+cassette HOME page, immediately **left of the active sample name**:
+
+- **Archive icon / ROOT** opens `FM1-SAMPLER /` at the four primary folders.
+- **Folder icon / FOLDERS** opens a directory-only view, starting from root.
+- **Waveform icon / SAMPLES** opens the global index of playable WAV samples
+  from `OFFICIAL`, `PACKS`, `SAVED`, and all their nested folders.
+
+The exact same three icons appear as **real buttons in a vertical sidebar**
+immediately to the **left of folder and sample names** in the browser. They
+switch views without closing the navigator. ROOT jumps to the library root;
+FOLDERS shows subdirectories of the selected directory; SAMPLES shows WAVs in
+that directory (or all WAVs when at the root). Unlike previous releases,
+they are interactive controls, not decorative indicators.
 
 Tap a row to select it; `ENTER >` opens the selected folder, at any depth,
 or loads a selected WAV. `< BACK` exits one directory level. From the root,
-`< BACK` closes the browser. ZIP contents (including non-playable files)
-remain visible and selectable but only playable WAVs may be loaded.
+`< BACK` closes the browser. The ROOT/mixed view retains the original ZIP
+entries, including non-audio files; these are never played as samples.
+
+Opening the library by tapping the active sample label still starts at ROOT.
+The sample on the selected track is not changed until loading a playable WAV.
 
 ## Updating from earlier preview builds
 
