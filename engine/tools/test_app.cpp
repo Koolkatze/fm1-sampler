@@ -747,14 +747,23 @@ int main() {
         CHECK(hasText("BACK") && hasText("ENTER") && hasText("FM1-SAMPLER") &&
               !hasText("+ IMPORT ZIP"),
               "HOME shows only inline BACK/ENTER and a filename, no modal browser");
-        bool largeLeftBadge = false;
-        for (const auto& op : browser.ops())
+        bool largeLeftBadge = false, decoratedTrack = false, trackCaption = false;
+        for (const auto& op : browser.ops()) {
             if (op.type == UiOp::TEXT && op.text == "T1" &&
                 op.f[0] > 395 && op.f[0] < 440 && op.f[1] < 140 &&
-                op.f[2] >= 20)
+                op.f[2] >= 25)
                 largeLeftBadge = true;
-        CHECK(largeLeftBadge,
-              "enlarged T1 track indicator is immediately LEFT of the sample waveform");
+            if (op.type == UiOp::TEXT && op.text == "TRACK" &&
+                op.f[0] > 380 && op.f[0] < 440 && op.f[1] < 140)
+                trackCaption = true;
+            // Reject the old badge background, border and orange stripe.
+            if ((op.type == UiOp::RRECT || op.type == UiOp::STROKE) &&
+                op.f[0] >= 385 && op.f[0] < 440 && op.f[1] >= 30 &&
+                op.f[1] < 140 && op.f[2] < 60 && op.f[3] > 40)
+                decoratedTrack = true;
+        }
+        CHECK(largeLeftBadge && !decoratedTrack && !trackCaption,
+              "ONLY large orange T1 to the left of waveform: no TRACK caption, background, frame or stripe");
         click(410.f, 80.f);
         CHECK(app.track() == 1 && hasText("T2"),
               "touching large waveform-side T1/T2 badge cycles selected track");
