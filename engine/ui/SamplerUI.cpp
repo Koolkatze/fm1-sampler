@@ -88,7 +88,10 @@ void SamplerUI::frame(uint32_t now) {
     if (!editor_) {   // the cassette deck fills the screen; the old sample / page editor stays one tap away (EDIT)
         deck({0, 0, W_, H_});
         if (sheetOpen_) librarySheet();
-        if (projectOpen_) projectSheet();
+        if (projectOpen_) {
+            projectSheet();
+            if (projectSlotsMode_) projectSlotsSheet();
+        }
         return;
     }
     topBar({0, 0, W_, tb});
@@ -872,6 +875,12 @@ void SamplerUI::projectSheet() {
         const bool hasClip = st_.track_has_clip[t];
         const bool any = app_.loopExists();
         text(left.x + 14, left.y + 23, 16, ACCENT, "PROJECT", 0, true);
+        // Complete project save/load is separate from SAVE LOOP and SAVE SCENE.
+        // Files contain COMPOSE, live loops, 12 scenes, SONG, samples and FX.
+        button({left.x + left.w - 217, left.y + 9, 102, 27}, "SAVE PROJECT", false,
+               [this] { projectSlotsMode_ = 1; projectConfirmSlot_ = -1; }, 9);
+        button({left.x + left.w - 110, left.y + 9, 100, 27}, "LOAD PROJECT", false,
+               [this] { projectSlotsMode_ = 2; projectConfirmSlot_ = -1; }, 9);
         const std::string note = app_.toast().empty() ? app_.loopText() : app_.toast();
         text(left.x + 14, left.y + 49, 10, DIM, fit(note, left.w - 26, 10), 0, true);
         const float rh = std::min(38.f, (left.h - 80.f) / 7.f - 3.f);
@@ -1039,4 +1048,63 @@ void SamplerUI::projectSheet() {
            [this] { app_.setSongMode(true); app_.playSong(); }, 11);
     button({x + half + 5, Y(298), half, H(30)}, "STOP", false,
            [this] { app_.stopSong(); }, 11);
+}
+
+
+void SamplerUI::projectSlotsSheet() {
+    // Dialog takes precedence over every underlying PROJECT control.
+    const Rect shade{0, 0, W_, H_};
+    rrect(shade, 0, theme::withAlpha(kBg, 225));
+    tap(shade, [this] { projectSlotsMode_ = 0; projectConfirmSlot_ = -1; });
+    const float width = std::min(475.f, W_ - 32.f);
+    const Rect panel{(W_ - width) / 2.f, std::max(14.f, (H_ - 298.f) / 2.f),
+                     width, std::min(298.f, H_ - 28.f)};
+    rrect(panel, R_CARD, SURFACE); stroke(panel, R_CARD, ACCENT, 1.5f);
+    tap(panel, [] {});
+    const bool saving = projectSlotsMode_ == 1;
+    text(panel.x + 17, panel.y + 24, 16, ACCENT,
+         saving ? "SAVE COMPLETE PROJECT" : "LOAD COMPLETE PROJECT", 0, true);
+    button({panel.x + panel.w - 73, panel.y + 8, 60, 26}, "CLOSE", false,
+           [this] { projectSlotsMode_ = 0; projectConfirmSlot_ = -1; }, 10);
+    text(panel.x + 17, panel.y + 44, 9.5f, DIM,
+         saving ? "COMPOSE + LOOPS + SONG + SCENES + WAV + FX"
+                : "RESTORES ALL TRACKS, RECORDED LOOPS AND SONG", 0, true);
+
+    const float gap = 7.f, sx = panel.x + 15, sw = (panel.w - 30 - 3 * gap) / 4.f;
+    for (int slot = 0; slot < Session::kProjectSlots; ++slot) {
+        const bool exists = app_.fullProjectExists(slot);
+        const int row = slot / 4, col = slot % 4;
+        Rect r{sx + col * (sw + gap), panel.y + 60 + row * 75, sw, 66};
+        const bool armed = projectConfirmSlot_ == slot && now_ < projectConfirmUntil_;
+        rrect(r, R_CONTROL, armed ? RAISED : SURFACE);
+        stroke(r, R_CONTROL, armed ? ACCENT : exists ? TEXT : OUTLINE, armed ? 2.f : 1.f);
+        text(r.x + r.w / 2, r.y + 21, 12, exists ? TEXT : DIM,
+             "PROJECT " + std::to_string(slot + 1), 1, true);
+        text(r.x + r.w / 2, r.y + 44, 9, armed ? ACCENT : DIM,
+             armed ? "CONFIRM" : exists ? "SAVED" : "EMPTY", 1, true);
+        tap(r, [this, slot, exists, armed, saving] {
+            // Confirmation is mandatory for loading (loses unsaved work)
+            // and for overwriting an existing project slot.
+            if (!armed && (!saving || exists)) {
+                projectConfirmSlot_ = slot;
+                projectConfirmUntil_ = now_ + 5000;
+                app_.say(saving ? "TAP AGAIN TO OVERWRITE" : "TAP AGAIN TO LOAD");
+                return;
+            }
+            if (saving ? app_.saveFullProject(slot) : app_.loadFullProject(slot)) {
+                projectSlotsMode_ = 0;
+            }
+            projectConfirmSlot_ = -1;
+        });
+    }
+    const int op = app_.fullProjectOperation();
+    const std::string msg = op == 1 ? "SAVING AUDIO AND PROJECT DATA..." :
+                            op == 3 ? "LOADING AUDIO AND PROJECT DATA..." :
+                            op == -1 ? "SAVE FAILED: CHECK STORAGE" :
+                            op == -2 ? "LOAD FAILED: FILE CORRUPT" :
+                            op == 2 ? "LAST PROJECT SAVE COMPLETED" :
+                            op == 4 ? "LAST PROJECT LOAD COMPLETED" :
+                            "8 INDEPENDENT PROJECT SLOTS";
+    text(panel.x + panel.w / 2, panel.y + panel.h - 18, 10,
+         op < 0 ? ACCENT : DIM, msg, 1, true);
 }

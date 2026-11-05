@@ -54,6 +54,7 @@ private:
     void pagePanel(Rect r);
     void librarySheet();
     void projectSheet();
+    void projectSlotsSheet();
 
     SamplerApp& app_;
     float W_ = 860, H_ = 400, top_ = 0, bottom_ = 0;
@@ -68,6 +69,9 @@ private:
     Rect sheetList_{0, 0, 0, 0};
     uint32_t clearArmed_ = 0, sceneSaveAt_ = 0, sceneDeleteAt_ = 0;
     int sceneArmedSlot_ = -1, deleteArmedSlot_ = -1;
+    int projectSlotsMode_ = 0; // 0 closed, 1 save complete project, 2 load
+    int projectConfirmSlot_ = -1;
+    uint32_t projectConfirmUntil_ = 0;
     bool projectRight_ = false;  // narrow screens: show columns in separate tabs
     bool shortcutHelpVisible_ = true; // informational only, saved with app preferences
     float dragY_ = 0, dragV_ = 0;
