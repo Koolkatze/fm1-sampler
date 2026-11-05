@@ -3,6 +3,10 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <sstream>
 #include "../ui/Theme.h"
 #include <Common.h>
 #include <algorithm>
@@ -80,53 +84,40 @@ SamplerApp::SamplerApp(Session& s, Send send) : s_(s), send_(std::move(send)) {
 // ---- library ----
 void SamplerApp::refreshLibrary() {
     namespace fs = std::filesystem;
-    const std::string oldCursor = libCursor_ >= 0 && libCursor_ < (int)lib_.size()
-        ? lib_[(size_t)libCursor_].path : "";
+    const std::string oldPath = libCursor_ >= 0 && libCursor_ < (int)lib_.size() ?
+        lib_[(size_t)libCursor_].path : "";
     lib_.clear();
     const fs::path root(s_.sampleDir());
     std::error_code ec;
-    auto walk = [&](const fs::path& dir, const std::string& pack, bool official) {
-        std::error_code err;
-        if (!fs::exists(dir, err)) return;
-        for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, err), end;
-             !err && it != end; it.increment(err)) {
-            if (!it->is_regular_file(err)) continue;
-            const auto ext = it->path().extension().string();
-            if (ext != ".wav" && ext != ".WAV") continue;
-            auto rel = it->path().lexically_relative(dir);
-            std::string folder = std::next(rel.begin()) == rel.end() ? "Other" : (*rel.begin()).string();
-            lib_.push_back({it->path().stem().string(), folder, it->path().string(),
-                official && folder == "Drums", pack, folder});
-        }
-    };
-    walk(root / "OFFICIAL", "OFFICIAL", true);
-    walk(root / "SAVED", "SAVED", false);
-    if (fs::exists(root / "PACKS", ec)) {
-        for (fs::directory_iterator it(root / "PACKS", ec), end; !ec && it != end; it.increment(ec))
-            if (it->is_directory(ec)) walk(it->path(), it->path().filename().string(), false);
+    for (const auto& item : fs::recursive_directory_iterator(
+             root, fs::directory_options::skip_permission_denied, ec)) {
+        if (!item.is_regular_file(ec) || item.path().extension() != ".wav") continue;
+        auto rel = item.path().lexically_relative(root);
+        auto it = rel.begin();
+        if (it == rel.end()) continue;
+        const std::string pack = (it++)->string();
+        if (it == rel.end()) continue;
+        const std::string label = item.path().stem().string();
+        const std::string folder = rel.parent_path().lexically_relative(pack).generic_string();
+        const bool kit = (pack == "OFFICIAL" && folder == "Drums" &&
+                           (label == "707" || label == "OPDrums" || label == "TrapKit"));
+        lib_.push_back({label, folder, item.path().string(), kit, pack, folder});
     }
-    // Do not remove legacy files in case a device upgrade could not move them.
-    for (auto& folder : {"Bass", "Drums", "Keys", "Pads"})
-        if (fs::exists(root / folder, ec)) walk(root / folder, "OFFICIAL", true);
-    for (auto& p : s_.sampleLibrary()) { // legacy user recordings
-        fs::path file(p);
-        std::string label = file.stem().string();
-        if (label.rfind("sample_", 0) == 0) label = label.substr(7);
-        lib_.push_back({label, "Recorded", p, false, "SAVED", "Recorded"});
+    // Old imports and microphone recordings are left untouched during migration.
+    for (auto& p : s_.sampleLibrary()) {
+        const fs::path path(p);
+        std::string label = path.stem().string();
+        if (label.rfind("sample_", 0) == 0) label.erase(0, 7);
+        lib_.push_back({label, "Recordings", p, false, "SAVED", "Recordings"});
     }
     std::sort(lib_.begin(), lib_.end(), [](const Entry& a, const Entry& b) {
-        const auto rank = [](const std::string& p) { return p == "OFFICIAL" ? 0 : p == "SAVED" ? 1 : 2; };
-        if (rank(a.pack) != rank(b.pack)) return rank(a.pack) < rank(b.pack);
         if (a.pack != b.pack) return a.pack < b.pack;
         if (a.folder != b.folder) return a.folder < b.folder;
         return a.label < b.label;
     });
-    for (int t = 0; t < kTracks; t++) {
-        auto it = std::find_if(lib_.begin(), lib_.end(), [&](const Entry& e) { return e.path == ts_[t].samplePath; });
-        ts_[t].entry = it == lib_.end() ? -1 : (int)std::distance(lib_.begin(), it);
-    }
-    auto cur = std::find_if(lib_.begin(), lib_.end(), [&](const Entry& e) { return e.path == oldCursor; });
-    libCursor_ = cur == lib_.end() ? 0 : (int)std::distance(lib_.begin(), cur);
+    libCursor_ = 0;
+    for (size_t i = 0; i < lib_.size(); i++)
+        if (lib_[i].path == oldPath) { libCursor_ = (int)i; break; }
 }
 void SamplerApp::browse(int d) {
     if (lib_.empty()) return;
@@ -380,14 +371,110 @@ void SamplerApp::lenAction(bool dbl) {   // loop x2 (the content repeats) or /2;
     lenAt_ = nowMs_ ? nowMs_ : 1;
     if (dbl) { s_.loopDouble(); say("LOOP DOUBLED"); } else { s_.loopHalve(); say("LOOP HALVED"); }
 }
-void SamplerApp::loopSave() {
-    if (!s_.saveClip(track_)) { say("NO LOOP TO SAVE"); return; }
-    say("LOOP SAVED TO LIBRARY");
+void SamplerApp::loopSave(const std::string& name) {
+    if (!s_.saveClip(track_, name.empty() ? "Loop Track " + std::to_string(track_ + 1) : name)) { say("NO LOOP TO SAVE"); return; }
+    say("LOOP SAVED TO SAVED");
     previewAfterLoad_ = false;
     auditionAt_ = 0;
     commitAt_ = nowMs_ + 1;   // refresh the library shortly, once the file is written
     commitTrack_ = -2;
 }
+// Project state, UI parameters and exact loop audio saved together under one user name.
+// Recordings are copied into the project folder so moving/removing a pack won't break projects.
+void SamplerApp::saveProject(const std::string& name) {
+    std::ostringstream out;
+    out << std::setprecision(10) << "FM1APP1\n";
+    out << track_ << ' ' << (int)page_ << ' '
+        << scale_.scale << ' ' << scale_.root << ' ' << scale_.octave << ' ' << scale_.mode << '\n';
+    out << reverbSize_ << ' ' << reverbDw_ << ' ' << delayTime_ << ' ' << delayFb_ << ' '
+        << loopSrc_ << ' ' << exciter_ << ' ' << lofi_ << ' ' << wobble_ << ' '
+        << loopSpeed_ << ' ' << micThr_ << '\n';
+    std::array<std::string, kTracks> paths;
+    for (int i = 0; i < kTracks; i++) {
+        const auto& t = ts_[(size_t)i]; paths[(size_t)i] = t.samplePath;
+        out << t.algo << ' ' << t.a << ' ' << t.d << ' ' << t.s << ' ' << t.r << ' '
+            << t.lfoRate << ' ' << t.lfoDepth << ' ' << t.lfoTarget << ' ' << t.lfoShape << ' '
+            << t.start << ' ' << t.end << ' ' << t.speed << ' ' << t.pitch << ' '
+            << t.kitThr << ' ' << t.grains << ' ' << t.scatter << ' ' << t.paulStretch << ' '
+            << t.paulWidth << ' ' << t.arpRate << ' ' << t.arpPatt << ' ' << t.arpOct << ' '
+            << t.arpLen << ' ' << t.vol << ' ' << t.pan << ' ' << t.sendR << ' ' << t.sendD << ' '
+            << t.scSrc << ' ' << t.scThr << ' ' << t.scRatio << ' '
+            << t.root << ' ' << t.tuned << ' ' << std::quoted(t.samplePath) << '\n';
+    }
+    s_.saveProject(name, out.str(), paths);
+    say("PROJECT SAVE REQUESTED");
+}
+
+void SamplerApp::openProject(const std::string& name) {
+    namespace fs = std::filesystem;
+    std::string safe;
+    for (unsigned char c : name) if ((c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') ||
+            (c >= 'a' && c <= 'z') || c == ' ' || c == '_' || c == '-' || c >= 128)
+        safe += (char)c;
+    if (safe.empty() || safe == "." || safe == "..") { say("INVALID PROJECT NAME"); return; }
+    const fs::path folder = fs::path(s_.dataDir()) / "projects" / safe;
+    std::ifstream in(folder / "project.state");
+    std::string magic;
+    if (!(in >> magic) || magic != "FM1APP1") { say("INVALID PROJECT FILE"); return; }
+    int selected = 0, page = 0;
+    ScaleState scale;
+    if (!(in >> selected >> page >> scale.scale >> scale.root >> scale.octave >> scale.mode)) {
+        say("INVALID PROJECT STATE"); return;
+    }
+    float rv, rd, dt, df, ex, lo, wob, speed, mic;
+    int source;
+    if (!(in >> rv >> rd >> dt >> df >> source >> ex >> lo >> wob >> speed >> mic)) {
+        say("INVALID PROJECT STATE"); return;
+    }
+    std::array<TrackState, kTracks> tracks;
+    for (int i = 0; i < kTracks; i++) {
+        auto& t = tracks[(size_t)i];
+        if (!(in >> t.algo >> t.a >> t.d >> t.s >> t.r
+                 >> t.lfoRate >> t.lfoDepth >> t.lfoTarget >> t.lfoShape
+                 >> t.start >> t.end >> t.speed >> t.pitch
+                 >> t.kitThr >> t.grains >> t.scatter >> t.paulStretch
+                 >> t.paulWidth >> t.arpRate >> t.arpPatt >> t.arpOct
+                 >> t.arpLen >> t.vol >> t.pan >> t.sendR >> t.sendD
+                 >> t.scSrc >> t.scThr >> t.scRatio
+                 >> t.root >> t.tuned >> std::quoted(t.samplePath))) {
+            say("INVALID TRACK STATE"); return;
+        }
+    }
+    // Validate everything before changing the active session.
+    ts_ = tracks; track_ = std::max(0, std::min(kTracks - 1, selected));
+    page_ = (Page)std::max(0, std::min((int)kPages - 1, page));
+    reverbSize_ = rv; reverbDw_ = rd; delayTime_ = dt; delayFb_ = df;
+    loopSrc_ = source; exciter_ = ex; lofi_ = lo; wobble_ = wob; loopSpeed_ = speed; micThr_ = mic;
+    setScale(scale.scale, scale.root, scale.octave, scale.mode);
+    s_.setLoopSource(loopSrc_); s_.setMicThreshold(micThreshold()); applyFx();
+    refreshLibrary();
+    for (int i = 0; i < kTracks; i++) {
+        auto& t = ts_[(size_t)i];
+        t.entry = -1;
+        fs::path path = t.samplePath;
+        if (!fs::exists(path)) path = folder / ("sound" + std::to_string(i + 1) + ".wav");
+        if (fs::exists(path)) {
+            t.samplePath = path.string();
+            for (size_t j = 0; j < lib_.size(); j++)
+                if (lib_[j].path == t.samplePath) { t.entry = (int)j; break; }
+            s_.loadSamplePath(t.samplePath, t.algo == 3, i);
+        } else {
+            t.samplePath.clear(); s_.clearSample(i);
+        }
+        applyAll(i);
+    }
+    if (ts_[(size_t)track_].entry >= 0) libCursor_ = ts_[(size_t)track_].entry;
+    s_.loadProjectClips(name);
+    say("PROJECT RESTORED");
+}
+
+void SamplerApp::submitName(int kind, const std::string& name) {
+    if (name.empty()) { say("NAME REQUIRED"); return; }
+    if (kind == 1) loopSave(name);
+    else if (kind == 2) saveProject(name);
+    else if (kind == 3) openProject(name);
+}
+
 void SamplerApp::loopClearTrack() {
     if (!st_.track_has_clip[track_]) { say("NO LOOP ON THIS TRACK"); return; }
     s_.clipClear(track_);
