@@ -57,19 +57,29 @@ int main(void) {
     press_key(26, 1); CHECK(last_on() == 104, "key 26 -> %d", last_on()); press_key(26, 0);
     int ons = 0, offs = 0; for (int i = 0; i < midi_n; i++) { if (midi_log[i][0] == 0x90) ons++; if (midi_log[i][0] == 0x80) offs++; }
     CHECK(ons == 4 && offs == 4, "every note on has its off (%d/%d)", ons, offs);
-    /* scale screen: hold SCL, K1 next scale (HMIN), K2 root +2 (D), K3 octave +1 */
+    /* In FM1 Sampler, the phone owns tonality and the legacy SCL overlay
+     * is disabled. Physical SCL is just another MIDI button; K1 is sent as CC.
+     * The old controller test incorrectly expected the scale screen. */
+    int sclOn = count_button(FM1_MIDI_USB, 0x91, 3);
     ctl.buttons |= 1U << 3; tick();
-    ctl.encoders[0] = 1; tick(); ctl.encoders[1] = 1; tick(); ctl.encoders[1] = 1; tick(); ctl.encoders[2] = 1; tick();
-    ppm("scale_screen_min.ppm");
-    CHECK(sc_scale == 4 && sc_root == 2 && sc_oct == 1, "scale HMIN root D oct +1 (got %u %u %d)", sc_scale, sc_root, sc_oct);
-    int cc16 = 0; for (int i = 0; i < midi_n; i++) if (midi_log[i][0] == 0xb0 && midi_log[i][1] >= 16 && midi_log[i][1] < 23) cc16++;
-    CHECK(cc16 == 0, "encoders on the scale screen are not forwarded");
+    CHECK(count_button(FM1_MIDI_USB, 0x91, 3) == sclOn + 1,
+          "SCL is sent as physical MIDI Note On without legacy scale overlay");
+    int cc16 = 0;
+    for (int i = 0; i < midi_n; ++i)
+        if (midi_log[i][0] == 0xb0 && midi_log[i][1] == 16) ++cc16;
+    ctl.encoders[0] = 1; tick();
+    int cc16after = 0;
+    for (int i = 0; i < midi_n; ++i)
+        if (midi_log[i][0] == 0xb0 && midi_log[i][1] == 16) ++cc16after;
+    CHECK(cc16after == cc16 + 1, "K1 forwards CC16 instead of changing local scale");
     ctl.buttons &= ~(1U << 3); tick();
-    int redraw = 0, state = 0; for (int i = 0; i < sx_n; i++) { if (sx_log[i][6] == EV_REDRAW) redraw++; if (sx_log[i][6] == EV_SCALE) state++; }
-    CHECK(redraw == 1 && state >= 4, "phone told to redraw once, state reported %d times", state);
-    press_key(0, 1); CHECK(last_on() == 60 + 2 + 12, "HMIN root D oct+1: key 0 -> %d (D5)", last_on()); press_key(0, 0);
-    press_key(6, 1); CHECK(last_on() == 60 + 2 + 12 + 11, "HMIN key 6 -> %d (the raised 7th)", last_on()); press_key(6, 0);
+    CHECK(count_button(FM1_MIDI_USB, 0x81, 3) >= 1,
+          "SCL sends matching MIDI Note Off");
+    press_key(0, 1);
+    CHECK(last_on() == 60, "default C minor key remains at C4");
+    press_key(0, 0);
     /* OCT messages are required by the Android app, not just local shifts. */
+    const int octaveBeforeTap = sc_oct;
     int down0 = count_button(FM1_MIDI_USB, 0x91, 0);
     int up0 = count_button(FM1_MIDI_USB, 0x81, 0);
     ctl.buttons |= 1U << 0; tick();
@@ -81,7 +91,7 @@ int main(void) {
     ctl.buttons &= ~(1U << 0); tick();
     CHECK(count_button(FM1_MIDI_USB, 0x81, 0) == up0 + 1,
           "OCT- Note Off (CH2 note 0) transmitted on release");
-    CHECK(sc_oct == 0, "OCT- tap still lowers keyboard octave");
+    CHECK(sc_oct == octaveBeforeTap - 1, "OCT- tap still lowers keyboard octave");
 
     const int initial_oct = sc_oct;
     down0 = count_button(FM1_MIDI_USB, 0x91, 0);
