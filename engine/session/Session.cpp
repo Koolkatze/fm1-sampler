@@ -1260,51 +1260,130 @@ bool Session::saveClip(int t, const std::string& name) {
     return true;
 }
 bool Session::exportLoops(const std::string& directory) {
-    // Only one export at a time. A frozen copy-on-write view of the recorded
-    // tracks is captured on the audio callback; no disk I/O runs there.
+    // Export the ACTUAL post-loop DSP, not unprocessed recording buffers.
+    // Capture only a small, consistent audio-thread snapshot; all expensive
+    // processing, 16-bit PCM conversion and disk I/O happen on the worker.
     if (directory.empty()) return false;
     int prior = d->loopExportOp.load();
     do {
         if (prior == 1) return false;
     } while (!d->loopExportOp.compare_exchange_weak(prior, 1));
     d->post([this, directory] {
-        if (d->freeRec || d->freeArmed || d->sampling || d->armedWait) {
+        if (d->freeRec || d->freeArmed || d->sampling || d->armedWait ||
+            d->loopSamples <= 0) {
             d->loopExportOp = -1; return;
         }
         for (const auto& t : d->tracks)
             if (t->clipRec) { d->loopExportOp = -1; return; }
-        std::array<std::shared_ptr<const std::vector<float>>, kTracks> snapshot{};
-        size_t longest = 0;
+        Impl::LoopExportSnapshot snap;
+        snap.sampleRate = d->sr;
+        snap.loopSamples = d->loopSamples;
+        snap.tapeSpeed = d->tapeSpeed.load();
+        snap.masterVolume = d->masterVol;
+        snap.returns[0] = d->ret[0]; snap.returns[1] = d->ret[1];
+        snap.reverbSize = d->reverbSize;
+        snap.delaySeconds = d->delaySeconds;
+        snap.delayFeedback = d->delayFeedback;
+        int populated = 0;
         for (int i = 0; i < kTracks; ++i) {
-            const auto& tr = *d->tracks[(size_t)i];
-            if (!tr.clipHas || !tr.clip || tr.clip->empty()) continue;
-            snapshot[(size_t)i] = tr.clip; // COW: subsequent overdubs cannot change it
-            longest = std::max(longest, tr.clip->size());
+            const auto& t = *d->tracks[(size_t)i];
+            auto& dst = snap.track[(size_t)i];
+            if (t.clipHas && t.clip &&
+                t.clip->size() == (size_t)snap.loopSamples * 2) {
+                dst.clip = t.clip;  // COW: overdubs never mutate the snapshot
+                dst.has = true; ++populated;
+            } else if (t.clipHas) {
+                d->loopExportOp = -2; return; // invalid/incomplete clip
+            }
+            dst.vol = t.vol; dst.pan = t.pan;
+            dst.send[0] = t.send[0]; dst.send[1] = t.send[1];
+            dst.scSrc = t.scSrc; dst.scThrDb = t.scThrDb; dst.scRatio = t.scRatio;
+            dst.lfo = t.lfo; dst.lfoPhase = t.lfoPhase; dst.lfoSH = t.lfoSH;
+            dst.tape = t.tape.settings();
         }
-        if (!longest) { d->loopExportOp = -1; return; }
-        const int rate = d->sr;
-        d->job([this, snapshot = std::move(snapshot), directory, rate, longest] {
+        if (!populated) { d->loopExportOp = -1; return; }
+
+        d->job([this, snap = std::move(snap), directory] {
             namespace fs = std::filesystem;
             std::error_code ec;
             fs::create_directories(directory, ec);
             if (ec) { d->loopExportOp = -2; return; }
-            std::vector<float> mix(longest, 0.f);
-            bool ok = true;
-            for (int i = 0; i < kTracks; ++i) {
-                const auto& clip = snapshot[(size_t)i];
-                if (!clip) continue;
-                char file[32];
-                std::snprintf(file, sizeof(file), "/TRACK_%02d.wav", i + 1);
-                if (!writeWav16(directory + file, *clip, rate)) { ok = false; break; }
-                for (size_t j = 0; j < clip->size(); ++j) mix[j] += (*clip)[j];
-            }
-            if (ok) {
-                // Preserve each stem at its exact recorded level; limit only
-                // the sum so an exported master cannot clip at 16-bit PCM.
-                float peak = 0.f;
-                for (float v : mix) peak = std::max(peak, std::fabs(v));
-                if (peak > 1.f) for (float& v : mix) v /= peak;
-                ok = writeWav16(directory + "/MASTER.wav", mix, rate);
+            // The real engine uses its integer head when speed is near 1x.
+            const double speed = std::fabs(snap.tapeSpeed - 1.f) < 0.01f
+                ? 1.0 : std::max(0.25, (double)snap.tapeSpeed);
+            const uint64_t frames = (uint64_t)std::ceil(snap.loopSamples / speed);
+            bool ok = frames > 0 && frames <= (UINT32_MAX - 36u) / 4u;
+            // The MASTER pass includes the sum before shared FX returns and
+            // tanh limiter. Each isolated stem contains its own tape insert,
+            // mixer, keyed sidechain, FX sends/returns and master gain.
+            // Since delay has nonlinear feedback and the master has tanh,
+            // processed stems need not sum bit-identically to MASTER.
+            for (int pass = 0; ok && pass <= kTracks; ++pass) {
+                const int solo = pass - 1; // pass 0 = MASTER; 1..8 = stems
+                if (solo >= 0 && !snap.track[(size_t)solo].has) continue;
+                Impl bounce(snap.sampleRate, true); // NO background thread
+                bounce.loopSamples = snap.loopSamples;
+                bounce.a_loop = snap.loopSamples;
+                bounce.playing = true; bounce.stopping = false; bounce.rate = 1.0;
+                bounce.tapeSpeed = (float)speed;
+                bounce.masterVol = snap.masterVolume;
+                bounce.ret[0] = snap.returns[0];
+                bounce.ret[1] = snap.returns[1];
+                bounce.reverb.setSize(snap.reverbSize);
+                bounce.delay.setTime(snap.delaySeconds);
+                bounce.delay.setFeedback(snap.delayFeedback);
+                for (int t = 0; t < kTracks; ++t) {
+                    const auto& src = snap.track[(size_t)t];
+                    auto& dst = *bounce.tracks[(size_t)t];
+                    dst.clipHas = src.has; dst.clip = src.clip ? src.clip
+                        : std::make_shared<std::vector<float>>();
+                    dst.vol = (solo < 0 || t == solo) ? src.vol : 0.f;
+                    dst.pan = src.pan;
+                    dst.send[0] = src.send[0]; dst.send[1] = src.send[1];
+                    dst.scSrc = src.scSrc; dst.scThrDb = src.scThrDb;
+                    dst.scRatio = src.scRatio; dst.scEnv = 0.f; dst.scGain = 1.f;
+                    dst.lfo = src.lfo; dst.lfoPhase = src.lfoPhase;
+                    dst.lfoSH = src.lfoSH;
+                    const auto& p = src.tape;
+                    dst.tape.setParams(p.sat, p.tone, p.wobble,
+                                       p.hiss, p.mix, p.bits);
+                }
+                std::array<float, kBlock * 2> audio{};
+                // Prime effect tails with the end of the repeated loop. This
+                // includes previous-cycle reverb/delay without lengthening
+                // exported stems and breaking DAW loop alignment.
+                const uint64_t prime = std::min<uint64_t>(frames,
+                    (uint64_t)std::max(1, snap.sampleRate) * 8);
+                if (speed == 1.0) {
+                    bounce.pos = (double)(snap.loopSamples - (int)prime);
+                    bounce.tapePos = bounce.pos;
+                } else {
+                    bounce.pos = 0;
+                    const double prior = std::fmod((double)prime * speed,
+                                                   (double)snap.loopSamples);
+                    bounce.tapePos = std::fmod((double)snap.loopSamples - prior,
+                                                (double)snap.loopSamples);
+                }
+                for (uint64_t done = 0; done < prime;) {
+                    const int n = (int)std::min<uint64_t>(kBlock, prime - done);
+                    bounce.block(audio.data(), nullptr, n);
+                    done += (uint64_t)n;
+                }
+                bounce.pos = bounce.tapePos = 0;
+                bounce.playing = true; bounce.stopping = false; bounce.rate = 1.0;
+                char name[40];
+                if (solo < 0) std::snprintf(name, sizeof name, "MASTER.wav");
+                else std::snprintf(name, sizeof name, "TRACK_%02d.wav", solo + 1);
+                const std::string path = directory + "/" + name;
+                LoopWavStream wav(path, frames, snap.sampleRate);
+                for (uint64_t done = 0; ok && done < frames;) {
+                    const int n = (int)std::min<uint64_t>(kBlock, frames - done);
+                    bounce.block(audio.data(), nullptr, n);
+                    ok = wav.write(audio.data(), n);
+                    done += (uint64_t)n;
+                }
+                if (ok) ok = wav.finish();
+                if (!ok) fs::remove(path, ec);
             }
             d->loopExportOp = ok ? 2 : -2;
         });
