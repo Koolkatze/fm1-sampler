@@ -977,10 +977,12 @@ void SamplerUI::projectSheet() {
     // A narrow landscape layout switches between the two columns instead of
     // making buttons overlap or shrinking the text until it is illegible.
     if (!twoColumns) {
-        button({W_ - outer - 160, 20, 75, 28},
+        button({W_ - outer - 279, 20, 75, 28},
                projectRight_ ? "PROJECT" : "SCENES", false,
                [this] { projectRight_ = !projectRight_; }, 10);
     }
+    button({W_ - outer - 194, 20, 108, 28}, "EXPORT SONG", false,
+           [this] { app_.requestSongExport(); }, 9, true);
     button({W_ - outer - 79, 20, 71, 28}, "CLOSE", false,
            [this] { projectOpen_ = false; }, 10);
 
