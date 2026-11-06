@@ -132,7 +132,12 @@ public:
     // plus MASTER.wav. A consistent audio-thread snapshot is written off-thread.
     // Android publishes these WAVs via MediaStore, so they appear in Files.
     bool exportLoops(const std::string& directory);
-    int loopExportStatus() const; // 0 idle; 1 working; 2 done; -1 no loops/recording; -2 I/O failure
+    // One processed stereo SONG.wav: the full saved arrangement in order,
+    // each scene's complete loop, shared FX, master gain and FX decay tail.
+    // Empty arrangement is rejected without writing a file; neither action
+    // changes the live playing project or the .fm1p archives.
+    bool exportSong(const std::string& directory);
+    int loopExportStatus() const; // 0 idle; 1 working; 2 done; -1 no loops/recording; -2 I/O failure; -3 empty/invalid SONG
     int loopPeaks(int track /* -1 = all tracks mixed */, float* out, int maxBins) const;
 
     // ---- microphone sampling ----
