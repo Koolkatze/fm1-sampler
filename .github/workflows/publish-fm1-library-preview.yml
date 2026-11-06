@@ -96,11 +96,11 @@ jobs:
         run: gradle :app:assembleDebug --no-daemon --stacktrace
       - name: Verify persistent signing certificate
         env:
-          EXPECTED_CERT_SHA256: ${{ vars.FM1_SIGNING_CERT_SHA256 }}
+          EXPECTED_CERT_SHA256: ${{ vars.FM1_SIGNING_CERT_SHA256 || secrets.FM1_SIGNING_CERT_SHA256 }}
         run: |
           set -euo pipefail
           if [ -z "$EXPECTED_CERT_SHA256" ]; then
-            echo "::error::Set repository variable FM1_SIGNING_CERT_SHA256 to the pinned certificate fingerprint before publishing"
+            echo "::error::Set FM1_SIGNING_CERT_SHA256 (Actions Variable or Secret) to the public signing-certificate SHA-256 before publishing"
             exit 1
           fi
           apk=android/app/build/outputs/apk/debug/app-debug.apk
