@@ -33,6 +33,10 @@ jobs:
           mkdir -p "$HOME/fm1-sampler"
           ln -s "$GITHUB_WORKSPACE/samples" "$HOME/fm1-sampler/samples"
           ./engine/build/test_app
+      - name: Test ADB TAR and FMP2 recovery tool
+        run: |
+          python3 -m py_compile tools/FM1_ADB_Recuperacion_0389.py
+          python3 -m unittest discover -s tools -p 'test_adb_recovery.py' -v
       - name: Verify USB MIDI controller octave chord
         run: |
           mkdir -p firmware/build/host
@@ -70,19 +74,22 @@ jobs:
       - name: Stage and check APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.9-preview.apk
-          unzip -t dist/FM1-Sampler-Library-0.38.9-preview.apk | tail -n 1
-          sha256sum dist/FM1-Sampler-Library-0.38.9-preview.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.10-preview.apk
+          unzip -t dist/FM1-Sampler-Library-0.38.10-preview.apk | tail -n 1
+          sha256sum dist/FM1-Sampler-Library-0.38.10-preview.apk
       - name: Publish on GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v0.38-library-preview.10
+          TAG: v0.38-library-preview.11
         run: |
           cat > release-notes.md <<'EOF'
-          ## FM1 Sampler 0.38.9 — Fix ENTER from the FM1-SAMPLER library root
+          ## FM1 Sampler 0.38.10 — HOME NOTE REPEAT menu hint + ADB recovery tool
 
-          **Installable Android APK:** `FM1-Sampler-Library-0.38.9-preview.apk`.
+          **Installable Android APK:** `FM1-Sampler-Library-0.38.10-preview.apk`.
 
+          - **HOME INFO:** clearly displays `OCT+ + OCT- = NOTE REPEAT MENU (K1)` on its own line, with other MIDI button shortcuts and the incoming MIDI status; INFO/HIDE behavior remains.
+          - **ADB recovery:** the repository now includes `tools/FM1_ADB_Recuperacion_0389.py` plus `docs/ADB_RECUPERACION_0389.md`, for safe `.tar` restore and single `.fm1p` imports (no ZIP conversion). Includes host regression tests.
+          - **Complete README:** updated feature reference for the cassette deck, six synth modes, FX/ENV/LFO/ARP/TAPE, clips and scenes, SONG, complete projects, library, ZIP backup and ADB TAR/FMP2 recovery.
           - **Fixed root navigation:** after using BACK to highlight the `FM1-SAMPLER` archive itself, pressing **ENTER** immediately reopens the previously selected root folder (or the first one on initial use). No extra PRESETS turn is required; the same behavior works in both HOME and the LIBRARY sheet. Repeating BACK then ENTER never gets stuck.
           - **HOME selected track:** only large orange **T1, T2 ... T8** text appears immediately left of the sample waveform, with **no grey fill, outline, stripe, or TRACK caption**. The transparent touch target cycles tracks.
           - Inside **HOME → LIBRARY**, alongside **+ IMPORT ZIP**, two buttons now work: **SAVE BACKUP** and **IMPORT BACKUP**.
@@ -100,9 +107,9 @@ jobs:
           Source: [FM1 Sampler development](https://github.com/Koolkatze/fm1-sampler/pull/3).
           EOF
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.9-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.10-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md --prerelease
           else
-            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.9-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.9 — Fix ENTER at library root"               --notes-file release-notes.md               --prerelease
+            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.10-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.10 — NOTE REPEAT info and ADB recovery"               --notes-file release-notes.md               --prerelease
           fi
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets,isPrerelease             --jq '{url: .url, isPrerelease: .isPrerelease, files: [.assets[].name]}'
