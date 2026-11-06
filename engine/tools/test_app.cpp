@@ -99,6 +99,46 @@ int main() {
               "export WAV stem is playable and retains the original sample rate");
         CHECK(std::filesystem::exists(exportDir + "/MASTER.wav"),
               "export also writes the full-length master WAV");
+
+        // The exported stem must reflect exactly the live track gain, tape
+        // processing and shared FX bus, not the untouched recorded clip.
+        // Silence after volume=0 verifies there is no dry buffer bypass.
+        std::vector<float> baseline = wav;
+        s.setVolume(0, 0.f); run(0.12);
+        const std::string muted = "/tmp/fm1sampler_t2/export_mute_dsp";
+        CHECK(s.exportLoops(muted), "offline export renders zero-gain live mixer snapshot");
+        for (int k = 0; k < 120 && s.loopExportStatus() == 1; ++k) run(0.05);
+        std::vector<float> zero; int mutedRate = 0;
+        const bool mutedOk = readWav(muted + "/TRACK_01.wav", zero, mutedRate);
+        float mutedPeak = 0.f;
+        for (float v : zero) mutedPeak = std::max(mutedPeak, std::fabs(v));
+        CHECK(s.loopExportStatus() == 2 && mutedOk && zero.size() == baseline.size() &&
+              mutedPeak < 1e-4f,
+              "exported WAV follows the real post-tape mixer gain (mute = digital silence)");
+        s.setVolume(0, app.state(0).vol);
+        // Increase shared reverb/delay sends and ensure that the bounced
+        // stem is different from its previously exported PCM audio.
+        s.setSend(0, 0, 1.f); s.setSend(0, 1, 1.f);
+        s.setRetLevel(0, 1.f); s.setRetLevel(1, 1.f);
+        s.setReverb(0.98f); s.setDelay(0.12f, 0.75f);
+        run(0.15);
+        const std::string fx = "/tmp/fm1sampler_t2/export_fx_dsp";
+        CHECK(s.exportLoops(fx), "offline export accepts new reverb and tape-delay settings");
+        for (int k = 0; k < 120 && s.loopExportStatus() == 1; ++k) run(0.05);
+        std::vector<float> wet; int fxRate = 0;
+        const bool wetOk = readWav(fx + "/TRACK_01.wav", wet, fxRate);
+        double difference = 0;
+        if (wetOk && wet.size() == baseline.size())
+            for (size_t i = 0; i < wet.size(); ++i)
+                difference += std::fabs(wet[i] - baseline[i]);
+        CHECK(s.loopExportStatus() == 2 && wetOk && wet.size() == baseline.size() &&
+              difference / std::max<size_t>(1, wet.size()) > 0.001,
+              "exported stem includes shared reverb and delay returns (mean delta %.5f)",
+              difference / std::max<size_t>(1, wet.size()));
+        CHECK(std::filesystem::exists(fx + "/MASTER.wav"),
+              "wet export contains the independently rendered full master mix");
+        s.setSend(0, 0, 0.f); s.setSend(0, 1, 0.f);
+        s.setRetLevel(0, 0.35f); s.setRetLevel(1, 0.7f);
     }
     app.loopClearTrack(); run(0.3);
     CHECK(!app.status().track_has_clip[0], "clearing one track's loop");
