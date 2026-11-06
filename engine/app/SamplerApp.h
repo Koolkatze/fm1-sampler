@@ -79,6 +79,11 @@ public:
     bool wantPack() { bool result = wantPack_; wantPack_ = false; return result; }
     void requestLoopExport() { wantLoopExport_ = true; }
     bool wantLoopExport() { bool result = wantLoopExport_; wantLoopExport_ = false; return result; }
+    void requestSongExport() {
+        if (songOrder_.empty()) { say("NO SCENES IN SONG"); return; }
+        wantSongExport_ = true;
+    }
+    bool wantSongExport() { const bool requested = wantSongExport_; wantSongExport_ = false; return requested; }
     void requestName(int kind) { dialogRequest_ = kind; } // 1 named loop, 2 named project slot
     void requestSaveProjectName(int slot) { pendingProjectSlot_ = slot; dialogRequest_ = 2; }
     int takeDialogRequest() { int request = dialogRequest_; dialogRequest_ = 0; return request; }
@@ -226,7 +231,8 @@ private:
     std::array<std::string, kTracks> trackSourceNames_{};
     int libCursor_ = 0, loadedCursor_ = -1;
     uint32_t auditionAt_ = 0, previewOffAt_ = 0; int previewNote_ = -1, previewTrack_ = -1;
-    bool wantFile_ = false, wantPack_ = false, wantLoopExport_ = false, previewAfterLoad_ = false;
+    bool wantFile_ = false, wantPack_ = false, wantLoopExport_ = false,
+         wantSongExport_ = false, previewAfterLoad_ = false;
     int dialogRequest_ = 0, pendingProjectSlot_ = -1;
     int pendingProjectLabelSlot_ = -1;
     std::string pendingProjectLabel_;
