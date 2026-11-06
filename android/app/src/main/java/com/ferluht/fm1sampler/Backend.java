@@ -36,6 +36,7 @@ public class Backend {
     public volatile Runnable onFileRequest;
     public volatile Runnable onPackRequest;
     public volatile Runnable onLoopExportRequest;
+    public volatile Runnable onSongExportRequest;
     public volatile java.util.function.IntConsumer onNameRequest;
 
     public static synchronized Backend get(Context c) {
@@ -82,6 +83,7 @@ public class Backend {
                     if (Native.wantFile(engine)) { Runnable r = onFileRequest; if (r != null) main.post(r); }
                     if (Native.wantPack(engine)) { Runnable r = onPackRequest; if (r != null) main.post(r); }
                     if (Native.wantLoopExport(engine)) { Runnable r = onLoopExportRequest; if (r != null) main.post(r); }
+                    if (Native.wantSongExport(engine)) { Runnable r = onSongExportRequest; if (r != null) main.post(r); }
                     int request = Native.takeDialogRequest(engine);
                     if (request != 0) { java.util.function.IntConsumer handler = onNameRequest; if (handler != null) main.post(() -> handler.accept(request)); }
                     if (Native.audioDead(engine) && SystemClock.uptimeMillis() - lastRestart > 700) {   // the system closed the stream (USB plugged / unplugged)
