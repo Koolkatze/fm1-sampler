@@ -993,9 +993,9 @@ void SamplerUI::projectSheet() {
         // Files contain COMPOSE, live loops, 12 scenes, SONG, samples and FX.
         const float buttonW = (left.w - 40.f) / 3.f;
         button({left.x + 10, left.y + 43, buttonW, 24}, "SAVE PROJECT", false,
-               [this] { projectSlotsMode_ = 1; projectConfirmSlot_ = -1; }, 8.8f);
+               [this] { projectSlotsMode_ = 1; projectPage_ = 0; projectConfirmSlot_ = -1; }, 8.8f);
         button({left.x + 20 + buttonW, left.y + 43, buttonW, 24}, "LOAD PROJECT", false,
-               [this] { projectSlotsMode_ = 2; projectConfirmSlot_ = -1; }, 8.8f);
+               [this] { projectSlotsMode_ = 2; projectPage_ = 0; projectConfirmSlot_ = -1; }, 8.8f);
         button({left.x + 30 + 2 * buttonW, left.y + 43, buttonW, 24},
                "EXPORT ALL LOOPS", false, [this] { app_.requestLoopExport(); }, 8.8f, true);
         const std::string note = app_.toast().empty() ? app_.loopText() : app_.toast();
@@ -1188,9 +1188,10 @@ void SamplerUI::projectSlotsSheet() {
                 : "RESTORES ALL TRACKS, RECORDED LOOPS AND SONG", 0, true);
 
     const float gap = 7.f, sx = panel.x + 15, sw = (panel.w - 30 - 3 * gap) / 4.f;
-    for (int slot = 0; slot < Session::kProjectSlots; ++slot) {
+    for (int local = 0; local < 8; ++local) {
+        const int slot = projectPage_ * 8 + local;
         const bool exists = app_.fullProjectExists(slot);
-        const int row = slot / 4, col = slot % 4;
+        const int row = local / 4, col = local % 4;
         Rect r{sx + col * (sw + gap), panel.y + 60 + row * 75, sw, 66};
         const bool armed = projectConfirmSlot_ == slot && now_ < projectConfirmUntil_;
         rrect(r, R_CONTROL, armed ? RAISED : SURFACE);
@@ -1217,6 +1218,18 @@ void SamplerUI::projectSlotsSheet() {
             projectConfirmSlot_ = -1;
         });
     }
+    // Persistent two-page navigator: eight large, touchable slots on each
+    // page. Never renumber or relocate existing project_1..project_8 files.
+    button({panel.x + 17, panel.y + 226, 94, 27}, "PREV", projectPage_ == 0,
+           [this] { if (projectPage_ > 0) {
+               --projectPage_; projectConfirmSlot_ = -1; projectConfirmUntil_ = 0;
+           } }, 10);
+    text(panel.x + panel.w / 2, panel.y + 239, 11, ACCENT,
+         "PAGE " + std::to_string(projectPage_ + 1) + " / 2", 1, true);
+    button({panel.x + panel.w - 111, panel.y + 226, 94, 27}, "NEXT",
+           projectPage_ == 1, [this] { if (projectPage_ < 1) {
+               ++projectPage_; projectConfirmSlot_ = -1; projectConfirmUntil_ = 0;
+           } }, 10);
     const int op = app_.fullProjectOperation();
     const std::string msg = op == 1 ? "SAVING AUDIO AND PROJECT DATA..." :
                             op == 3 ? "LOADING AUDIO AND PROJECT DATA..." :
@@ -1224,7 +1237,7 @@ void SamplerUI::projectSlotsSheet() {
                             op == -2 ? "LOAD FAILED: FILE CORRUPT" :
                             op == 2 ? "LAST PROJECT SAVE COMPLETED" :
                             op == 4 ? "LAST PROJECT LOAD COMPLETED" :
-                            "8 INDEPENDENT PROJECT SLOTS";
+                            "16 INDEPENDENT PROJECT SLOTS";
     text(panel.x + panel.w / 2, panel.y + panel.h - 18, 10,
          op < 0 ? ACCENT : DIM, msg, 1, true);
 }
