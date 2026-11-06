@@ -36,6 +36,7 @@ public class SamplerActivity extends Activity {
         backend.onFileRequest = this::pickFile;
         backend.onPackRequest = this::pickPack;
         backend.onLoopExportRequest = this::exportLoops;
+        backend.onSongExportRequest = this::exportSong;
         backend.onNameRequest = this::nameDialog;
         backend.start();
         SamplerView v = new SamplerView(this, backend.engine, 0, 0);
@@ -248,25 +249,31 @@ public class SamplerActivity extends Activity {
         }
     }
 
-    /** Export a consistent audio-thread snapshot; publish completed WAVs
-     * into the public Downloads directory through Android MediaStore. */
-    void exportLoops() {
+    /** Processed loop stems or the entire SONG arrangement, rendered with
+     * the real DSP and published to the public Downloads directory. */
+    void exportLoops() { exportProcessedAudio(false); }
+    void exportSong() { exportProcessedAudio(true); }
+
+    private void exportProcessedAudio(boolean song) {
         if (android.os.Build.VERSION.SDK_INT < 29) {
             Native.say(backend.engine, "EXPORT NEEDS ANDROID 10+");
             return;
         }
-        final File temp = new File(getCacheDir(), "fm1-loop-export-" +
+        final File temp = new File(getCacheDir(), (song ? "fm1-song-" : "fm1-loops-") +
                                    System.currentTimeMillis() + "-" + System.nanoTime());
         if (!temp.mkdirs()) {
-            Native.say(backend.engine, "CANNOT PREPARE LOOP EXPORT");
+            Native.say(backend.engine, "CANNOT PREPARE EXPORT");
             return;
         }
-        if (!Native.exportLoops(backend.engine, temp.getAbsolutePath())) {
+        boolean started = song
+            ? Native.exportSong(backend.engine, temp.getAbsolutePath())
+            : Native.exportLoops(backend.engine, temp.getAbsolutePath());
+        if (!started) {
             temp.delete();
             Native.say(backend.engine, "EXPORT ALREADY RUNNING");
             return;
         }
-        Native.say(backend.engine, "PREPARING WAV EXPORT...");
+        Native.say(backend.engine, song ? "EXPORTING SONG WITH FX..." : "PREPARING WAV EXPORT...");
         new Thread(() -> {
             try {
                 long until = android.os.SystemClock.elapsedRealtime() + 600000L;
@@ -276,21 +283,29 @@ public class SamplerActivity extends Activity {
                     if (state != 1) break;
                     Thread.sleep(100);
                 } while (android.os.SystemClock.elapsedRealtime() < until);
+                if (state == -3 && song) {
+                    // User may have removed scenes between the UI click and
+                    // audio callback. Do not create/publish an empty file.
+                    LoopExport.deleteTemporaryFiles(temp);
+                    Native.say(backend.engine, "NO SCENES IN SONG");
+                    return;
+                }
                 if (state != 2)
                     throw new java.io.IOException(state == -1
-                         ? "No finished loops or recording still active"
-                         : state == -2 ? "Writing loop WAV files failed"
-                         : "Loop export timed out");
+                        ? "Recording still active or no finished loops"
+                        : state == -2 ? "Writing WAV files failed"
+                        : "Export timed out");
                 int files = LoopExport.publish(this, temp);
                 LoopExport.deleteTemporaryFiles(temp);
-                Native.say(backend.engine, "EXPORTED " + files +
-                    " WAVS TO DOWNLOAD/FM1-SAMPLER");
+                Native.say(backend.engine, song
+                    ? "SONG EXPORTED TO DOWNLOAD/FM1-SAMPLER"
+                    : "EXPORTED " + files + " WAVS TO DOWNLOAD/FM1-SAMPLER");
             } catch (Exception e) {
-                android.util.Log.w("fm1sampler", "loop export", e);
-                Native.say(backend.engine, "EXPORT FAILED - RECORDINGS KEPT");
-                // Keep any finished temporary WAVs for recovery after errors.
+                android.util.Log.w("fm1sampler", song ? "song export" : "loop export", e);
+                Native.say(backend.engine, "EXPORT FAILED - ORIGINALS KEPT");
+                // Keep any finished staging WAVs for recovery on I/O errors.
             }
-        }, "fm1-export-loops").start();
+        }, song ? "fm1-export-song" : "fm1-export-loops").start();
     }
 
     /** Native FM-1 graphics keep their aesthetic; use Android's actual keyboard to name files. */
