@@ -108,11 +108,11 @@ public:
     void restoreComposition();   // EXIT / COMPOSE / HOME restore audio clips and transport
     void cancelSceneLaunch();  // leave LOOP mode without stopping currently audible loops
     void saveArrangement(const std::vector<int>& order);
-    // Self-contained complete project files (8 slots): eight current clips,
+    // Self-contained complete project files (16 slots): eight current clips,
     // independent COMPOSE clips, scenes, song, source WAVs, and app parameters.
     // All disk work runs off the audio callback. A loaded payload is applied
     // atomically on the audio thread before the UI receives its metadata.
-    static constexpr int kProjectSlots = 8;
+    static constexpr int kProjectSlots = 16;
     struct LoadedProject {
         int slot = -1;
         std::vector<uint8_t> appState;
