@@ -68,25 +68,72 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Compile installable debug APK
+      # A random runner debug key would make the next preview impossible to
+      # update in place. Never publish if the owner has not installed a stable
+      # private keystore in Actions Secrets (see docs/UPDATES_WITHOUT_DATA_LOSS.md).
+      - name: Require permanent APK signing identity
+        env:
+          FM1_SIGNING_STORE_B64: ${{ secrets.FM1_SIGNING_STORE_B64 }}
+          FM1_SIGNING_STORE_PASSWORD: ${{ secrets.FM1_SIGNING_STORE_PASSWORD }}
+          FM1_SIGNING_KEY_ALIAS: ${{ secrets.FM1_SIGNING_KEY_ALIAS }}
+          FM1_SIGNING_KEY_PASSWORD: ${{ secrets.FM1_SIGNING_KEY_PASSWORD }}
+        run: |
+          if [ -z "$FM1_SIGNING_STORE_B64" ] || [ -z "$FM1_SIGNING_STORE_PASSWORD" ] || \
+             [ -z "$FM1_SIGNING_KEY_ALIAS" ] || [ -z "$FM1_SIGNING_KEY_PASSWORD" ]; then
+            echo "::error::Permanent signing secrets not configured. Refusing to publish incompatible APK. See docs/UPDATES_WITHOUT_DATA_LOSS.md"
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$FM1_SIGNING_STORE_B64" | base64 -d > "$RUNNER_TEMP/fm1-updates.jks"
+          test -s "$RUNNER_TEMP/fm1-updates.jks"
+      - name: Compile installable signed APK
         working-directory: android
+        env:
+          FM1_SIGNING_STORE_FILE: ${{ runner.temp }}/fm1-updates.jks
+          FM1_SIGNING_STORE_PASSWORD: ${{ secrets.FM1_SIGNING_STORE_PASSWORD }}
+          FM1_SIGNING_KEY_ALIAS: ${{ secrets.FM1_SIGNING_KEY_ALIAS }}
+          FM1_SIGNING_KEY_PASSWORD: ${{ secrets.FM1_SIGNING_KEY_PASSWORD }}
         run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Verify persistent signing certificate
+        env:
+          EXPECTED_CERT_SHA256: ${{ vars.FM1_SIGNING_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$EXPECTED_CERT_SHA256" ]; then
+            echo "::error::Set repository variable FM1_SIGNING_CERT_SHA256 to the pinned certificate fingerprint before publishing"
+            exit 1
+          fi
+          apk=android/app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify "$apk"
+          got=$("$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs "$apk" |
+                 sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)
+          want=$(printf '%s' "$EXPECTED_CERT_SHA256" | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')
+          got=$(printf '%s' "$got" | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')
+          if [ -z "$got" ] || [ "$got" != "$want" ]; then
+            echo "::error::Signing certificate changed. Prevented a data-risking APK release."
+            exit 1
+          fi
+          echo "Signing identity verified against pinned certificate SHA-256."
+
       - name: Stage and check APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.11-preview.apk
-          unzip -t dist/FM1-Sampler-Library-0.38.11-preview.apk | tail -n 1
-          sha256sum dist/FM1-Sampler-Library-0.38.11-preview.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.12-preview.apk
+          unzip -t dist/FM1-Sampler-Library-0.38.12-preview.apk | tail -n 1
+          sha256sum dist/FM1-Sampler-Library-0.38.12-preview.apk
       - name: Publish on GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v0.38-library-preview.12
+          TAG: v0.38-library-preview.13
         run: |
           cat > release-notes.md <<'EOF'
-          ## FM1 Sampler 0.38.11 — Export fully processed loop WAVs
+          ## FM1 Sampler 0.38.12 — Export SONG + 16 projects + update-safe signing
 
-          **Installable Android APK:** `FM1-Sampler-Library-0.38.11-preview.apk`.
+          **Installable Android APK:** `FM1-Sampler-Library-0.38.12-preview.apk`.
 
+          - **EXPORT SONG next to CLOSE:** renders SONG.wav in the exact arranged sequence (up to 64 saved scenes) through track FX, shared reverb/delay, and master limiter, including the last scene's FX tail. Empty SONG displays NO SCENES IN SONG and does not export.
+          - **16 independent FMP2 projects:** SAVE/LOAD PROJECT shows 2 pages of 8 slots (PREV/NEXT). Existing project_1..project_8 files and their scenes/arrangements remain in place; new slots are project_9..project_16.
+          - **Stable update signing:** releases require a private, persistent signing keystore and a pinned certificate digest, configured as GitHub Secrets/Variables, or publication is blocked. Once configured and migrated, future versions signed with this identity can update in place without deleting app-private projects, samples or PACKS.
           - **EXPORT ALL LOOPS now bounces the real DSP:** each WAV stem includes tape speed/varispeed, cassette saturation and tone, LO-FI, WOBBLE, hiss, volume, pan, LFO volume/pan, sidechain and its own stereo reverb/delay sends and returns. MASTER.wav mixes all loop tracks through the shared FX and master soft limiter.
           - **Stereo WAVs remain synchronized** across tracks, include effect tails from the preceding loop, and are published to Downloads with no mutation of the recorded source clips. Due to nonlinear master limiting and echo feedback, the individual wet stems are not guaranteed to sum sample-identically to MASTER. SOURCE samples already processed into recorded loops are not double-processed.
           - **HOME INFO:** clearly displays `OCT+ + OCT- = NOTE REPEAT MENU (K1)` on its own line, with other MIDI button shortcuts and the incoming MIDI status; INFO/HIDE behavior remains.
@@ -101,7 +148,7 @@ jobs:
           - Backup operations are asynchronous and blocked during recording or a full-project save/load. Reopen the app after importing to load restored files.
           - The in-app LIBRARY panel, IMPORT ZIP, PRESETS auto-load navigation, OCT+ / OCT- note-repeat menu, straight and triplet divisions, MIDI transport and complete saved projects are retained.
           - **Save the active project BEFORE saving a backup:** unsaved in-memory playback/loop changes are not files yet, and therefore cannot be included in a file backup.
-          - **Same signing caveat:** GitHub debug releases can have different signing keys. Do NOT uninstall a prior app with irreplaceable projects/loops until a saved backup is verified and accessible outside the app. Use this portable ZIP to migrate between APK packages without requiring ADB.
+          - **One-time migration caveat:** older debug APKs were signed with ephemeral CI keys and cannot be upgraded in place with a new key. Preserve data via LIBRARY SAVE BACKUP or verified ADB TAR before replacing the old package; this release is not published until stable signing secrets are set.
           - **Firmware:** no physical FM-1 flash is performed; only Android app code changes are in this release.
 
           **Verification:** Host C++ and FM-1 MIDI panel tests; standalone host Java tests for exact backup round trips, KEEP vs REPLACE, preserved originals, path traversal and invalid archives; Android Gradle APK compilation. Physical Android document provider operations are not yet validated on a real device.
@@ -109,9 +156,9 @@ jobs:
           Source: [FM1 Sampler development](https://github.com/Koolkatze/fm1-sampler/pull/3).
           EOF
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.11-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.12-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md --prerelease
           else
-            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.11-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.11 — Processed FX loop export"               --notes-file release-notes.md               --prerelease
+            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.12-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.12 — SONG export, 16 projects and persistent updates"               --notes-file release-notes.md               --prerelease
           fi
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets,isPrerelease             --jq '{url: .url, isPrerelease: .isPrerelease, files: [.assets[].name]}'
