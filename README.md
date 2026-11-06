@@ -2,11 +2,11 @@
 
 Sampler, editor de audio y **looper de 8 pistas** para Android. El teléfono ejecuta el motor de audio, la biblioteca y la interfaz; el **M-VAVE FM-1** puede actuar como superficie de control MIDI por **USB**, con botones, teclado y encoders. El motor y la interfaz se encuentran en `engine/`; Android integra ese motor mediante JNI.
 
-> **Estado de esta rama:** `feature/oneshot-packs-on-scenes`, base **FM1 Sampler 0.38.9** con corrección de navegación de la raíz, utilidades de recuperación ADB y el nuevo texto del atajo NOTE REPEAT en INFO. No confundir este proyecto con Workbench, Urban-1 o Blackhole Remote. La compilación Android no instala firmware en el FM-1 físico.
+> **Estado de esta rama:** `feature/oneshot-packs-on-scenes`, versión **FM1 Sampler 0.38.10**, que conserva la corrección de navegación de la raíz, añade utilidades de recuperación ADB y muestra el atajo NOTE REPEAT en INFO. No confundir este proyecto con Workbench, Urban-1 o Blackhole Remote. La compilación Android no instala firmware en el FM-1 físico.
 
 ## Descargas y compilación
 
-- **APK de la versión publicada 0.38.9:** [FM1 Sampler 0.38.9 — GitHub Releases](../../releases/tag/v0.38-library-preview.10). Las nuevas modificaciones de esta rama aparecerán en la siguiente release cuando la compilación termine correctamente.
+- **APK de la versión 0.38.10:** [FM1 Sampler 0.38.10 — GitHub Releases](../../releases/tag/v0.38-library-preview.11). Comprueba que la publicación y la APK hayan terminado de compilar antes de descargar.
 - **Código Android:** `android/`; **motor de audio/UI:** `engine/`; **protocolo de hardware:** `PROTOCOL.md`.
 - **Utilidad ADB para backups TAR y proyectos `.fm1p`:** [`tools/FM1_ADB_Recuperacion_0389.py`](tools/FM1_ADB_Recuperacion_0389.py) y [guía de uso](docs/ADB_RECUPERACION_0389.md).
 - **Documentación:** [biblioteca, importación, proyectos y backups](docs/SAMPLE_LIBRARY.md), [escenas y SONG](docs/SCENES_AND_SONG.md), [migración de versiones anteriores](docs/MIGRACION_SEGURA.md).
