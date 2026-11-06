@@ -618,20 +618,22 @@ void SamplerUI::deck(Rect r) {
     // software OCT control: tapping the small HIDE/INFO chip only changes
     // whether the information is displayed.
     if (shortcutHelpVisible_) {
-        const Rect help{M - 4, 76, 292, 57};
+        const Rect help{M - 4, 76, 292, 75};
         rrect(help, R_CONTROL, theme::SURFACE);
         stroke(help, R_CONTROL, theme::OUTLINE, 1);
         text(help.x + 7, help.y + 9, 9, kPaper,
              "OCT− + PLAY/STOP: RESTART LOOP", 0, true);
-        text(help.x + 7, help.y + 23, 7.7f, kDim,
-             "OCT+ + PLAY: REPEAT   OCT+ + OCT-: RATE MENU (K1)", 0, true);
-        line(help.x + 7, help.y + 29, help.x + help.w - 7, help.y + 29, kLine, 1);
+        text(help.x + 7, help.y + 23, 8.4f, kDim,
+             "OCT+ + PLAY: NOTE REPEAT", 0, true);
+        text(help.x + 7, help.y + 36, 8.6f, kOrange,
+             "OCT+ + OCT- = NOTE REPEAT MENU (K1)", 0, true);
+        line(help.x + 7, help.y + 42, help.x + help.w - 7, help.y + 42, kLine, 1);
         // Notes can arrive in separate USB/BLE callbacks. These strings show
         // their arrival and which modifier is still held; they do not generate
         // any synthetic button events.
-        text(help.x + 7, help.y + 41, 8.3f, kDim,
+        text(help.x + 7, help.y + 53, 8.3f, kDim,
              fit(app_.midiControlStatus(), help.w - 15, 8.3f), 0, false);
-        text(help.x + 7, help.y + 52, 8.3f, kOrange,
+        text(help.x + 7, help.y + 65, 8.3f, kOrange,
              fit(app_.midiLastEvent(), help.w - 15, 8.3f), 0, false);
         const Rect hide{help.x + help.w - 39, help.y + 1, 38, 15};
         rrect(hide, R_CONTROL, theme::RAISED);
@@ -639,7 +641,7 @@ void SamplerUI::deck(Rect r) {
         tap(hide, [this] { setShortcutHelpVisible(false); });
         // Only the decorative cassette is reduced slightly, never the
         // transport keys, timeline or other interactive controls.
-        cassette({M - 4, 136, 292, 100});
+        cassette({M - 4, 154, 292, 82});
     } else {
         cassette({M - 4, 86, 292, 150});
         const Rect show{M + 254, 61, 38, 17};
