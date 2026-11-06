@@ -2,11 +2,11 @@
 
 Sampler, editor de audio y **looper de 8 pistas** para Android. El teléfono ejecuta el motor de audio, la biblioteca y la interfaz; el **M-VAVE FM-1** puede actuar como superficie de control MIDI por **USB**, con botones, teclado y encoders. El motor y la interfaz se encuentran en `engine/`; Android integra ese motor mediante JNI.
 
-> **Estado de esta rama:** `feature/oneshot-packs-on-scenes`, versión **FM1 Sampler 0.38.10**, que conserva la corrección de navegación de la raíz, añade utilidades de recuperación ADB y muestra el atajo NOTE REPEAT en INFO. No confundir este proyecto con Workbench, Urban-1 o Blackhole Remote. La compilación Android no instala firmware en el FM-1 físico.
+> **Estado de esta rama:** `feature/oneshot-packs-on-scenes`, versión **FM1 Sampler 0.38.11**. Conserva la navegación, los proyectos completos, la recuperación ADB y el atajo NOTE REPEAT; añade la exportación de loops con el procesamiento real del motor. No confundir este proyecto con Workbench, Urban-1 o Blackhole Remote. La compilación Android no instala firmware en el FM-1 físico.
 
 ## Descargas y compilación
 
-- **APK de la versión 0.38.10:** [FM1 Sampler 0.38.10 — GitHub Releases](../../releases/tag/v0.38-library-preview.11). Comprueba que la publicación y la APK hayan terminado de compilar antes de descargar.
+- **APK de la versión 0.38.11:** [FM1 Sampler 0.38.11 — GitHub Releases](../../releases/tag/v0.38-library-preview.12). Comprueba que GitHub Actions haya terminado de publicar la APK antes de descargar.
 - **Código Android:** `android/`; **motor de audio/UI:** `engine/`; **protocolo de hardware:** `PROTOCOL.md`.
 - **Utilidad ADB para backups TAR y proyectos `.fm1p`:** [`tools/FM1_ADB_Recuperacion_0389.py`](tools/FM1_ADB_Recuperacion_0389.py) y [guía de uso](docs/ADB_RECUPERACION_0389.md).
 - **Documentación:** [biblioteca, importación, proyectos y backups](docs/SAMPLE_LIBRARY.md), [escenas y SONG](docs/SCENES_AND_SONG.md), [migración de versiones anteriores](docs/MIGRACION_SEGURA.md).
@@ -75,7 +75,8 @@ Las doce subdivisiones son: **1/1, 1/1T, 1/2, 1/2T, 1/4, 1/4T, 1/8, 1/8T, 1/16, 
 - **8 slots de proyecto** (`project_1.fm1p`…`project_8.fm1p`) en formato **FMP2**. Cada archivo contiene el proyecto completo guardado: estado COMPOSE, muestras originales incrustadas, configuración de pistas/FX, audio de los loops, escenas y orden SONG. Guardar con un nombre crea además un archivo `.name`. Cargar y reemplazar requieren confirmación según el estado.
 - **LOOP MODE:** doce escenas reutilizables, **C1…B1**, cada una con una selección de hasta ocho clips de loop. Guardar, reemplazar y eliminar escena con confirmación; lanzar una escena conmuta en el siguiente compás con fundido breve. Los clips guardados en escenas se conservan independientemente del borrado de los loops activos.
 - **SONG MODE:** composición con una **secuencia de hasta 64 escenas**, admitiendo repeticiones; `+ ADD`, `REMOVE`, `MOVE <`, `MOVE >`, `PLAY SONG` y `STOP`. Las escenas se encadenan sincronizadas; al terminar la última, la canción **se detiene**.
-- **EXPORT ALL LOOPS:** exporta copias WAV de pistas grabadas y mezcla `MASTER.wav` a `Downloads/FM1-SAMPLER/EXPORTED LOOPS/` en Android 10+; no borra originales.
+- **EXPORT ALL LOOPS (0.38.11):** exporta WAV estéreo 16-bit **con todo el procesamiento del looper**, no los buffers crudos. Cada `TRACK_01.wav`…`TRACK_08.wav` contiene su **tape speed / varispeed**, **saturación, LO-FI, WOBBLE, hiss y tono de cinta**, modulación LFO de volumen/pan, nivel/panorama de mezcla, **sidechain** y sus **reverb/delay sends y retornos**. `MASTER.wav` reproduce la mezcla completa con **reverb/delay global y el limitador/ganancia de master**. Los loops suenan como en la APK y conservan su duración relativa al tempo/velocidad del proyecto, con cola de FX de ciclos anteriores.
+  Se guardan en `Downloads/FM1-SAMPLER/EXPORTED LOOPS/` (Android 10+) y nunca alteran los clips originales. **Los stems procesados pueden no sumar exactamente el MASTER** por la no linealidad del delay y del limitador; lo ya grabado con efectos antes del loop no se vuelve a procesar dos veces. Solo se exportan **las pistas del loop actual**, no automáticamente toda una secuencia de SONG.
 
 ### Almacenamiento, packs y backups
 
