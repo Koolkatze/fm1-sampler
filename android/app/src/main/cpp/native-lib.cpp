@@ -174,6 +174,17 @@ FN(jboolean, wantLoopExport)(JNIEnv*, jclass, jlong h) {
     auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
     return e.app->wantLoopExport();
 }
+FN(jboolean, wantSongExport)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    return e.app->wantSongExport();
+}
+FN(jboolean, exportSong)(JNIEnv* env, jclass, jlong h, jstring directory) {
+    auto& e = *E(h);
+    const char* path = env->GetStringUTFChars(directory, nullptr);
+    const bool started = e.session.exportSong(path);
+    env->ReleaseStringUTFChars(directory, path);
+    return started;
+}
 FN(jboolean, exportLoops)(JNIEnv* env, jclass, jlong h, jstring directory) {
     auto& e = *E(h);
     const char* path = env->GetStringUTFChars(directory, nullptr);
