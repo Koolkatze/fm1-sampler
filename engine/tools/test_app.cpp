@@ -39,6 +39,16 @@ int main() {
     run(2.5);
     CHECK(app.hasSample(0) && app.hasSample(1) && app.hasSample(2) && app.hasSample(3), "four default tracks load (%s, %s, %s, %s)", app.sampleLabel(0).c_str(), app.sampleLabel(1).c_str(), app.sampleLabel(2).c_str(), app.sampleLabel(3).c_str());
     CHECK(!app.hasSample(4), "track 5 is empty");
+    // Empty SONG must not cause a file picker, or publish any audio at all.
+    app.requestSongExport();
+    CHECK(!app.wantSongExport() && app.toast() == "NO SCENES IN SONG",
+          "EXPORT SONG refuses an arrangement with no scenes");
+    const std::string emptySongDir = "/tmp/fm1sampler_t2/empty_song_export";
+    CHECK(s.exportSong(emptySongDir), "empty song request resolves asynchronously");
+    for (int k = 0; k < 50 && s.loopExportStatus() == 1; ++k) run(0.01);
+    CHECK(s.loopExportStatus() == -3 &&
+          !std::filesystem::exists(emptySongDir + "/SONG.wav"),
+          "empty SONG export reports -3 and creates no WAV file");
     // algorithms on track 1
     for (int a = 0; a < 6; a++) { app.setAlgo(a); run(0.3); double r = play(60, 1.0); CHECK(r > 0.003, "algorithm %s sounds (rms %.4f)", SamplerApp::algoName(a), r); }
     app.setAlgo(0);
@@ -422,6 +432,19 @@ int main() {
         app.songMove(-1);
         CHECK(app.songOrder()[1] == 0 && app.songOrder()[2] == 2, "Song Mode can reorder steps");
         app.songMove(+1); run(0.1);
+        app.requestSongExport();
+        CHECK(app.wantSongExport(), "valid three-step SONG requests processed export");
+        const std::string songDir = "/tmp/fm1sampler_t2/song_export_three_scenes";
+        CHECK(s.exportSong(songDir), "export entire C1-D1-C1 SONG starts");
+        for (int k = 0; k < 220 && s.loopExportStatus() == 1; ++k) run(0.04);
+        std::vector<float> songAudio; int songRate = 0;
+        const bool songOK = readWav(songDir + "/SONG.wav", songAudio, songRate);
+        double songEnergy = 0;
+        if (songOK) for (float v : songAudio) songEnergy += (double)v * v;
+        CHECK(s.loopExportStatus() == 2 && songOK && songRate == sr &&
+              songAudio.size() > (size_t)compositionLength * 2 * 3 &&
+              songEnergy > 0.01,
+              "EXPORT SONG renders all 3 ordered scenes plus the reverb/delay tail");
         app.playSong(); run(0.12);
         CHECK(app.status().songPlaying && app.status().songStep == 0 &&
               app.status().activeScene == 0, "Song starts on its first scene");
@@ -521,7 +544,7 @@ int main() {
             narrowProject |= op.text == "PROJECT"; narrowSong |= op.text == "SONG MODE";
         }
         CHECK(narrowProject && !narrowSong, "narrow screen shows PROJECT alone");
-        ui.touch(0, 490, 32, now + 3); ui.touch(2, 490, 32, now + 3);
+        ui.touch(0, 380, 32, now + 3); ui.touch(2, 380, 32, now + 3);
         ui.frame(now + 4);
         narrowProject = narrowSong = false;
         for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
@@ -657,17 +680,43 @@ int main() {
             fullLoad |= op.text == "LOAD PROJECT";
         }
         CHECK(fullSave && fullLoad, "PROJECT page has distinct SAVE/LOAD COMPLETE PROJECT actions");
+        bool hasSongExport = false;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT)
+            hasSongExport |= op.text == "EXPORT SONG";
+        CHECK(hasSongExport, "PROJECT shows EXPORT SONG beside CLOSE");
         ui.touch(0, 80.f, 64.f, now + 9);
         ui.touch(2, 80.f, 64.f, now + 9);
         ui.frame(now + 10);
-        bool slotPicker = false, slot1 = false, slot2 = false;
+        bool slotPicker = false, slot1 = false, slot2 = false, page1 = false;
         for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
             slotPicker |= op.text == "SAVE COMPLETE PROJECT";
             slot1 |= op.text == "PROJECT 1";
             slot2 |= op.text == "PROJECT 2";
+            page1 |= op.text == "PAGE 1 / 2";
         }
-        CHECK(slotPicker && slot1 && slot2,
-              "full-project save picker shows independent slots and overwrite protection");
+        CHECK(slotPicker && slot1 && slot2 && page1,
+              "full-project save picker shows independent slots 1-8 on page 1");
+        // 860 x 400 view: slot panel spans x=192..667, y=51..349.
+        // Navigate to page 2 and verify all new slots are addressable.
+        ui.touch(0, 602, 291, now + 11);
+        ui.touch(2, 602, 291, now + 11);
+        ui.frame(now + 12);
+        bool page2 = false, slot9 = false, slot16 = false, previousHidden = true;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+            page2 |= op.text == "PAGE 2 / 2";
+            slot9 |= op.text == "PROJECT 9";
+            slot16 |= op.text == "PROJECT 16";
+            if (op.text == "PROJECT 1") previousHidden = false;
+        }
+        CHECK(page2 && slot9 && slot16 && previousHidden,
+              "page 2 shows slots 9-16 without replacing slots 1-8");
+        CHECK(Session::kProjectSlots == 16,
+              "FMP2 storage exposes 16 slots with unchanged filenames for older projects");
+        CHECK(app.saveFullProject(15), "slot 16 accepts full-project save");
+        for (int spin = 0; spin < 25 && app.fullProjectOperation() == 1; ++spin) run(0.12);
+        CHECK(app.fullProjectOperation() == 2 &&
+              std::filesystem::exists("/tmp/fm1sampler_t2/project_16.fm1p"),
+              "project_16.fm1p saved; slot 1 remains untouched");
         ui.openProject(false);
         app.loopClear(); run(0.25);
     }
