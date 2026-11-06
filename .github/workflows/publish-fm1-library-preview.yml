@@ -115,6 +115,17 @@ jobs:
           fi
           echo "Signing identity verified against pinned certificate SHA-256."
 
+      - name: Verify upgrade package identity and version
+        run: |
+          set -euo pipefail
+          apk=android/app/build/outputs/apk/debug/app-debug.apk
+          info=$("$ANDROID_HOME/build-tools/34.0.0/aapt" dump badging "$apk" | head -n 1)
+          echo "$info"
+          if [[ "$info" != *"name='com.ferluht.fm1sampler.scenes'"* ]] || \
+             [[ "$info" != *"versionCode='59'"* ]]; then
+            echo "::error::APK package or version changed; refusing to publish an incompatible upgrade"
+            exit 1
+          fi
       - name: Stage and check APK
         run: |
           mkdir -p dist
