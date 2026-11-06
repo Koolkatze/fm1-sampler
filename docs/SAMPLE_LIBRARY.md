@@ -191,15 +191,42 @@ Imported and exported ZIP documents are not deleted by the app. An ordinary
 sample-pack ZIP selected through **+ IMPORT ZIP** is different from a full
 backup; use **IMPORT BACKUP** only for ZIPs made with **SAVE BACKUP**.
 
-## EXPORT ALL LOOPS (0.38.2)
+## EXPORT ALL LOOPS: processed audio (0.38.11)
 
 The **PROJECT** page has three separate actions: SAVE PROJECT,
-LOAD PROJECT, and **EXPORT ALL LOOPS**. Export captures all eight current
-recorded loop tracks (only populated tracks become WAVs) and creates a
-16-bit stereo `TRACK_01.wav` ... `TRACK_08.wav` per recorded track,
-plus a `MASTER.wav` sum of those clips. Recorded stems are exported at
-their original amplitude; if the summed master clips, only that master
-is peak-limited.
+LOAD PROJECT, and **EXPORT ALL LOOPS**. Export captures the current recorded
+loop tracks (only populated tracks become WAVs) and creates 16-bit stereo
+`TRACK_01.wav` ... `TRACK_08.wav`, plus `MASTER.wav`.
+
+**As of 0.38.11, all exported audio is processed ("wet") instead of raw:**
+
+- Each track follows the real looper playback DSP: current **TAPE SPEED**
+  (varispeed and interpolation), cassette **EXCITER / saturation, LO-FI,
+  WOBBLE, hiss and tone**, live **LFO volume/pan** modulation, track
+  **volume/pan**, keyed **sidechain ducking**, and its configured reverb/delay
+  **send/return** levels.
+- Each stem is rendered in solo with other tracks still running silently
+  as sidechain key sources. The result contains that track's own reverberation
+  and echo as part of the WAV; the original recorded WAV buffer is unchanged.
+- **MASTER.wav** runs all recorded tracks through the shared reverb/delay
+  buses and final **master gain + tanh soft limiter**, not a sum of raw clips.
+  Due to the nonlinear master limiter and tape-delay feedback, adding the
+  individually rendered wet stems in a DAW need not equal MASTER bit-for-bit.
+- The exporter primes the reverb/delay state with the end of the loop
+  before writing so FX tails from the previous pass are present without
+  adding unaligned extra seconds at the end of a loop. All WAVs retain the
+  same duration after the active tape-speed conversion. Stems represent a
+  cycle of the **currently active clips**, not an automatic render of
+  every scene in a full SONG arrangement.
+- Sample-engine synthesis, arpeggiation, pitch envelopes and other effects
+  already recorded into each clip are preserved within its existing audio;
+  they are **not applied again** during export. Unrecorded live key presses
+  are not part of EXPORT ALL LOOPS.
+
+The exporter snapshots shared audio-buffer references and current FX
+settings at an audio block boundary and performs DSP and streaming WAV writes
+on its background worker (no multi-hundred-MB PCM export vector and no
+mutation of live clips). It still publishes files via Android MediaStore.
 
 Android 10+ publishes these copies to the **public** location
 `Downloads/FM1-SAMPLER/EXPORTED LOOPS/`, visible in the phone's Files
