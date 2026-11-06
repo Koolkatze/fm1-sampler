@@ -422,17 +422,18 @@ int main() {
         for (bool light : {true, false}) {
             theme::apply(light);
             ui.frame(now + 1);
-            bool restart = false, repeat = false, hide = false, midiStatus = false, last = false;
+            bool restart = false, repeat = false, noteMenu = false;
+            bool hide = false, midiStatus = false, last = false;
             for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
                 restart |= op.text == "OCT− + PLAY/STOP: RESTART LOOP";
-                repeat |= op.text.find("OCT+ + PLAY: REPEAT") != std::string::npos &&
-                          op.text.find("OCT+ + OCT-: RATE MENU") != std::string::npos;
+                repeat |= op.text == "OCT+ + PLAY: NOTE REPEAT";
+                noteMenu |= op.text == "OCT+ + OCT- = NOTE REPEAT MENU (K1)";
                 hide |= op.text == "HIDE";
                 midiStatus |= op.text.find("MIDI OCT-:") != std::string::npos;
                 last |= op.text.find("LAST CH") != std::string::npos;
             }
-            CHECK(restart && repeat && hide && midiStatus && last,
-                  "physical shortcuts and incoming MIDI diagnostics in %s mode",
+            CHECK(restart && repeat && noteMenu && hide && midiStatus && last,
+                  "HOME info includes OCT+ + OCT- = NOTE REPEAT MENU and MIDI diagnostics in %s mode",
                   light ? "light" : "dark");
         }
         theme::apply(true);
@@ -444,7 +445,8 @@ int main() {
         bool hasInfo = false, hasRepeat = false;
         for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
             hasInfo |= op.text == "INFO";
-            hasRepeat |= op.text.find("OCT+ + PLAY: REPEAT") != std::string::npos;
+            hasRepeat |= op.text.find("OCT+ + PLAY: NOTE REPEAT") != std::string::npos ||
+                         op.text.find("OCT+ + OCT- = NOTE REPEAT MENU") != std::string::npos;
         }
         CHECK(hasInfo && !hasRepeat, "collapsed legend displays only the compact INFO button");
         {
