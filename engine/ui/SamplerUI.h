@@ -83,6 +83,7 @@ private:
     uint32_t clearArmed_ = 0, sceneSaveAt_ = 0, sceneDeleteAt_ = 0;
     int sceneArmedSlot_ = -1, deleteArmedSlot_ = -1;
     int projectSlotsMode_ = 0; // 0 closed, 1 save complete project, 2 load
+    int projectPage_ = 0; // pages 1/2 and 2/2, eight slots per page
     int projectConfirmSlot_ = -1;
     uint32_t projectConfirmUntil_ = 0;
     bool projectRight_ = false;  // narrow screens: show columns in separate tabs
