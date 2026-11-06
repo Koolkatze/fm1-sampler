@@ -2,8 +2,26 @@ plugins { id 'com.android.application' }
 android {
     namespace 'com.ferluht.fm1sampler'
     compileSdk 34
-    defaultConfig { applicationId 'com.ferluht.fm1sampler'; minSdk 23; targetSdk 30; versionCode 58; versionName "0.38.11" }
-    signingConfigs { debug { enableV1Signing = true; enableV2Signing = true } }
+    defaultConfig { applicationId 'com.ferluht.fm1sampler'; minSdk 23; targetSdk 30; versionCode 59; versionName "0.38.12" }
+    // GitHub previews must reuse one private signing identity forever.
+    // Local developers without the environment variables keep an ordinary
+    // debug APK; the publish workflow refuses to release such an APK.
+    signingConfigs {
+        debug {
+            enableV1Signing = true
+            enableV2Signing = true
+            def keyPath = System.getenv('FM1_SIGNING_STORE_FILE')
+            def storePass = System.getenv('FM1_SIGNING_STORE_PASSWORD')
+            def keyAliasName = System.getenv('FM1_SIGNING_KEY_ALIAS')
+            def keyPass = System.getenv('FM1_SIGNING_KEY_PASSWORD')
+            if (keyPath && storePass && keyAliasName && keyPass) {
+                storeFile file(keyPath)
+                storePassword storePass
+                keyAlias keyAliasName
+                keyPassword keyPass
+            }
+        }
+    }
     // The GitHub-built preview installs separately from production / CUE FM-1 Sampler.
     buildTypes {
         debug {
