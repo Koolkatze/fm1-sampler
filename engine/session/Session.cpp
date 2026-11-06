@@ -39,6 +39,54 @@ std::string safeSampleName(const std::string& name) {
     return out.empty() ? "Loop" : out;
 }
 
+// Write PCM in fixed-size blocks: a three-minute loop at 0.25x tape speed
+// must not allocate a multi-hundred-megabyte WAV vector on the phone.
+class LoopWavStream {
+public:
+    LoopWavStream(const std::string& path, uint64_t frames, int sampleRate)
+        : out_(path, std::ios::binary), expected_(frames) {
+        if (!out_ || !frames || sampleRate < 8000 ||
+            frames > (UINT32_MAX - 36u) / 4u) return;
+        auto u16 = [this](uint16_t v) {
+            const char b[] = {char(v & 255), char((v >> 8) & 255)};
+            out_.write(b, 2);
+        };
+        auto u32 = [this](uint32_t v) {
+            const char b[] = {char(v & 255), char((v >> 8) & 255),
+                              char((v >> 16) & 255), char((v >> 24) & 255)};
+            out_.write(b, 4);
+        };
+        const uint32_t bytes = (uint32_t)(frames * 4);
+        out_.write("RIFF", 4); u32(36u + bytes);
+        out_.write("WAVEfmt ", 8); u32(16); u16(1); u16(2);
+        u32((uint32_t)sampleRate); u32((uint32_t)sampleRate * 4u);
+        u16(4); u16(16); out_.write("data", 4); u32(bytes);
+        valid_ = !!out_;
+    }
+    bool write(const float* stereo, int frames) {
+        if (!valid_ || frames < 0 || done_ + (uint64_t)frames > expected_) return false;
+        std::array<char, kBlock * 4> bytes{};
+        if (frames > kBlock) return false;
+        for (int i = 0; i < frames * 2; ++i) {
+            const int16_t q = (int16_t)std::lrintf(
+                clampf(stereo[i], -1.f, 1.f) * 32767.f);
+            bytes[(size_t)i * 2] = char((uint16_t)q & 255);
+            bytes[(size_t)i * 2 + 1] = char(((uint16_t)q >> 8) & 255);
+        }
+        out_.write(bytes.data(), (std::streamsize)frames * 4);
+        done_ += (uint64_t)frames;
+        return !!out_;
+    }
+    bool finish() {
+        out_.flush();
+        return valid_ && done_ == expected_ && !!out_;
+    }
+private:
+    std::ofstream out_;
+    uint64_t expected_ = 0, done_ = 0;
+    bool valid_ = false;
+};
+
 }
 
 struct Session::Impl {
@@ -113,6 +161,25 @@ struct Session::Impl {
         std::vector<uint8_t> appState;
         std::array<std::string, kTracks> samplePaths;
     };
+    // Only a few primitive settings and shared immutable clip references are
+    // copied on the real-time thread. No DSP delay buffers or large WAVs.
+    struct LoopExportSnapshot {
+        struct TrackData {
+            std::shared_ptr<std::vector<float>> clip;
+            bool has = false;
+            float vol = 0.f, pan = 0.f, send[2] = {0, 0};
+            int scSrc = -1;
+            float scThrDb = -20.f, scRatio = 1.f;
+            Lfo lfo{};
+            float lfoPhase = 0.f, lfoSH = 0.f;
+            TapeInsert::Settings tape{};
+        };
+        std::array<TrackData, kTracks> track{};
+        int sampleRate = 0, loopSamples = 0;
+        float tapeSpeed = 1.f, masterVolume = 0.9f;
+        float returns[2] = {0.35f, 0.7f};
+        float reverbSize = 0.7f, delaySeconds = 0.4f, delayFeedback = 0.4f;
+    };
     std::atomic<int> projectOp{0};
     std::atomic<int> loopExportOp{0};
     mutable std::mutex projectMtx;
@@ -125,6 +192,8 @@ struct Session::Impl {
     std::vector<std::unique_ptr<Track>> tracks;
     Reverb reverb; TapeDelay delay;
     float masterVol = 0.9f, ret[2] = {0.35f, 0.7f};
+    float reverbSize = 0.7f, delaySeconds = 0.4f, delayFeedback = 0.4f;
+    bool offlineRender = false; // bypass visual-only peak scans for offline bounces
     int loopSrc = 1;   // what the loop records: 0 microphone, 1 the track's sound
 
     bool playing = false;
@@ -184,7 +253,8 @@ struct Session::Impl {
 
     std::vector<float> bus, tmp, sendBus[2], wet;
 
-    explicit Impl(int rate) : sr(rate), reverb(rate), delay(rate) {
+    explicit Impl(int rate, bool offline = false)
+        : sr(rate), reverb(rate), delay(rate), offlineRender(offline) {
         for (int i = 0; i < kTracks; i++) tracks.emplace_back(new Track(rate));
         bus.resize(kBlock * 2); tmp.resize(kBlock * 2); wet.resize(kBlock * 2); sendBus[0].resize(kBlock * 2); sendBus[1].resize(kBlock * 2);
         for (auto& a : a_lpk) a = 0.f;
@@ -195,7 +265,7 @@ struct Session::Impl {
         for (auto& a : a_voiceN) a = 0;
         for (auto& a : a_arrangement) a = -1;
         for (auto& a : a_sceneTracks) a = 0;
-        worker = std::thread([this] {
+        if (!offlineRender) worker = std::thread([this] {
             for (;;) {
                 std::function<void()> j;
                 { std::unique_lock<std::mutex> l(wMtx); wCv.wait(l, [this] { return wStop || !jobs.empty(); }); if (wStop && jobs.empty()) return; j = std::move(jobs.front()); jobs.pop_front(); }
@@ -633,7 +703,7 @@ struct Session::Impl {
         }
         const int32_t p0 = (int32_t)pos;
         const bool tl = playing && !freeRec && loopSamples > 0;
-        updateLoopPeaks();
+        if (!offlineRender) updateLoopPeaks();
         const double spd = tapeSpeed.load();
         if (!playing) { rate = 1.0; stopping = false; }
         bool ramp = false; double rateSum = n, tapeEnd = tapePos;
@@ -992,8 +1062,16 @@ void Session::setSidechain(int t, int src, float thresholdDb, float ratio) {
 }
 void Session::setSend(int t, int w, float l) { if (t >= 0 && t < kTracks && (w == 0 || w == 1)) d->post([=] { d->tracks[(size_t)t]->send[w] = clampf(l, 0.f, 1.f); }); }
 void Session::setMasterVolume(float v) { d->post([=] { d->masterVol = clampf(v, 0.f, 1.5f); }); }
-void Session::setReverb(float size) { d->post([=] { d->reverb.setSize(size); }); }
-void Session::setDelay(float sec, float fb) { d->post([=] { d->delay.setTime(sec); d->delay.setFeedback(fb); }); }
+void Session::setReverb(float size) { d->post([=] {
+    d->reverbSize = clampf(size, 0.f, 1.f);
+    d->reverb.setSize(d->reverbSize);
+}); }
+void Session::setDelay(float sec, float fb) { d->post([=] {
+    d->delaySeconds = clampf(sec, 0.02f, 3.f);
+    d->delayFeedback = clampf(fb, 0.f, 0.95f);
+    d->delay.setTime(d->delaySeconds);
+    d->delay.setFeedback(d->delayFeedback);
+}); }
 void Session::setRetLevel(int w, float v) { d->post([=] { d->ret[w & 1] = clampf(v, 0.f, 1.5f); }); }
 
 // ---- looper ----
