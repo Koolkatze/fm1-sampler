@@ -6,12 +6,23 @@
 
 class TapeInsert {
 public:
+    // Lightweight parameter snapshot for offline loop bounces: do NOT copy
+    // the 4096-frame delay buffer on the real-time audio callback.
+    struct Settings {
+        float sat = 0.f, tone = 1.f, wobble = 0.f, hiss = 0.f;
+        float mix = 0.f, bits = 1.f;
+    };
     explicit TapeInsert(int sr) : sr_(sr), buf_(4096 * 2, 0.f) { setParams(0, 1, 0, 0, 0, 1); }
+    Settings settings() const { return settings_; }
     // sat: drive; tone: 1 = bright; wobble: wow and flutter depth; hiss: noise; mix: wet share of the cassette; bits: 1 = 16 bit (clean), 0 = 4 bit
     void setParams(float sat, float tone, float wobble, float hiss, float mix, float bits) {
-        sat_ = clampf(sat, 0.f, 1.f); wobble_ = clampf(wobble, 0.f, 1.f); hiss_ = clampf(hiss, 0.f, 1.f); mix_ = clampf(mix, 0.f, 1.f);
-        bits_ = 4.f + 12.f * clampf(bits, 0.f, 1.f);
-        tone_.set(800.f * std::pow(25.f, clampf(tone, 0.f, 1.f)), (float)sr_);
+        settings_ = {clampf(sat, 0.f, 1.f), clampf(tone, 0.f, 1.f),
+                     clampf(wobble, 0.f, 1.f), clampf(hiss, 0.f, 1.f),
+                     clampf(mix, 0.f, 1.f), clampf(bits, 0.f, 1.f)};
+        sat_ = settings_.sat; wobble_ = settings_.wobble;
+        hiss_ = settings_.hiss; mix_ = settings_.mix;
+        bits_ = 4.f + 12.f * settings_.bits;
+        tone_.set(800.f * std::pow(25.f, settings_.tone), (float)sr_);
     }
     bool active() const { return mix_ > 0.001f || bits_ < 15.9f; }
     void process(float* x /*stereo, in place*/, int n) {
@@ -43,6 +54,7 @@ public:
         }
     }
 private:
+    Settings settings_{};
     int sr_; std::vector<float> buf_; int wr_ = 0;
     float sat_ = 0, wobble_ = 0, hiss_ = 0, mix_ = 0, bits_ = 16, wow_ = 0, flut_ = 0; uint32_t seed_ = 12345;
     OnePole tone_;

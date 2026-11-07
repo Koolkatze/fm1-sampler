@@ -108,11 +108,11 @@ public:
     void restoreComposition();   // EXIT / COMPOSE / HOME restore audio clips and transport
     void cancelSceneLaunch();  // leave LOOP mode without stopping currently audible loops
     void saveArrangement(const std::vector<int>& order);
-    // Self-contained complete project files (8 slots): eight current clips,
+    // Self-contained complete project files (16 slots): eight current clips,
     // independent COMPOSE clips, scenes, song, source WAVs, and app parameters.
     // All disk work runs off the audio callback. A loaded payload is applied
     // atomically on the audio thread before the UI receives its metadata.
-    static constexpr int kProjectSlots = 8;
+    static constexpr int kProjectSlots = 16;
     struct LoadedProject {
         int slot = -1;
         std::vector<uint8_t> appState;
@@ -127,7 +127,17 @@ public:
     void clearSample(int track);
     void setLoopSpeed(float speed);       // 0.25..2, tape speed of all loops together; 1 = locked to the transport
     void setLoopSource(int src);          // what the loop records: 0 microphone, 1 the track's sound
-    bool saveClip(int track);             // the loop of `track` as sample_*.wav in the data dir
+    bool saveClip(int track, const std::string& name = ""); // named loop in SAVED/LOOPS
+    // Export the current recorded loops to a temporary directory as WAV stems
+    // plus MASTER.wav. A consistent audio-thread snapshot is written off-thread.
+    // Android publishes these WAVs via MediaStore, so they appear in Files.
+    bool exportLoops(const std::string& directory);
+    // One processed stereo SONG.wav: the full saved arrangement in order,
+    // each scene's complete loop, shared FX, master gain and FX decay tail.
+    // Empty arrangement is rejected without writing a file; neither action
+    // changes the live playing project or the .fm1p archives.
+    bool exportSong(const std::string& directory);
+    int loopExportStatus() const; // 0 idle; 1 working; 2 done; -1 no loops/recording; -2 I/O failure; -3 empty/invalid SONG
     int loopPeaks(int track /* -1 = all tracks mixed */, float* out, int maxBins) const;
 
     // ---- microphone sampling ----

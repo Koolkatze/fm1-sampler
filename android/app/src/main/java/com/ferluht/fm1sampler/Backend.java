@@ -34,6 +34,10 @@ public class Backend {
     int usbAudioId = 0;
     /** Set by the activity: opens the system file picker (the phone UI asked for LOAD FILE FROM DISK). */
     public volatile Runnable onFileRequest;
+    public volatile Runnable onPackRequest;
+    public volatile Runnable onLoopExportRequest;
+    public volatile Runnable onSongExportRequest;
+    public volatile java.util.function.IntConsumer onNameRequest;
 
     public static synchronized Backend get(Context c) {
         if (instance == null) instance = new Backend(c.getApplicationContext());
@@ -42,11 +46,13 @@ public class Backend {
 
     Backend(Context c) {
         ctx = c;
-        java.io.File samples = new java.io.File(c.getFilesDir(), "samples");   // the bundled sample library, copied out once: the engine reads plain files
-        if (!new java.io.File(samples, ".v1").exists()) {
-            try { copyAssets(c, "samples", samples); new java.io.File(samples, ".v1").createNewFile(); } catch (java.io.IOException e) { android.util.Log.w("fm1sampler", "samples: " + e); }
+        try {
+            // One root for the UI, packs, official sounds, recordings and FMP2 projects.
+            java.io.File root = StorageLayout.initialize(c);
+            engine = Native.create(StorageLayout.projects(c).getAbsolutePath(), root.getAbsolutePath());
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Cannot initialize FM1-SAMPLER library", e);
         }
-        engine = Native.create(c.getFilesDir().getAbsolutePath(), samples.getAbsolutePath());
         midi = (MidiManager) c.getSystemService(Context.MIDI_SERVICE);
         am = (AudioManager) c.getSystemService(Context.AUDIO_SERVICE);
     }
@@ -75,6 +81,11 @@ public class Backend {
                     send(out);
                     Native.uiLink(engine, fromFm1 != null, usbAudioId != 0);
                     if (Native.wantFile(engine)) { Runnable r = onFileRequest; if (r != null) main.post(r); }
+                    if (Native.wantPack(engine)) { Runnable r = onPackRequest; if (r != null) main.post(r); }
+                    if (Native.wantLoopExport(engine)) { Runnable r = onLoopExportRequest; if (r != null) main.post(r); }
+                    if (Native.wantSongExport(engine)) { Runnable r = onSongExportRequest; if (r != null) main.post(r); }
+                    int request = Native.takeDialogRequest(engine);
+                    if (request != 0) { java.util.function.IntConsumer handler = onNameRequest; if (handler != null) main.post(() -> handler.accept(request)); }
                     if (Native.audioDead(engine) && SystemClock.uptimeMillis() - lastRestart > 700) {   // the system closed the stream (USB plugged / unplugged)
                         lastRestart = SystemClock.uptimeMillis();
                         main.postDelayed(() -> { if (running) startAudio(); }, 300);

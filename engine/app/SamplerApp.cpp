@@ -2,10 +2,12 @@
 #include "../ui/Theme.h"
 #include <Common.h>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <type_traits>
 
 namespace {
@@ -24,6 +26,10 @@ const char* kArpRate[] = {"OFF", "1", "2", "2T", "4", "4T", "8", "8T", "16", "16
 const char* kArpPatt[] = {"UP", "DOWN", "UPDN", "CONV", "RAND"};
 const char* kLfoTarget[] = {"PITCH", "FILTER", "VOLUME", "PAN"};
 const char* kLfoShape[] = {"SINE", "TRI", "SQUARE", "S&H"};
+// Straight and triplet values alternate: T lasts 2/3 of its straight counterpart.
+const char* kCueRates[] = {"1/1", "1/1T", "1/2", "1/2T", "1/4", "1/4T",
+                           "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/32T"};
+const char* cueRateName(int index) { return kCueRates[std::max(0, std::min(11, index))]; }
 std::vector<uint8_t> n14(int v) { return {(uint8_t)(v >> 7 & 127), (uint8_t)(v & 127)}; }
 std::vector<uint8_t> col(uint16_t c) { return {(uint8_t)(c >> 14 & 3), (uint8_t)(c >> 7 & 127), (uint8_t)(c & 127)}; }
 void cat(std::vector<uint8_t>& a, const std::vector<uint8_t>& b) { a.insert(a.end(), b.begin(), b.end()); }
@@ -77,41 +83,208 @@ SamplerApp::SamplerApp(Session& s, Send send) : s_(s), send_(std::move(send)) {
 
 // ---- library ----
 void SamplerApp::refreshLibrary() {
+    namespace fs = std::filesystem;
+    const std::string selected = libCursor_ < (int)lib_.size() ? lib_[(size_t)libCursor_].path : "";
     lib_.clear();
-    const std::string dir = s_.sampleDir();
-    for (auto& f : s_.sampleFolders())
-        for (auto& file : s_.sampleFiles(f)) {
-            std::string stem = file.substr(0, file.rfind('.'));
-            lib_.push_back({stem, f, dir + "/" + f + "/" + file, f == "Drums"});
+    const fs::path root(s_.sampleDir());
+    std::error_code ec;
+    if (fs::is_directory(root, ec)) {
+        for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec);
+             it != fs::recursive_directory_iterator(); it.increment(ec)) {
+            if (ec) { ec.clear(); continue; }
+            if (!it->is_regular_file(ec)) continue;
+            std::string ext = it->path().extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(),
+                [](unsigned char c) { return (char)std::tolower(c); });
+            if (ext != ".wav") continue;
+            const fs::path rel = it->path().lexically_relative(root);
+            auto p = rel.begin();
+            if (p == rel.end()) continue;
+            const std::string pack = (p++)->string();
+            const fs::path relFolder = rel.parent_path().lexically_relative(pack);
+            const std::string folder = relFolder == fs::path(".") ? "" : relFolder.generic_string();
+            const std::string stem = it->path().stem().string();
+            const std::string category = pack == "OFFICIAL" ? folder : folder.empty() ? pack : folder;
+            const bool kit = pack == "OFFICIAL" && folder == "Drums" &&
+                (stem == "707" || stem == "OPDrums" || stem == "TrapKit");
+            lib_.push_back({stem, category, it->path().string(), kit, pack, folder});
         }
-    for (auto& p : s_.sampleLibrary()) {
-        std::string nm = p.substr(p.find_last_of('/') + 1); nm = nm.substr(0, nm.rfind('.'));
-        if (nm.rfind("sample_", 0) == 0) nm = nm.substr(7);
-        lib_.push_back({nm, "User", p, false});
     }
-    // Project-embedded WAVs are deliberately outside the regular sample
-    // library. Re-insert them into the browser whenever it refreshes; then
-    // resolve each track's entry from the stable source path, never an old
-    // index which might now refer to another sample.
+    // Old microphone recordings and imported WAVs remain available without migration loss.
+    for (const auto& path : s_.sampleLibrary()) {
+        const fs::path p(path);
+        std::string name = p.stem().string();
+        if (name.rfind("sample_", 0) == 0) name.erase(0, 7);
+        lib_.push_back({name, "Recordings", path, false, "SAVED", "RECORDINGS"});
+    }
+    std::sort(lib_.begin(), lib_.end(), [](const Entry& a, const Entry& b) {
+        if (a.pack != b.pack) return a.pack < b.pack;
+        if (a.folder != b.folder) return a.folder < b.folder;
+        return a.label < b.label;
+    });
+    // Preserve all old scene/project source paths, including embedded project audio
+    // that lives outside samples/. Never rebind a track based on a stale list index.
     for (int t = 0; t < kTracks; ++t) {
         const auto& path = trackSourcePaths_[(size_t)t];
         if (path.empty()) { ts_[(size_t)t].entry = -1; continue; }
         auto it = std::find_if(lib_.begin(), lib_.end(),
-                               [&](const Entry& e) { return e.path == path; });
-        if (it == lib_.end() && std::filesystem::exists(path)) {
-            auto name = trackSourceNames_[(size_t)t];
-            if (name.empty()) name = std::filesystem::path(path).stem().string();
-            lib_.push_back({name, "Project", path, ts_[(size_t)t].algo == 3});
+                              [&](const Entry& e) { return e.path == path; });
+        if (it == lib_.end() && fs::exists(path)) {
+            std::string name = trackSourceNames_[(size_t)t];
+            if (name.empty()) name = fs::path(path).stem().string();
+            lib_.push_back({name, "Project", path, ts_[(size_t)t].algo == 3, "PROJECT", "Embedded"});
             it = lib_.end() - 1;
         }
         ts_[(size_t)t].entry = it == lib_.end() ? -1 : (int)(it - lib_.begin());
     }
-    if (libCursor_ >= (int)lib_.size()) libCursor_ = 0;
+    libCursor_ = 0;
+    for (size_t i = 0; i < lib_.size(); ++i)
+        if (lib_[i].path == selected) { libCursor_ = (int)i; break; }
+    rebuildBrowser();  // keep the current directory and selected row after imports
 }
-void SamplerApp::browse(int d) {
-    if (lib_.empty()) return;
-    libCursor_ = ((libCursor_ + (d > 0 ? 1 : -1)) % (int)lib_.size() + (int)lib_.size()) % (int)lib_.size();
-    auditionAt_ = nowMs_ + 250;
+
+// The physical PRESETS knob and the phone's BACK/ENTER share ONE cursor.
+// Directory entries are listed alongside the original filenames: folders
+// first, then files; compatible WAVs map to live sampler library entries.
+void SamplerApp::rebuildBrowser(const std::string& preferred) {
+    namespace fs = std::filesystem;
+    std::string previous = preferred;
+    if (previous.empty() && browserSelected()) previous = browserSelected()->path;
+    browserItems_.clear();
+    browserIndex_ = -1;
+    const fs::path root(s_.sampleDir());
+    std::error_code ec;
+    if (browserDir_.empty()) {
+        // The four permanent library folders remain navigable when empty.
+        for (const char* name : {"PROYECTOS", "OFFICIAL", "SAVED", "PACKS"})
+            browserItems_.push_back({name, name, -1, true});
+    } else {
+        const fs::path current = root / browserDir_;
+        if (browserDir_ == "PROYECTOS") {
+            for (const Entry& e : lib_) if (e.pack == "PROJECT") {
+                browserItems_.push_back({"Embedded", "PROYECTOS/Embedded", -1, true});
+                break;
+            }
+        }
+        if (browserDir_ == "PROYECTOS/Embedded") {
+            for (int i = 0; i < (int)lib_.size(); ++i) {
+                const Entry& e = lib_[(size_t)i];
+                if (e.pack == "PROJECT") browserItems_.push_back({e.label + ".wav", e.path, i, false});
+            }
+        } else if (fs::is_directory(current, ec)) {
+            for (const fs::directory_entry& file :
+                 fs::directory_iterator(current, fs::directory_options::skip_permission_denied, ec)) {
+                if (file.is_directory(ec)) {
+                    const fs::path rel = file.path().lexically_relative(root);
+                    browserItems_.push_back({file.path().filename().string(), rel.generic_string(), -1, true});
+                } else if (file.is_regular_file(ec)) {
+                    const std::string path = file.path().string();
+                    const auto match = std::find_if(lib_.begin(), lib_.end(),
+                        [&](const Entry& e) { return e.path == path; });
+                    const int entry = match == lib_.end() ? -1 : (int)(match - lib_.begin());
+                    browserItems_.push_back({file.path().filename().string(), path, entry, false});
+                }
+                if (ec) ec.clear();
+            }
+        }
+    }
+    std::sort(browserItems_.begin(), browserItems_.end(), [](const BrowserItem& x, const BrowserItem& y) {
+        if (x.directory != y.directory) return x.directory;
+        return x.label < y.label;
+    });
+    if (browserItems_.empty()) return;
+    browserIndex_ = 0;
+    for (int i = 0; i < (int)browserItems_.size(); ++i) {
+        if (browserItems_[(size_t)i].path == previous) { browserIndex_ = i; break; }
+    }
+}
+void SamplerApp::loadBrowserSelection() {
+    const BrowserItem* chosen = browserSelected();
+    if (chosen && !chosen->directory && chosen->entry >= 0)
+        loadEntry(chosen->entry); // immediate load, not a delayed audition
+}
+void SamplerApp::browse(int delta) {
+    if (!delta || browserItems_.empty()) return;
+    const int n = (int)browserItems_.size();
+    // One MIDI encoder event means exactly one item, even if the firmware
+    // sends a large relative value for a fast detent.
+    const int step = delta > 0 ? 1 : -1;
+    const int start = browserIndex_ < 0 ? (step > 0 ? -1 : 0) : browserIndex_;
+    browserIndex_ = ((start + step) % n + n) % n;
+    browserTouchedAt_ = nowMs_;
+    loadBrowserSelection();
+}
+void SamplerApp::browserSelect(int index) {
+    if (index < 0 || index >= (int)browserItems_.size()) return;
+    browserIndex_ = index;
+    browserTouchedAt_ = nowMs_;
+    loadBrowserSelection(); // touching a WAV also loads it, just like PRESETS
+}
+void SamplerApp::browserEnter() {
+    const BrowserItem* chosen = browserSelected();
+    if (!chosen && browserDir_.empty() && !browserItems_.empty()) {
+        // BACK at the archive root deliberately shows FM1-SAMPLER itself,
+        // without a child selected. ENTER must be able to reopen that root:
+        // use its last highlighted folder (or the first one on first entry).
+        browserIndex_ = std::max(0, std::min(rootLastIndex_, (int)browserItems_.size() - 1));
+        chosen = browserSelected();
+    }
+    if (!chosen || !chosen->directory) return; // ENTER never loads an audio file
+    if (browserDir_.empty()) rootLastIndex_ = browserIndex_;
+    browserDir_ = chosen->path;
+    rebuildBrowser();
+    browserTouchedAt_ = nowMs_;
+    loadBrowserSelection(); // selecting the first WAV in a directory also loads it
+}
+void SamplerApp::browserBack() {
+    if (browserDir_.empty()) {
+        // Keep the root choice for the next ENTER, even though the top-level
+        // archive itself is now highlighted as FM1-SAMPLER.
+        if (browserSelected()) rootLastIndex_ = browserIndex_;
+        browserIndex_ = -1;
+        browserTouchedAt_ = nowMs_;
+        return;
+    }
+    const std::string prior = browserDir_;
+    const size_t slash = browserDir_.find_last_of('/');
+    browserDir_ = slash == std::string::npos ? "" : browserDir_.substr(0, slash);
+    rebuildBrowser(prior); // highlight the folder just exited
+    browserTouchedAt_ = nowMs_;
+}
+void SamplerApp::browserRoot() {
+    browserDir_.clear();
+    rebuildBrowser();
+    browserTouchedAt_ = nowMs_;
+}
+// Only a selected descendant of PACKS may be removed. PROJECTS, SAVED,
+// OFFICIAL, the PACKS root itself, and all other app files are excluded.
+// Java checks canonical paths again before showing the destructive dialog.
+std::string SamplerApp::selectedPackDeletePath() const {
+    namespace fs = std::filesystem;
+    if (browserDir_ != "PACKS" && browserDir_.rfind("PACKS/", 0) != 0) return {};
+    const BrowserItem* selected = browserSelected();
+    if (!selected) return {};
+    const fs::path packs = fs::path(s_.sampleDir()) / "PACKS";
+    const fs::path file = selected->directory
+        ? fs::path(s_.sampleDir()) / selected->path : fs::path(selected->path);
+    const fs::path relative = file.lexically_relative(packs);
+    if (relative.empty() || relative == "." || relative.is_absolute()) return {};
+    for (const auto& component : relative)
+        if (component.empty() || component == "." || component == "..") return {};
+    return relative.generic_string();
+}
+void SamplerApp::requestDeleteBrowserSelection() {
+    pendingPackDeletePath_ = selectedPackDeletePath();
+    if (pendingPackDeletePath_.empty()) {
+        say("SELECT A FILE OR FOLDER INSIDE PACKS");
+        return;
+    }
+    dialogRequest_ = 6; // Android shows the DELETE / CANCEL confirmation.
+}
+std::string SamplerApp::takePackDeletePath() {
+    std::string path = std::move(pendingPackDeletePath_);
+    pendingPackDeletePath_.clear();
+    return path;
 }
 void SamplerApp::loadEntry(int i) {
     if (i < 0 || i >= (int)lib_.size()) return;
@@ -329,7 +502,9 @@ SamplerApp::Knobs SamplerApp::knobs(Page p) {
         break;
     }
     case P_CUE:
-        k[0] = choice("RATE", &cueDivision_, {"1/1", "1/2", "1/4", "1/8", "1/16", "1/32"},
+        k[0] = choice("RATE", &cueDivision_,
+                      {"1/1", "1/1T", "1/2", "1/2T", "1/4", "1/4T",
+                       "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/32T"},
                       [this] { if (cueActive_) s_.setCue(true, cueDivision_); });
         // Keep the remaining encoders inert during the momentary beat-repeat.
         break;
@@ -443,13 +618,14 @@ void SamplerApp::stopSong() {
 namespace {
 struct FullProjectSettings {
     uint32_t magic = 0x32505041;  // APP2
-    uint32_t version = 2, bytes = sizeof(FullProjectSettings);
+    // v3 changes only the NOTE REPEAT subdivision enum. v2 projects remain loadable.
+    uint32_t version = 3, bytes = sizeof(FullProjectSettings);
     std::array<SamplerApp::TrackState, SamplerApp::kTracks> tracks{};
     SamplerApp::ScaleState scale{};
     float reverbSize = .7f, reverbWet = .35f, delayTime = .4f, delayFeedback = .45f;
     float exciter = 0.f, lofi = 0.f, wobble = 0.f, loopSpeed = 2.f / 3.f, micThreshold = .452f;
     int32_t loopSource = 1, selectedTrack = 0, page = 0;
-    int32_t selectedScene = 0, selectedSongStep = -1, cueDivision = 2;
+    int32_t selectedScene = 0, selectedSongStep = -1, cueDivision = 4;
     uint8_t sceneTrackMask = 0xff, performance = 0, songMode = 0, reserved = 0;
     uint32_t songSize = 0;
     std::array<int32_t, 64> songOrder{};
@@ -457,6 +633,28 @@ struct FullProjectSettings {
 };
 static_assert(std::is_trivially_copyable_v<FullProjectSettings>);
 }
+std::string SamplerApp::projectName(int slot) const {
+    if (slot < 0 || slot >= Session::kProjectSlots) return "";
+    const std::string path = s_.dataDir() + "/project_" + std::to_string(slot + 1) + ".name";
+    std::ifstream in(path);
+    std::string value;
+    if (std::getline(in, value) && !value.empty()) return value;
+    return "PROJECT " + std::to_string(slot + 1);
+}
+
+void SamplerApp::submitName(int kind, const std::string& name) {
+    if (name.empty()) { say("NAME REQUIRED"); return; }
+    if (kind == 1) { loopSave(name); return; }
+    if (kind != 2) return;
+    const int slot = pendingProjectSlot_;
+    pendingProjectSlot_ = -1;
+    if (slot < 0 || slot >= Session::kProjectSlots) { say("NO PROJECT SLOT SELECTED"); return; }
+    if (!saveFullProject(slot)) return;
+    // Sidecar label only: full FMP2 audio, scene, song and compose project format is unchanged.
+    pendingProjectLabel_ = name;
+    pendingProjectLabelSlot_ = slot;
+}
+
 bool SamplerApp::fullProjectExists(int slot) const { return s_.projectExists(slot); }
 bool SamplerApp::saveFullProject(int slot) {
     if (recordingNow() || mic_ != 0) { say("FINISH RECORDING FIRST"); return false; }
@@ -508,11 +706,13 @@ void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
     }
     FullProjectSettings m{};
     std::memcpy(&m, project.appState.data(), sizeof(m));
-    if (m.magic != 0x32505041 || m.version != 2 || m.bytes != sizeof(m) ||
-        m.songSize > 64 || m.selectedTrack < 0 || m.selectedTrack >= kTracks ||
+    if (m.magic != 0x32505041 || (m.version != 2 && m.version != 3) ||
+        m.bytes != sizeof(m) || m.songSize > 64 ||
+        m.selectedTrack < 0 || m.selectedTrack >= kTracks ||
         m.page < 0 || m.page >= kPages || m.selectedScene < 0 ||
         m.selectedScene >= Session::kScenes || m.selectedSongStep < -1 ||
-        m.selectedSongStep >= (int)m.songSize || m.cueDivision < 0 || m.cueDivision > 5 ||
+        m.selectedSongStep >= (int)m.songSize || m.cueDivision < 0 ||
+        m.cueDivision > (m.version == 2 ? 5 : 11) ||
         m.performance > 1 || m.songMode > 1) {
         say("PROJECT SETTINGS CORRUPT"); return;
     }
@@ -525,7 +725,10 @@ void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
     loopSpeed_ = m.loopSpeed; micThr_ = m.micThreshold; loopSrc_ = m.loopSource;
     track_ = m.selectedTrack; page_ = (Page)m.page;
     selectedScene_ = m.selectedScene; songSelected_ = m.selectedSongStep;
-    sceneTracks_ = m.sceneTrackMask; cueDivision_ = m.cueDivision;
+    sceneTracks_ = m.sceneTrackMask;
+    cueDivision_ = m.version == 2 ? m.cueDivision * 2 : m.cueDivision;
+    // v2 saved 0..5 as straight divisions. v3 interleaves T values,
+    // keeping the original rhythmic choice without losing old projects.
     sceneKeys_ = m.performance; songMode_ = m.songMode;
     songOrder_.clear();
     for (uint32_t i = 0; i < m.songSize; ++i) songOrder_.push_back(m.songOrder[i]);
@@ -593,7 +796,7 @@ void SamplerApp::restartLoop() {
     say("LOOP FROM START");
 }
 void SamplerApp::setCueDivision(int division) {
-    cueDivision_ = std::max(0, std::min(5, division));
+    cueDivision_ = std::max(0, std::min(11, division));
     if (cueActive_) s_.setCue(true, cueDivision_);
 }
 void SamplerApp::cueHold(bool down) {
@@ -625,9 +828,12 @@ void SamplerApp::lenAction(bool dbl) {   // loop x2 (the content repeats) or /2;
     lenAt_ = nowMs_ ? nowMs_ : 1;
     if (dbl) { s_.loopDouble(); say("LOOP DOUBLED"); } else { s_.loopHalve(); say("LOOP HALVED"); }
 }
-void SamplerApp::loopSave() {
-    if (!s_.saveClip(track_)) { say("NO LOOP TO SAVE"); return; }
-    say("LOOP SAVED TO LIBRARY");
+void SamplerApp::loopSave(const std::string& name) {
+    if (recordingNow() || mic_ != 0) { say("FINISH RECORDING FIRST"); return; }
+    if (!s_.saveClip(track_, name.empty() ? "Loop Track " + std::to_string(track_ + 1) : name)) {
+        say("NO LOOP TO SAVE"); return;
+    }
+    say("LOOP SAVE REQUESTED");
     previewAfterLoad_ = false;
     auditionAt_ = 0;
     commitAt_ = nowMs_ + 1;   // refresh the library shortly, once the file is written
@@ -766,20 +972,23 @@ void SamplerApp::button(int b, bool down) {
     if (wasDown == down) return; // duplicate MIDI Note On/Off must not toggle transport
     lastLed_ = ~0ull;
     if (down) held_ |= mask; else held_ &= ~mask;
-    if (b == OCT_UP) {
-        if (down) {
-            octUpAt_ = nowMs_;
+    if (b == OCT_UP || b == OCT_DOWN) {
+        if (b == OCT_UP && down) octUpAt_ = nowMs_;
+        // The two Note On events can arrive in either order or in separate
+        // USB MIDI callbacks. Show the RATE menu as soon as both are held.
+        const uint32_t octBoth = (1u << OCT_UP) | (1u << OCT_DOWN);
+        if (down && (held_ & octBoth) == octBoth && !cueSelect_) {
             cueReturnPage_ = page_;
-        } else {
+            cueSelect_ = true;
+            page_ = P_CUE;
+        }
+        if (b == OCT_UP && !down) {
             cueHold(false);
             if (cueSelect_) page_ = cueReturnPage_;
             cueSelect_ = false;
         }
-        return;   // octave changes arrive separately as EV_SCALE on short standalone taps
-    }
-    if (b == OCT_DOWN) {
-        // Modifier only: never trigger an action by pressing OCT- AFTER PLAY.
-        // The transport action is decided exactly once at PLAY/STOP key-down.
+        // Releasing only OCT- leaves the menu visible while OCT+ is held.
+        // Neither modifier changes PLAY/STOP until PLAY is actually pressed.
         return;
     }
     if (b == PLAY || b == STOP) {
@@ -814,7 +1023,7 @@ void SamplerApp::button(int b, bool down) {
     }
     if (!down) return;
     switch (b) {
-    case HOME: exitPerformanceMode(); page_ = P_HOME; break;
+    case HOME: exitPerformanceMode(); page_ = P_HOME; ++homeNavigationSerial_; break;
     case FX: page_ = P_FX; break;
     case ENV: page_ = P_ENV; break;
     case LFO: page_ = P_LFO; break;
@@ -831,6 +1040,13 @@ void SamplerApp::encoder(int i, int delta) {
     if (!delta) return;
     if (i == 0) { selectTrack(track_ + (delta > 0 ? 1 : -1)); return; }
     if (i == 6) { browse(delta); return; }
+    // In the open LIBRARY browser K1 navigates directory levels. Other
+    // pages retain their existing K1 parameter and OCT+ / CUE behavior.
+    if (i == 2 && libraryBrowserActive_) {
+        if (delta > 0) browserEnter();
+        else browserBack();
+        return;
+    }
     if (i == 1) { setAlgo(ts_[track_].algo + (delta > 0 ? 1 : -1)); return; }
     // OCT+ makes K1 the CUE subdivision control BEFORE and DURING PLAY.
     // Crucially, microphone threshold or the underlying page never steals K1.
@@ -859,8 +1075,20 @@ void SamplerApp::tick(uint32_t now) {
     const int projectState = s_.projectOperation();
     if (projectState != lastProjectOperation_) {
         lastProjectOperation_ = projectState;
-        if (projectState == 2) say("FULL PROJECT SAVED");
-        else if (projectState == -1) say("PROJECT SAVE FAILED");
+        if (projectState == 2) {
+            if (pendingProjectLabelSlot_ >= 0) {
+                const std::string path = s_.dataDir() + "/project_" +
+                    std::to_string(pendingProjectLabelSlot_ + 1) + ".name";
+                std::ofstream out(path, std::ios::trunc);
+                if (out) out << pendingProjectLabel_ << "\n";
+                pendingProjectLabel_.clear();
+                pendingProjectLabelSlot_ = -1;
+            }
+            say("FULL PROJECT SAVED");
+        } else if (projectState == -1) {
+            pendingProjectLabelSlot_ = -1; pendingProjectLabel_.clear();
+            say("PROJECT SAVE FAILED");
+        }
         else if (projectState == -2) say("PROJECT LOAD FAILED");
     }
     if (!scenesLoaded_ && st_.arrangementLoaded) {
@@ -882,7 +1110,7 @@ void SamplerApp::tick(uint32_t now) {
     if (now - lastLoss_ > 4000 && now - lastRaise_ > 2000 && gap_ > 16) { gap_ = std::max<uint32_t>(16, gap_ * 9 / 10); lastRaise_ = now; }
     if (now - lastPing_ >= 500) { lastPing_ = now; pingId_ = (pingId_ + 1) & 0x3fff; sysex(5, n14(pingId_)); }
     // audition: the cursor rested, load the entry on the selected track and play it
-    if (auditionAt_ && now >= auditionAt_) loadEntry(libCursor_);
+    // PRESETS loads the selected WAV synchronously into the sampler queue; no delayed audition.
     if (st_.sampleVersion != lastSampleVersion_) {   // a sample landed on a track: give it this track's settings
         lastSampleVersion_ = st_.sampleVersion;
         // A user choosing a different sample clears tuning at selection time.
@@ -1027,12 +1255,17 @@ void SamplerApp::draw(uint32_t now) {
     std::string line;
     if (mic_ == 1) line = "MIC: WAITING FOR SOUND";
     else if (mic_ == 2) line = fmt("MIC: RECORDING %.1fS", st_.sampleSeconds);
-    else if (cueActive_) line = std::string("NOTE REPEAT 1/") + std::to_string(1 << cueDivision_) + "  REPEATING";
+    else if (cueActive_) line = std::string("NOTE REPEAT ") + cueRateName(cueDivision_) + "  REPEATING";
     else if (cueSelect_) line = "NOTE REPEAT: K1 RATE, HOLD PLAY";
     else if (!toast().empty()) line = toast();
-    else if (auditionAt_) { const Entry& e = lib_[(size_t)libCursor_]; line = ">" + e.label + "  " + e.group; }
+    else if (browserTouchedAt_ && now - browserTouchedAt_ < 4000) {
+        const BrowserItem* item = browserSelected();
+        line = item ? std::string(item->directory ? "[DIR] " : item->entry >= 0 ? "[WAV] " : "[FILE] ") + item->label
+                    : "FM1-SAMPLER /";
+    }
     else line = std::string(kAlgo[ts_[track_].algo]) + "  " + loopText();
-    const bool hot = cueActive_ || cueSelect_ || !toast().empty() || mic_ || auditionAt_ || st_.freeRecording || recNow || st_.freeArmed;
+    const bool browserNotice = browserTouchedAt_ && now - browserTouchedAt_ < 4000;
+    const bool hot = cueActive_ || cueSelect_ || !toast().empty() || browserNotice || mic_ || st_.freeRecording || recNow || st_.freeArmed;
     const bool hasLoopBar = loopAny_ && st_.loopSamples > 0;
     const int px = (int)(st_.track_has_clip[track_] ? st_.clipPos[track_] * 216 : (hasLoopBar ? st_.pos / st_.loopSamples * 216 : 0));
     static int lastPx = -1; if (px != lastPx) { lastPx = px; rects_[24] = ~0ull; }   // the bar is redrawn under the growing fill
@@ -1061,7 +1294,7 @@ void SamplerApp::draw(uint32_t now) {
         rects_[70 + i] = ~0ull;
         rect(70 + i, cx, cy + 38, bw, 3, ACCENT);
     }
-    const char* hint = mic_ == 1 ? (page_ == P_SAVE ? "K4 = TRIGGER LEVEL  LINE = THRESHOLD" : "K1 = TRIGGER LEVEL  LINE = THRESHOLD") : mic_ == 2 ? "RECORDING  K1 ON LOOP PAGE STOPS"  : page_ == P_CUE ? "K1 RATE LIVE  OCT+ + HOLD PLAY" : page_ == P_LEN ? "TURN K1: X2 OR /2  THE LOOP REPEATS" : page_ == P_SAVE ? "SAVE AND CLEAR LOOPS: PROJECT MENU ON THE PHONE" : page_ == P_KEY ? "KEYS FOLLOW THE KEY  CHANGE ANY TIME"
+    const char* hint = mic_ == 1 ? (page_ == P_SAVE ? "K4 = TRIGGER LEVEL  LINE = THRESHOLD" : "K1 = TRIGGER LEVEL  LINE = THRESHOLD") : mic_ == 2 ? "RECORDING  K1 ON LOOP PAGE STOPS"  : page_ == P_CUE ? "OCT+ + OCT- MENU   K1 RATE / TRIPLETS" : page_ == P_LEN ? "TURN K1: X2 OR /2  THE LOOP REPEATS" : page_ == P_SAVE ? "SAVE AND CLEAR LOOPS: PROJECT MENU ON THE PHONE" : page_ == P_KEY ? "KEYS FOLLOW THE KEY  CHANGE ANY TIME"
                      : "SEL TRACK  PRE BROWSE  ALG ALGORITHM";
     drawText(90, 12, 228, 1, DIM, BLACK, hint, 38);
     needClear_ = false;
@@ -1091,7 +1324,7 @@ void SamplerApp::hero(uint32_t now, const Knobs& k) {
             for (int i = 0; i < n; i++) { float v = 0; for (int j = i * per; j < std::min(ln, (i + 1) * per); j++) v = std::max(v, live[j]); column(i, x0 + i * 4, 3, (int)(std::min(1.f, v * 1.1f) * H) + 1, i * per < ln ? PAPER : BAR, false); }
         }
     } else if (page_ == P_CUE) {
-        drawText(100, x0, y0 + 8, 3, ACCENT, BLACK, std::string("1/") + std::to_string(1 << cueDivision_), 9);
+        drawText(100, x0, y0 + 8, 3, ACCENT, BLACK, cueRateName(cueDivision_), 9);
         drawText(101, x0, y0 + 32, 2, PAPER, BLACK, cueActive_ ? "NOTE REPEAT" : "OCT+ + HOLD PLAY", 18);
     } else if (page_ == P_LEN) {   // the loop length in big letters
         char b[32];

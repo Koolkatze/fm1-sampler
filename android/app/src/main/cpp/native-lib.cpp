@@ -170,6 +170,60 @@ FN(void, importFile)(JNIEnv* env, jclass, jlong h, jstring path) {
     { std::lock_guard<std::mutex> l(e.surfaceMtx); e.app->importFile(c); }
     env->ReleaseStringUTFChars(path, c);
 }
+FN(jboolean, wantLoopExport)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    return e.app->wantLoopExport();
+}
+FN(jboolean, wantSongExport)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    return e.app->wantSongExport();
+}
+FN(jboolean, exportSong)(JNIEnv* env, jclass, jlong h, jstring directory) {
+    auto& e = *E(h);
+    const char* path = env->GetStringUTFChars(directory, nullptr);
+    const bool started = e.session.exportSong(path);
+    env->ReleaseStringUTFChars(directory, path);
+    return started;
+}
+FN(jboolean, exportLoops)(JNIEnv* env, jclass, jlong h, jstring directory) {
+    auto& e = *E(h);
+    const char* path = env->GetStringUTFChars(directory, nullptr);
+    const bool started = e.session.exportLoops(path);
+    env->ReleaseStringUTFChars(directory, path);
+    return started;
+}
+FN(jint, loopExportStatus)(JNIEnv*, jclass, jlong h) {
+    return E(h)->session.loopExportStatus();
+}
+FN(jboolean, wantPack)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    return e.app->wantPack();
+}
+FN(jint, takeDialogRequest)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    return e.app->takeDialogRequest();
+}
+FN(jstring, takePackDeletePath)(JNIEnv* env, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    const std::string path = e.app->takePackDeletePath();
+    return env->NewStringUTF(path.c_str());
+}
+FN(void, submitName)(JNIEnv* env, jclass, jlong h, jint kind, jstring name) {
+    auto& e = *E(h); const char* c = env->GetStringUTFChars(name, nullptr);
+    { std::lock_guard<std::mutex> l(e.surfaceMtx); e.app->submitName((int)kind, c); }
+    env->ReleaseStringUTFChars(name, c);
+}
+FN(jboolean, backupReady)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h);
+    std::lock_guard<std::mutex> l(e.surfaceMtx);
+    const int op = e.session.projectOperation();
+    return !e.app->recordingNow() && e.app->micState() == 0 && op != 1 && op != 3;
+}
+FN(void, refreshLibrary)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    e.app->refreshLibrary();
+    e.ui->refreshBrowserAfterImport();
+}
 FN(void, say)(JNIEnv* env, jclass, jlong h, jstring msg) {
     auto& e = *E(h); const char* c = env->GetStringUTFChars(msg, nullptr);
     { std::lock_guard<std::mutex> l(e.surfaceMtx); e.app->say(c); }

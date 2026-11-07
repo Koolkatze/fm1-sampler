@@ -39,6 +39,16 @@ int main() {
     run(2.5);
     CHECK(app.hasSample(0) && app.hasSample(1) && app.hasSample(2) && app.hasSample(3), "four default tracks load (%s, %s, %s, %s)", app.sampleLabel(0).c_str(), app.sampleLabel(1).c_str(), app.sampleLabel(2).c_str(), app.sampleLabel(3).c_str());
     CHECK(!app.hasSample(4), "track 5 is empty");
+    // Empty SONG must not cause a file picker, or publish any audio at all.
+    app.requestSongExport();
+    CHECK(!app.wantSongExport() && app.toast() == "NO SCENES IN SONG",
+          "EXPORT SONG refuses an arrangement with no scenes");
+    const std::string emptySongDir = "/tmp/fm1sampler_t2/empty_song_export";
+    CHECK(s.exportSong(emptySongDir), "empty song request resolves asynchronously");
+    for (int k = 0; k < 50 && s.loopExportStatus() == 1; ++k) run(0.01);
+    CHECK(s.loopExportStatus() == -3 &&
+          !std::filesystem::exists(emptySongDir + "/SONG.wav"),
+          "empty SONG export reports -3 and creates no WAV file");
     // algorithms on track 1
     for (int a = 0; a < 6; a++) { app.setAlgo(a); run(0.3); double r = play(60, 1.0); CHECK(r > 0.003, "algorithm %s sounds (rms %.4f)", SamplerApp::algoName(a), r); }
     app.setAlgo(0);
@@ -78,8 +88,68 @@ int main() {
     app.onMidi(sd, 3); run(0.9); app.onMidi(su, 3); run(0.3);   // the FM-1 SAVE button neither saves nor clears any more
     CHECK(app.loopExists() && app.page() == SamplerApp::P_SAVE, "SAVE button only opens the LOOP page (held for 0.9 s: loop stays)");
     app.loopSave(); run(1.0);
-    int wavs = 0; { FILE* p = popen("ls /tmp/fm1sampler_t2/sample_*.wav 2>/dev/null | wc -l", "r"); if (p) { fscanf(p, "%d", &wavs); pclose(p); } }
-    CHECK(wavs == 1, "SAVE wrote the loop into the library (%d files)", wavs);
+    int wavs = 0;
+    {
+        const std::filesystem::path saved = std::filesystem::path(s.sampleDir()) / "SAVED" / "LOOPS";
+        std::error_code ec;
+        for (const auto& file : std::filesystem::directory_iterator(saved, ec))
+            if (file.path().extension() == ".wav") ++wavs;
+    }
+    CHECK(wavs >= 1, "SAVE wrote the complete named loop into SAVED/LOOPS (%d files)", wavs);
+    // Export is a frozen audio-thread snapshot written asynchronously;
+    // track stems and the mix must exist independently of current state.
+    const std::string exportDir = "/tmp/fm1sampler_t2/public_export_staging";
+    CHECK(s.exportLoops(exportDir), "export recorded loop to staging starts");
+    for (int k = 0; k < 80 && s.loopExportStatus() == 1; ++k) run(0.05);
+    CHECK(s.loopExportStatus() == 2, "snapshot export finishes successfully");
+    {
+        std::vector<float> wav; int rate = 0;
+        CHECK(readWav(exportDir + "/TRACK_01.wav", wav, rate) &&
+              rate == sr && !wav.empty(),
+              "export WAV stem is playable and retains the original sample rate");
+        CHECK(std::filesystem::exists(exportDir + "/MASTER.wav"),
+              "export also writes the full-length master WAV");
+
+        // The exported stem must reflect exactly the live track gain, tape
+        // processing and shared FX bus, not the untouched recorded clip.
+        // Silence after volume=0 verifies there is no dry buffer bypass.
+        std::vector<float> baseline = wav;
+        s.setVolume(0, 0.f); run(0.12);
+        const std::string muted = "/tmp/fm1sampler_t2/export_mute_dsp";
+        CHECK(s.exportLoops(muted), "offline export renders zero-gain live mixer snapshot");
+        for (int k = 0; k < 120 && s.loopExportStatus() == 1; ++k) run(0.05);
+        std::vector<float> zero; int mutedRate = 0;
+        const bool mutedOk = readWav(muted + "/TRACK_01.wav", zero, mutedRate);
+        float mutedPeak = 0.f;
+        for (float v : zero) mutedPeak = std::max(mutedPeak, std::fabs(v));
+        CHECK(s.loopExportStatus() == 2 && mutedOk && zero.size() == baseline.size() &&
+              mutedPeak < 1e-4f,
+              "exported WAV follows the real post-tape mixer gain (mute = digital silence)");
+        s.setVolume(0, app.state(0).vol);
+        // Increase shared reverb/delay sends and ensure that the bounced
+        // stem is different from its previously exported PCM audio.
+        s.setSend(0, 0, 1.f); s.setSend(0, 1, 1.f);
+        s.setRetLevel(0, 1.f); s.setRetLevel(1, 1.f);
+        s.setReverb(0.98f); s.setDelay(0.12f, 0.75f);
+        run(0.15);
+        const std::string fx = "/tmp/fm1sampler_t2/export_fx_dsp";
+        CHECK(s.exportLoops(fx), "offline export accepts new reverb and tape-delay settings");
+        for (int k = 0; k < 120 && s.loopExportStatus() == 1; ++k) run(0.05);
+        std::vector<float> wet; int fxRate = 0;
+        const bool wetOk = readWav(fx + "/TRACK_01.wav", wet, fxRate);
+        double difference = 0;
+        if (wetOk && wet.size() == baseline.size())
+            for (size_t i = 0; i < wet.size(); ++i)
+                difference += std::fabs(wet[i] - baseline[i]);
+        CHECK(s.loopExportStatus() == 2 && wetOk && wet.size() == baseline.size() &&
+              difference / std::max<size_t>(1, wet.size()) > 0.001,
+              "exported stem includes shared reverb and delay returns (mean delta %.5f)",
+              difference / std::max<size_t>(1, wet.size()));
+        CHECK(std::filesystem::exists(fx + "/MASTER.wav"),
+              "wet export contains the independently rendered full master mix");
+        s.setSend(0, 0, 0.f); s.setSend(0, 1, 0.f);
+        s.setRetLevel(0, 0.35f); s.setRetLevel(1, 0.7f);
+    }
     app.loopClearTrack(); run(0.3);
     CHECK(!app.status().track_has_clip[0], "clearing one track's loop");
     app.loopClear(); run(0.3);
@@ -161,18 +231,37 @@ int main() {
       hold(SamplerApp::PLAY, false);
       CHECK(app.scale().octave == octaveBefore, "OCT modifier does not shift the app's octave");
       const auto originalPage = app.page();
+      // Both octave buttons expose the rate menu IMMEDIATELY, regardless
+      // of their order; the second button event can arrive much later.
+      hold(SamplerApp::OCT_DOWN, true); run(0.15);
+      CHECK(app.page() == originalPage, "OCT- by itself does not open RATE menu");
+      hold(SamplerApp::OCT_UP, true); run(0.04);
+      CHECK(app.page() == SamplerApp::P_CUE && app.knobs()[0].value == "1/4",
+            "OCT- then OCT+ opens NOTE REPEAT subdivision menu instantly");
+      hold(SamplerApp::OCT_DOWN, false); run(0.02);
+      CHECK(app.page() == SamplerApp::P_CUE,
+            "OCT- release keeps RATE menu visible while OCT+ remains held");
+      hold(SamplerApp::OCT_UP, false); run(0.04);
+      CHECK(app.page() == originalPage, "releasing OCT+ closes subdivision menu");
+      hold(SamplerApp::OCT_UP, true); run(0.10);
+      hold(SamplerApp::OCT_DOWN, true); run(0.04);
+      CHECK(app.page() == SamplerApp::P_CUE,
+            "OCT+ then OCT- also opens NOTE REPEAT menu instantly");
+      hold(SamplerApp::OCT_UP, false); hold(SamplerApp::OCT_DOWN, false);
+      CHECK(app.page() == originalPage,
+            "release in reverse order restores the original page");
       hold(SamplerApp::OCT_UP, true); run(2.15);
       CHECK(app.page() == SamplerApp::P_CUE && app.knobs()[0].value == "1/4",
             "OCT+ held two seconds opens CUE at 1/4");
       app.knobs()[0].set(1.f); run(0.05);
-      CHECK(app.knobs()[0].value == "1/32", "K1 chooses the 1/32 beat division");
+      CHECK(app.knobs()[0].value == "1/32T", "K1 can choose a 1/32 triplet");
       hold(SamplerApp::PLAY, true);
       run(0.15); const float cq0 = app.status().clipPos[0];
       run(0.10); const float cq1 = app.status().clipPos[0];
       CHECK(std::fabs(cq1 - cq0) < 0.15f,
             "while PLAY is held, CUE repeats a short BPM-locked region (%.3f -> %.3f)", cq0, cq1);
       enc(2, -1); run(0.05);
-      CHECK(app.knobs()[0].value == "1/16", "K1 changes the subdivision live during CUE");
+      CHECK(app.knobs()[0].value == "1/32", "K1 switches from triplet to straight during CUE");
       CHECK(app.midiControlStatus().find("K1:OK") != std::string::npos,
             "MIDI diagnostic recognizes incoming physical K1 CC18");
       hold(SamplerApp::PLAY, false); run(0.15);
@@ -191,11 +280,11 @@ int main() {
       run(0.05);
       CHECK(app.cueActive(), "OCT+ and PLAY starts CUE without a prior 2-second hold");
       enc(2, 1); run(0.08);
-      CHECK(app.cueDivision() == 5 && app.cueActive(),
-            "physical K1 selects 1/32 during held PLAY");
+      CHECK(app.cueDivision() == 11 && app.knobs()[0].value == "1/32T" && app.cueActive(),
+            "physical K1 selects 1/32T live during held PLAY");
       enc(2, -5); run(0.08);
-      CHECK(app.cueDivision() == 4 && app.cueActive(),
-            "physical K1 changes rate live while PLAY stays held");
+      CHECK(app.cueDivision() == 10 && app.knobs()[0].value == "1/32" && app.cueActive(),
+            "physical K1 switches triplet/straight live while PLAY stays held");
       hold(SamplerApp::PLAY, false); run(0.05);
       CHECK(!app.cueActive() && app.status().playing, "releasing PLAY alone restores normal loop");
       hold(SamplerApp::OCT_UP, false);
@@ -216,6 +305,18 @@ int main() {
       CHECK(diff < 1.e-6f && app.status().loopSamples == savedLoopLength,
             "CUE never modifies the recorded loop audio or duration (diff %.8f)", diff);
 
+      // Every binary rhythm has an adjacent triplet; the chosen value is
+      // accessible using K1 and visually distinct on the hardware display.
+      for (int base = 0; base < 6; ++base) {
+          app.setCueDivision(2 * base);
+          const std::string normal = app.knobs(SamplerApp::P_CUE)[0].value;
+          app.setCueDivision(2 * base + 1);
+          const std::string triplet = app.knobs(SamplerApp::P_CUE)[0].value;
+          CHECK(triplet == normal + "T",
+                "NOTE REPEAT supports straight %s and triplet %s",
+                normal.c_str(), triplet.c_str());
+      }
+      app.setCueDivision(4); // restore 1/4 for later tests
       // Hardware-only modifiers: NO added OCT+/OCT- buttons on Android.
       // The original deck transport and project editor must remain available.
       SamplerUI touchUi(app);
@@ -331,6 +432,19 @@ int main() {
         app.songMove(-1);
         CHECK(app.songOrder()[1] == 0 && app.songOrder()[2] == 2, "Song Mode can reorder steps");
         app.songMove(+1); run(0.1);
+        app.requestSongExport();
+        CHECK(app.wantSongExport(), "valid three-step SONG requests processed export");
+        const std::string songDir = "/tmp/fm1sampler_t2/song_export_three_scenes";
+        CHECK(s.exportSong(songDir), "export entire C1-D1-C1 SONG starts");
+        for (int k = 0; k < 220 && s.loopExportStatus() == 1; ++k) run(0.04);
+        std::vector<float> songAudio; int songRate = 0;
+        const bool songOK = readWav(songDir + "/SONG.wav", songAudio, songRate);
+        double songEnergy = 0;
+        if (songOK) for (float v : songAudio) songEnergy += (double)v * v;
+        CHECK(s.loopExportStatus() == 2 && songOK && songRate == sr &&
+              songAudio.size() > (size_t)compositionLength * 2 * 3 &&
+              songEnergy > 0.01,
+              "EXPORT SONG renders all 3 ordered scenes plus the reverb/delay tail");
         app.playSong(); run(0.12);
         CHECK(app.status().songPlaying && app.status().songStep == 0 &&
               app.status().activeScene == 0, "Song starts on its first scene");
@@ -371,17 +485,18 @@ int main() {
         for (bool light : {true, false}) {
             theme::apply(light);
             ui.frame(now + 1);
-            bool restart = false, repeat = false, hide = false, midiStatus = false, last = false;
+            bool restart = false, repeat = false, noteMenu = false;
+            bool hide = false, midiStatus = false, last = false;
             for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
                 restart |= op.text == "OCT− + PLAY/STOP: RESTART LOOP";
-                repeat |= op.text.find("NOTE REPEAT") != std::string::npos &&
-                          op.text.find("OCT+ + PLAY/STOP") != std::string::npos;
+                repeat |= op.text == "OCT+ + PLAY: NOTE REPEAT";
+                noteMenu |= op.text == "OCT+ + OCT- = NOTE REPEAT MENU (K1)";
                 hide |= op.text == "HIDE";
                 midiStatus |= op.text.find("MIDI OCT-:") != std::string::npos;
                 last |= op.text.find("LAST CH") != std::string::npos;
             }
-            CHECK(restart && repeat && hide && midiStatus && last,
-                  "physical shortcuts and incoming MIDI diagnostics in %s mode",
+            CHECK(restart && repeat && noteMenu && hide && midiStatus && last,
+                  "HOME info includes OCT+ + OCT- = NOTE REPEAT MENU and MIDI diagnostics in %s mode",
                   light ? "light" : "dark");
         }
         theme::apply(true);
@@ -393,7 +508,8 @@ int main() {
         bool hasInfo = false, hasRepeat = false;
         for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
             hasInfo |= op.text == "INFO";
-            hasRepeat |= op.text.find("OCT+ + PLAY/STOP") != std::string::npos;
+            hasRepeat |= op.text.find("OCT+ + PLAY: NOTE REPEAT") != std::string::npos ||
+                         op.text.find("OCT+ + OCT- = NOTE REPEAT MENU") != std::string::npos;
         }
         CHECK(hasInfo && !hasRepeat, "collapsed legend displays only the compact INFO button");
         {
@@ -428,7 +544,7 @@ int main() {
             narrowProject |= op.text == "PROJECT"; narrowSong |= op.text == "SONG MODE";
         }
         CHECK(narrowProject && !narrowSong, "narrow screen shows PROJECT alone");
-        ui.touch(0, 490, 32, now + 3); ui.touch(2, 490, 32, now + 3);
+        ui.touch(0, 380, 32, now + 3); ui.touch(2, 380, 32, now + 3);
         ui.frame(now + 4);
         narrowProject = narrowSong = false;
         for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
@@ -564,17 +680,43 @@ int main() {
             fullLoad |= op.text == "LOAD PROJECT";
         }
         CHECK(fullSave && fullLoad, "PROJECT page has distinct SAVE/LOAD COMPLETE PROJECT actions");
-        ui.touch(0, 243.f, 64.f, now + 9);
-        ui.touch(2, 243.f, 64.f, now + 9);
+        bool hasSongExport = false;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT)
+            hasSongExport |= op.text == "EXPORT SONG";
+        CHECK(hasSongExport, "PROJECT shows EXPORT SONG beside CLOSE");
+        ui.touch(0, 80.f, 64.f, now + 9);
+        ui.touch(2, 80.f, 64.f, now + 9);
         ui.frame(now + 10);
-        bool slotPicker = false, slot1 = false, slot2 = false;
+        bool slotPicker = false, slot1 = false, slot2 = false, page1 = false;
         for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
             slotPicker |= op.text == "SAVE COMPLETE PROJECT";
             slot1 |= op.text == "PROJECT 1";
             slot2 |= op.text == "PROJECT 2";
+            page1 |= op.text == "PAGE 1 / 2";
         }
-        CHECK(slotPicker && slot1 && slot2,
-              "full-project save picker shows independent slots and overwrite protection");
+        CHECK(slotPicker && slot1 && slot2 && page1,
+              "full-project save picker shows independent slots 1-8 on page 1");
+        // 860 x 400 view: slot panel spans x=192..667, y=51..349.
+        // Navigate to page 2 and verify all new slots are addressable.
+        ui.touch(0, 602, 291, now + 11);
+        ui.touch(2, 602, 291, now + 11);
+        ui.frame(now + 12);
+        bool page2 = false, slot9 = false, slot16 = false, previousHidden = true;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+            page2 |= op.text == "PAGE 2 / 2";
+            slot9 |= op.text == "PROJECT 9";
+            slot16 |= op.text == "PROJECT 16";
+            if (op.text == "PROJECT 1") previousHidden = false;
+        }
+        CHECK(page2 && slot9 && slot16 && previousHidden,
+              "page 2 shows slots 9-16 without replacing slots 1-8");
+        CHECK(Session::kProjectSlots == 16,
+              "FMP2 storage exposes 16 slots with unchanged filenames for older projects");
+        CHECK(app.saveFullProject(15), "slot 16 accepts full-project save");
+        for (int spin = 0; spin < 25 && app.fullProjectOperation() == 1; ++spin) run(0.12);
+        CHECK(app.fullProjectOperation() == 2 &&
+              std::filesystem::exists("/tmp/fm1sampler_t2/project_16.fm1p"),
+              "project_16.fm1p saved; slot 1 remains untouched");
         ui.openProject(false);
         app.loopClear(); run(0.25);
     }
@@ -622,10 +764,12 @@ int main() {
     { double ph = 0; for (long i = 0; i < (long)(1.0 * sr) / 256; i++) { for (int k = 0; k < 256; k++) { float v = 0.4f * std::sin(ph); ph += 2 * M_PI * 440.0 / sr; in[2 * k] = in[2 * k + 1] = v; } std::fill(buf.begin(), buf.end(), 0.f); s.process(buf.data(), in.data(), 256); std::this_thread::sleep_for(std::chrono::microseconds(200)); if (i % 5 == 0) { now += 33; app.tick(now); } } std::fill(in.begin(), in.end(), 0.f); }
     CHECK(app.micState() == 2, "mic sampling recording");
     enc(2, -1); run(3.0);
-    const bool micInUserLibrary = std::any_of(app.library().begin(), app.library().end(),
-                                            [](const SamplerApp::Entry& e) { return e.group == "User"; });
-    CHECK(app.micState() == 0 && micInUserLibrary,
-          "mic sample saved into User library even when project assets have their own category (%s)",
+    const bool micInSaved = std::any_of(app.library().begin(), app.library().end(),
+                                            [](const SamplerApp::Entry& e) {
+                                                return e.pack == "SAVED" && e.folder == "RECORDINGS";
+                                            });
+    CHECK(app.micState() == 0 && micInSaved,
+          "microphone recording is available in SAVED/RECORDINGS (%s)",
           app.sampleLabel(0).c_str());
     // import from disk: a WAV dropped into the data dir
     { std::ifstream src(std::string(getenv("HOME")) + "/fm1-sampler/samples/Bass/Fuzz.wav", std::ios::binary); std::ofstream dst("/tmp/fm1sampler_t2/sample_FromDisk.wav", std::ios::binary); dst << src.rdbuf(); }
@@ -663,6 +807,141 @@ int main() {
         CHECK(open > 0.01f && ducked < open * 0.6f, "sidechain: track 2 ducked by track 1 (%.3f -> %.3f)", open, ducked);
         { auto k = app.knobs(SamplerApp::P_MIX); k[1].set(0.f); }
         app.selectTrack(1); app.setAlgo(0); app.selectTrack(0); app.setAlgo(0);
+    }
+    {   // Navigation stays on HOME: PRESETS selects a row in its current folder
+        // and loads its WAV immediately. ENTER navigates into folders only;
+        // BACK returns one level. Android's document picker never opens.
+        namespace fs = std::filesystem;
+        const fs::path root(s.sampleDir());
+        const fs::path nested = root / "PACKS" / "My Imported ZIP" / "Drums" / "Kicks";
+        fs::create_directories(nested);
+        fs::copy_file(root / "Bass" / "Fuzz.wav", nested / "01_fuzz.wav",
+                      fs::copy_options::overwrite_existing);
+        fs::copy_file(root / "Bass" / "Fuzz.wav", nested / "02_fuzz.wav",
+                      fs::copy_options::overwrite_existing);
+        app.refreshLibrary();
+        app.browserRoot();
+        app.selectTrack(0);
+        SamplerUI browser(app);
+        browser.setSize(860.f, 400.f, 0.f, 0.f);
+        browser.frame(now);
+        auto click = [&](float x, float y) {
+            browser.touch(0, x, y, now);
+            browser.touch(2, x, y, now);
+            browser.frame(now);
+        };
+        auto hasText = [&](const std::string& label) {
+            for (const auto& op : browser.ops())
+                if (op.type == UiOp::TEXT && op.text.find(label) != std::string::npos) return true;
+            return false;
+        };
+        CHECK(hasText("BACK") && hasText("ENTER") && hasText("FM1-SAMPLER") &&
+              !hasText("+ IMPORT ZIP"),
+              "HOME shows only inline BACK/ENTER and a filename, no modal browser");
+        bool largeLeftBadge = false, decoratedTrack = false, trackCaption = false;
+        for (const auto& op : browser.ops()) {
+            if (op.type == UiOp::TEXT && op.text == "T1" &&
+                op.f[0] > 395 && op.f[0] < 440 && op.f[1] < 140 &&
+                op.f[2] >= 25)
+                largeLeftBadge = true;
+            if (op.type == UiOp::TEXT && op.text == "TRACK" &&
+                op.f[0] > 380 && op.f[0] < 440 && op.f[1] < 140)
+                trackCaption = true;
+            // Reject the old badge background, border and orange stripe.
+            if ((op.type == UiOp::RRECT || op.type == UiOp::STROKE) &&
+                op.f[0] >= 385 && op.f[0] < 440 && op.f[1] >= 30 &&
+                op.f[1] < 140 && op.f[2] < 60 && op.f[3] > 40)
+                decoratedTrack = true;
+        }
+        CHECK(largeLeftBadge && !decoratedTrack && !trackCaption,
+              "ONLY large orange T1 to the left of waveform: no TRACK caption, background, frame or stripe");
+        click(410.f, 80.f);
+        CHECK(app.track() == 1 && hasText("T2"),
+              "touching large waveform-side T1/T2 badge cycles selected track");
+        click(351.f, 184.f);
+        CHECK(app.browserDir().empty() && !app.wantFile() &&
+              hasText("+ IMPORT ZIP") && hasText("OFFICIAL") &&
+              hasText("PACKS") && hasText("PROYECTOS") && hasText("SAVED"),
+              "HOME LIBRARY opens previous in-app library page with IMPORT ZIP");
+        click(205.f, 365.f); // actual + IMPORT ZIP button in library sheet
+        CHECK(app.wantPack() && !app.wantPack() && !app.wantFile(),
+              "library + IMPORT ZIP requests ZIP picker without changing the sample cursor");
+        CHECK(hasText("SAVE BACKUP") && hasText("IMPORT BACKUP"),
+              "LIBRARY footer presents both portable backup controls");
+        click(349.f, 365.f);
+        CHECK(app.takeDialogRequest() == 4,
+              "SAVE BACKUP requests Android Create Document for a full library ZIP");
+        click(537.f, 365.f);
+        CHECK(app.takeDialogRequest() == 5,
+              "IMPORT BACKUP requests Android Open Document and verified restore");
+        app.browserBack(); // deselect to show the archive root itself
+        enc(6, 1); // first item: OFFICIAL
+        CHECK(app.browserSelected() && app.browserSelected()->label == "OFFICIAL",
+              "PRESETS turns to the next directory entry");
+        enc(6, 1); // second item: PACKS
+        CHECK(app.browserSelected() && app.browserSelected()->label == "PACKS",
+              "PRESETS moves row by row within root, including folders");
+        click(200.f, 164.f); // sheet ENTER -> PACKS
+        CHECK(app.browserDir() == "PACKS" && hasText("My Imported ZIP"),
+              "ENTER visits selected folder, showing its name in HOME");
+        click(200.f, 164.f); // sheet ENTER -> pack
+        CHECK(app.browserDir() == "PACKS/My Imported ZIP",
+              "ENTER visits imported ZIP's own subdirectory");
+        click(200.f, 164.f); // sheet ENTER -> Drums
+        CHECK(app.browserDir() == "PACKS/My Imported ZIP/Drums",
+              "ENTER visits nested Drums folder");
+        app.selectTrack(4);
+        click(200.f, 164.f); // sheet ENTER -> Kicks; auto-select first WAV on track 5
+        run(1.0);
+        browser.frame(now);
+        CHECK(app.browserDir() == "PACKS/My Imported ZIP/Drums/Kicks" &&
+              app.browserSelected() && app.browserSelected()->label == "01_fuzz.wav" &&
+              app.sampleLabel(4) == "01_fuzz",
+              "first WAV is loaded as preset upon selection; no ENTER required");
+        enc(6, 1); // PRESETS selects next WAV; must load without ENTER
+        run(1.0); browser.frame(now);
+        CHECK(app.browserSelected() && app.browserSelected()->label == "02_fuzz.wav" &&
+              app.sampleLabel(4) == "02_fuzz",
+              "PRESETS auto-loads next WAV immediately without pressing ENTER");
+        click(200.f, 164.f); // ENTER over WAV does not change folder or sample
+        CHECK(app.browserDir() == "PACKS/My Imported ZIP/Drums/Kicks" &&
+              app.sampleLabel(4) == "02_fuzz",
+              "ENTER on an audio file has no action (already loaded)");
+        click(200.f, 126.f); // sheet BACK highlights Kicks in its parent
+        CHECK(app.browserDir() == "PACKS/My Imported ZIP/Drums" &&
+              app.browserSelected() && app.browserSelected()->label == "Kicks",
+              "BACK returns one level and highlights previous folder");
+        click(200.f, 126.f); click(200.f, 126.f); click(200.f, 126.f);
+        CHECK(app.browserDir().empty() && hasText("FM1-SAMPLER"),
+              "BACK returns all the way to internal FM1-SAMPLER root");
+        click(200.f, 126.f); // BACK again highlights the FM1-SAMPLER root itself
+        CHECK(app.browserDir().empty() && app.browserSelected() == nullptr &&
+              hasText("FM1-SAMPLER"),
+              "BACK on FM1-SAMPLER root selects the archive, without a child");
+        click(200.f, 164.f); // ENTER directly from archive root: NO PRESETS detent needed
+        CHECK(app.browserDir() == "PACKS" && hasText("My Imported ZIP"),
+              "ENTER from FM1-SAMPLER root reopens last selected folder on LIBRARY sheet");
+        click(200.f, 126.f); // PACKS -> root, still highlighted
+        click(200.f, 126.f); // deselect child; FM1-SAMPLER root
+        CHECK(app.browserDir().empty() && app.browserSelected() == nullptr,
+              "repeated BACK can reach the unselected archive root again");
+        click(660.f, 29.f); // CLOSE the library sheet to get back to HOME
+        CHECK(!hasText("+ IMPORT ZIP") && hasText("LIBRARY"),
+              "closing the library sheet restores HOME controls");
+        click(91.f, 26.f); // HOME's ENTER must use the same root navigator
+        CHECK(app.browserDir() == "PACKS" && hasText("My Imported ZIP"),
+              "HOME ENTER from FM1-SAMPLER root navigates correctly without PRESETS");
+        click(40.f, 26.f); // HOME BACK -> root, highlighted PACKS
+        click(40.f, 26.f); // HOME BACK -> root itself
+        click(91.f, 26.f); // HOME ENTER again, must not lock up
+        CHECK(app.browserDir() == "PACKS" && !app.wantFile(),
+              "BACK then ENTER at root remains repeatable without external file picker");
+        click(351.f, 248.f);
+        CHECK(hasText("SAVE PROJECT") && hasText("LOAD PROJECT") &&
+              hasText("EXPORT ALL LOOPS"), "PROJECT retains saving and exporting actions");
+        click(351.f, 67.f);
+        CHECK(app.wantLoopExport() && !app.wantLoopExport(),
+              "EXPORT ALL LOOPS still requests Android's public download export");
     }
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL OK", fails);
     return fails ? 1 : 0;

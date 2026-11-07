@@ -13,6 +13,17 @@ public final class Native {
     public static native void midiIn(long h, byte[] data, int off, int n);
     public static native byte[] tick(long h, long nowMs);
     public static native boolean wantFile(long h);
+    public static native boolean wantPack(long h);
+    public static native boolean wantLoopExport(long h);
+    public static native boolean wantSongExport(long h);
+    public static native boolean exportLoops(long h, String temporaryDirectory);
+    public static native boolean exportSong(long h, String temporaryDirectory);
+    public static native int loopExportStatus(long h);
+    public static native int takeDialogRequest(long h);
+    public static native String takePackDeletePath(long h);
+    public static native void submitName(long h, int kind, String name);
+    public static native boolean backupReady(long h); // no recording or full-project write/read underway
+    public static native void refreshLibrary(long h);
     public static native void importFile(long h, String path);
     public static native void say(long h, String message);
     public static native void uiLink(long h, boolean midi, boolean usbAudio);

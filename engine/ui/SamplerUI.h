@@ -14,6 +14,7 @@ public:
     void setSize(float w, float h, float topInset, float bottomInset) { W_ = w; H_ = h; top_ = topInset; bottom_ = bottomInset; }
     void setLink(bool midi, bool usbAudio) { linkMidi_ = midi; linkAudio_ = usbAudio; }
     void frame(uint32_t nowMs);
+    void refreshBrowserAfterImport() { if (sheetOpen_) buildBrowserRows(); }
     void openProject(bool on) { projectOpen_ = on; }
     void setEditor(bool on) { editor_ = on; }   // false: the cassette deck, true: sample / page editor
     const std::vector<UiOp>& ops() const { return ops_; }
@@ -53,6 +54,15 @@ private:
     void sampleArea(Rect r);
     void pagePanel(Rect r);
     void librarySheet();
+    void openLibrary();
+    void buildBrowserRows();
+    void browserBack();
+    void browserEnter();
+    struct BrowserRow {
+        std::string label, path;
+        int entry = -1;
+        bool directory = false;
+    };
     void projectSheet();
     void projectSlotsSheet();
 
@@ -63,13 +73,18 @@ private:
     Hit active_{};
     bool haveActive_ = false;
     uint32_t now_ = 0;
+    uint32_t seenHomeNavigation_ = 0;
     Session::Status st_{};
     bool linkMidi_ = false, linkAudio_ = false, sheetOpen_ = false, editor_ = false, projectOpen_ = false;
     float sheetScroll_ = 0, sheetLastY_ = 0, sheetMoved_ = 0;
+    std::string browseDir_;   // path relative to FM1-SAMPLER, empty means root
+    std::vector<BrowserRow> browseRows_;
+    int browseSelected_ = -1; // -1 means currently viewing the root or directory itself
     Rect sheetList_{0, 0, 0, 0};
     uint32_t clearArmed_ = 0, sceneSaveAt_ = 0, sceneDeleteAt_ = 0;
     int sceneArmedSlot_ = -1, deleteArmedSlot_ = -1;
     int projectSlotsMode_ = 0; // 0 closed, 1 save complete project, 2 load
+    int projectPage_ = 0; // pages 1/2 and 2/2, eight slots per page
     int projectConfirmSlot_ = -1;
     uint32_t projectConfirmUntil_ = 0;
     bool projectRight_ = false;  // narrow screens: show columns in separate tabs

@@ -31,7 +31,7 @@ public:
         std::function<void(float)> set;      // absolute 0..1 (touch)
     };
     using Knobs = std::array<Knob, 4>;
-    struct Entry { std::string label, group, path; bool kit; };
+    struct Entry { std::string label, group, path; bool kit = false; std::string pack, folder; };
     struct ScaleState { int scale = 3, root = 0, octave = 0, mode = 0; };
 
     SamplerApp(Session& s, Send send);
@@ -53,18 +53,53 @@ public:
     void setAlgo(int a);
     const std::vector<Entry>& library() const { return lib_; }
     int libraryCursor() const { return libCursor_; }
-    void browse(int delta);                       // PRESETS: moves the cursor, audition after a short pause
+    // PRESETS rotates within the current FM1-SAMPLER directory. Audio loads
+    // immediately upon selection; ENTER is reserved for entering folders.
+    struct BrowserItem { std::string label, path; int entry = -1; bool directory = false; };
+    const std::vector<BrowserItem>& browserItems() const { return browserItems_; }
+    const BrowserItem* browserSelected() const {
+        return browserIndex_ >= 0 && browserIndex_ < (int)browserItems_.size()
+            ? &browserItems_[(size_t)browserIndex_] : nullptr;
+    }
+    const std::string& browserDir() const { return browserDir_; }
+    int browserIndex() const { return browserIndex_; }
+    void browse(int delta);
+    void browserEnter();
+    void browserBack();
+    void browserRoot();
+    void browserSelect(int index);             // shared touch and PRESETS cursor, auto-loads selected WAV
+    void setLibraryBrowserActive(bool active) { libraryBrowserActive_ = active; }
+    bool canDeleteBrowserSelection() const { return !selectedPackDeletePath().empty(); }
+    void requestDeleteBrowserSelection();
+    std::string takePackDeletePath();
+    uint32_t homeNavigationSerial() const { return homeNavigationSerial_; }
     void loadEntry(int index);                    // at once, on the selected track
     void refreshLibrary();
     void importFile(const std::string& wavPath);  // a file picked from the disk (already copied into the data dir as a WAV)
     bool wantFile() { bool w = wantFile_; wantFile_ = false; return w; }   // the UI asked for the disk picker: Java polls this
     void requestFile() { wantFile_ = true; }
+    void requestPack() { wantPack_ = true; }
+    void requestBackupExport() { dialogRequest_ = 4; }  // Android SAF CREATE_DOCUMENT
+    void requestBackupImport() { dialogRequest_ = 5; }  // Android SAF OPEN_DOCUMENT
+    bool wantPack() { bool result = wantPack_; wantPack_ = false; return result; }
+    void requestLoopExport() { wantLoopExport_ = true; }
+    bool wantLoopExport() { bool result = wantLoopExport_; wantLoopExport_ = false; return result; }
+    void requestSongExport() {
+        if (songOrder_.empty()) { say("NO SCENES IN SONG"); return; }
+        wantSongExport_ = true;
+    }
+    bool wantSongExport() { const bool requested = wantSongExport_; wantSongExport_ = false; return requested; }
+    void requestName(int kind) { dialogRequest_ = kind; } // 1 named loop, 2 named project slot
+    void requestSaveProjectName(int slot) { pendingProjectSlot_ = slot; dialogRequest_ = 2; }
+    int takeDialogRequest() { int request = dialogRequest_; dialogRequest_ = 0; return request; }
+    void submitName(int kind, const std::string& name);
+    std::string projectName(int slot) const;
     // looper and recorder
     void transportPlay();
     void transportSet(bool play);                 // phone PLAY / STOP keys
     void cueHold(bool down);                     // momentary CUE from the phone touch controls
     void restartLoop();                           // OCT- + PLAY or STOP: immediate restart, no long press
-    void setCueDivision(int division);            // 0..5 selects 1/1..1/32 on phone or K1
+    void setCueDivision(int division);            // 0..11: 1/1,1/1T,...1/32,1/32T
     int cueDivision() const { return cueDivision_; }
     bool cueModifierHeld() const { return !!(held_ & (1u << OCT_UP)); }
     bool octDownModifierHeld() const { return !!(held_ & (1u << OCT_DOWN)); }
@@ -77,7 +112,7 @@ public:
     void scrub(int phase /*0 down 1 move 2 up*/, float fraction) { if (phase == 0) s_.scrubBegin(fraction); else if (phase == 1) s_.scrubMove(fraction); else s_.scrubEnd(); }   // phone timeline
     void autoTune();                              // MELODIC / ONE-SHOT: detect the pitch of the sample and tune the keys to it (again: reset)
     bool tuned(int t) const { return ts_[t].tuned; }
-    void loopSave();
+    void loopSave(const std::string& name = "");
     void loopClear();                             // every loop of every track (phone PROJECT menu)
     void loopClearTrack();                        // the loop of the selected track
     void micSample();                             // toggle: record the microphone into a new sample for the selected track
@@ -186,13 +221,30 @@ private:
     uint32_t repaintAt_ = 0; int repaintCount_ = 0;
     // library
     std::vector<Entry> lib_;
+    void rebuildBrowser(const std::string& preferred = "");
+    void loadBrowserSelection();
+    std::string selectedPackDeletePath() const;
+    std::string pendingPackDeletePath_;
+    bool libraryBrowserActive_ = false;
+    uint32_t homeNavigationSerial_ = 0;
+    std::string browserDir_; // Relative to FM1-SAMPLER root
+    std::vector<BrowserItem> browserItems_;
+    int browserIndex_ = -1;
+    // BACK on the FM1-SAMPLER root shows the archive itself (-1). ENTER
+    // must still reopen the previously highlighted root folder, not stall.
+    int rootLastIndex_ = 0;
+    uint32_t browserTouchedAt_ = 0; // selected folder/file shown temporarily on physical FM-1 LCD
     // Absolute assignment paths survive library rebuilds. Entry indices
     // are UI cursors only; they must never determine what audio gets archived.
     std::array<std::string, kTracks> trackSourcePaths_{};
     std::array<std::string, kTracks> trackSourceNames_{};
     int libCursor_ = 0, loadedCursor_ = -1;
     uint32_t auditionAt_ = 0, previewOffAt_ = 0; int previewNote_ = -1, previewTrack_ = -1;
-    bool wantFile_ = false, previewAfterLoad_ = false;
+    bool wantFile_ = false, wantPack_ = false, wantLoopExport_ = false,
+         wantSongExport_ = false, previewAfterLoad_ = false;
+    int dialogRequest_ = 0, pendingProjectSlot_ = -1;
+    int pendingProjectLabelSlot_ = -1;
+    std::string pendingProjectLabel_;
     // loop / recorder
     Session::Status st_{};
     bool loopAny_ = false;
@@ -221,7 +273,7 @@ private:
     int heldNote_[128];
     int keyNotes_[128][3] = {}; int keyCount_[128] = {};
     bool fwDirty_ = true; uint32_t lenAt_ = 0;
-    int cueDivision_ = 2;                 // 1/4 default, selectable 1/1..1/32
+    int cueDivision_ = 4;                 // 1/4 default, interleaved straight / triplet up to 1/32T
     bool cueActive_ = false, cueSelect_ = false;
     uint32_t octUpAt_ = 0;
     bool playModified_ = false;
