@@ -53,8 +53,11 @@ jobs:
           mkdir -p /tmp/fm1-backup-java-test
           javac -d /tmp/fm1-backup-java-test \
             android/app/src/main/java/com/ferluht/fm1sampler/LibraryBackupArchive.java \
-            android/app/src/test/java/com/ferluht/fm1sampler/LibraryBackupArchiveHostTest.java
+            android/app/src/main/java/com/ferluht/fm1sampler/PackDeletion.java \
+            android/app/src/test/java/com/ferluht/fm1sampler/LibraryBackupArchiveHostTest.java \
+            android/app/src/test/java/com/ferluht/fm1sampler/PackDeletionHostTest.java
           java -cp /tmp/fm1-backup-java-test com.ferluht.fm1sampler.LibraryBackupArchiveHostTest
+          java -cp /tmp/fm1-backup-java-test com.ferluht.fm1sampler.PackDeletionHostTest
       - name: Install Android toolchain
         run: |
           echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
@@ -147,6 +150,9 @@ jobs:
           - **Stable update signing:** releases require a private, persistent signing keystore and a pinned certificate digest, configured as GitHub Secrets/Variables, or publication is blocked. Once configured and migrated, future versions signed with this identity can update in place without deleting app-private projects, samples or PACKS.
           - **EXPORT ALL LOOPS now bounces the real DSP:** each WAV stem includes tape speed/varispeed, cassette saturation and tone, LO-FI, WOBBLE, hiss, volume, pan, LFO volume/pan, sidechain and its own stereo reverb/delay sends and returns. MASTER.wav mixes all loop tracks through the shared FX and master soft limiter.
           - **Stereo WAVs remain synchronized** across tracks, include effect tails from the preceding loop, and are published to Downloads with no mutation of the recorded source clips. Due to nonlinear master limiting and echo feedback, the individual wet stems are not guaranteed to sum sample-identically to MASTER. SOURCE samples already processed into recorded loops are not double-processed.
+          - **HOME key:** closes PROJECT, LIBRARY and EDIT overlays, returning to the HOME cassette deck.
+          - **LIBRARY K1:** clockwise enters the selected folder, counterclockwise returns to its parent. Instructions appear in English inside LIBRARY.
+          - **DELETE in LIBRARY:** confirmation with CANCEL/DELETE for files, subfolders or packs inside PACKS only; protected project, other samples and ZIP backup paths are not eligible.
           - **HOME INFO:** clearly displays `OCT+ + OCT- = NOTE REPEAT MENU (K1)` on its own line, with other MIDI button shortcuts and the incoming MIDI status; INFO/HIDE behavior remains.
           - **ADB recovery:** the repository now includes `tools/FM1_ADB_Recuperacion_0389.py` plus `docs/ADB_RECUPERACION_0389.md`, for safe `.tar` restore and single `.fm1p` imports (no ZIP conversion). Includes host regression tests.
           - **Complete README:** updated feature reference for the cassette deck, six synth modes, FX/ENV/LFO/ARP/TAPE, clips and scenes, SONG, complete projects, library, ZIP backup and ADB TAR/FMP2 recovery.
