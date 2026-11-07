@@ -82,6 +82,18 @@ void SamplerUI::button(Rect r, const std::string& label, bool on, std::function<
 // ---- frame ----
 void SamplerUI::frame(uint32_t now) {
     now_ = now;
+    // Physical HOME closes any overlay or sample editor, even if the
+    // native parameter page was already HOME before the button was pressed.
+    if (seenHomeNavigation_ != app_.homeNavigationSerial()) {
+        seenHomeNavigation_ = app_.homeNavigationSerial();
+        sheetOpen_ = false;
+        projectOpen_ = false;
+        projectSlotsMode_ = 0;
+        projectConfirmSlot_ = -1;
+        projectConfirmUntil_ = 0;
+        editor_ = false;
+    }
+    app_.setLibraryBrowserActive(sheetOpen_);
     st_ = app_.status();
     syncColors();
     ops_.clear(); hits_.clear();
@@ -845,6 +857,7 @@ void SamplerUI::openLibrary() {
     app_.browserRoot();
     projectOpen_ = false;
     sheetOpen_ = true;
+    app_.setLibraryBrowserActive(true);
     browseDir_.clear();
     sheetScroll_ = 0;
     buildBrowserRows();
@@ -883,6 +896,8 @@ void SamplerUI::librarySheet() {
     rrect(box, R_CARD, SURFACE); stroke(box, R_CARD, ACCENT, 1);
     tap(box, [] {});
     text(box.x + 15, box.y + 20, 14, TEXT, "FM1-SAMPLER", 0, true);
+    text(box.x + 15, box.y + 38, 9, DIM,
+         "K1 RIGHT: ENTER SELECTED FOLDER   K1 LEFT: GO BACK", 0, true);
     button({box.x + box.w - 70, box.y + 5, 60, 26}, "CLOSE", false,
            [this] { sheetOpen_ = false; }, 9);
     const float top = box.y + 46;
@@ -943,12 +958,17 @@ void SamplerUI::librarySheet() {
     const float actionsY = box.y + box.h - 35;
     text(box.x + box.w - 14, actionsY - 9, 8.7f, DIM,
          std::to_string(browseRows_.size()) + " ITEMS  /  PRESETS: SELECT", 2, false);
-    button({box.x + 15, actionsY, 129, 28}, "+ IMPORT ZIP", false,
-           [this] { app_.requestPack(); }, 9.4f, true);
-    button({box.x + 155, actionsY, 148, 28}, "SAVE BACKUP", false,
-           [this] { app_.requestBackupExport(); }, 9.8f);
-    button({box.x + 314, actionsY, 161, 28}, "IMPORT BACKUP", false,
-           [this] { app_.requestBackupImport(); }, 9.8f);
+    const float gap = 7.f, leftPad = 15.f;
+    const float actionWidth = std::max(40.f, (box.w - 2 * leftPad - 3 * gap) / 4.f);
+    button({box.x + leftPad, actionsY, actionWidth, 28}, "+ IMPORT ZIP", false,
+           [this] { app_.requestPack(); }, 9, true);
+    button({box.x + leftPad + actionWidth + gap, actionsY, actionWidth, 28},
+           "SAVE BACKUP", false, [this] { app_.requestBackupExport(); }, 9);
+    button({box.x + leftPad + 2 * (actionWidth + gap), actionsY, actionWidth, 28},
+           "IMPORT BACKUP", false, [this] { app_.requestBackupImport(); }, 9);
+    button({box.x + leftPad + 3 * (actionWidth + gap), actionsY, actionWidth, 28},
+           "DELETE", false, [this] { app_.requestDeleteBrowserSelection(); },
+           9, app_.canDeleteBrowserSelection());
 }
 
 // PROJECT: original loop actions on the left; scene / song sequencer on the
