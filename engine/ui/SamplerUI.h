@@ -14,6 +14,7 @@ public:
     void setSize(float w, float h, float topInset, float bottomInset) { W_ = w; H_ = h; top_ = topInset; bottom_ = bottomInset; }
     void setLink(bool midi, bool usbAudio) { linkMidi_ = midi; linkAudio_ = usbAudio; }
     void frame(uint32_t nowMs);
+    void pipFrame(uint32_t nowMs);
     void refreshBrowserAfterImport() { if (sheetOpen_) buildBrowserRows(); }
     void openProject(bool on) { projectOpen_ = on; }
     void setEditor(bool on) { editor_ = on; }   // false: the cassette deck, true: sample / page editor

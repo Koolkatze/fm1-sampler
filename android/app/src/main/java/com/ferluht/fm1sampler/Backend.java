@@ -24,6 +24,8 @@ public class Backend {
     final Handler main = new Handler(Looper.getMainLooper());
     final MidiManager midi;
     final AudioManager am;
+    MidiManager.DeviceCallback midiCallback;
+    AudioDeviceCallback audioCallback;
     MidiDevice device;
     volatile MidiInputPort toFm1;
     MidiOutputPort fromFm1;
@@ -62,16 +64,18 @@ public class Backend {
         running = true;
         startAudio();
         if (midi != null) {
-            midi.registerDeviceCallback(new MidiManager.DeviceCallback() {
+            midiCallback = new MidiManager.DeviceCallback() {
                 @Override public void onDeviceAdded(MidiDeviceInfo i) { try { connectMidi(); } catch (Throwable t) { Log.w(TAG, "midi add: " + t); } }
                 @Override public void onDeviceRemoved(MidiDeviceInfo i) { try { disconnectMidi(); connectMidi(); } catch (Throwable t) { Log.w(TAG, "midi remove: " + t); } }
-            }, main);
+            };
+            midi.registerDeviceCallback(midiCallback, main);
             connectMidi();
         }
-        am.registerAudioDeviceCallback(new AudioDeviceCallback() {
+        audioCallback = new AudioDeviceCallback() {
             @Override public void onAudioDevicesAdded(AudioDeviceInfo[] a) { try { restartAudioIfUsbChanged(); if (micWanted && !micStarted) startMic(); } catch (Throwable t) { Log.w(TAG, "audio add: " + t); } }
             @Override public void onAudioDevicesRemoved(AudioDeviceInfo[] a) { try { restartAudioIfUsbChanged(); } catch (Throwable t) { Log.w(TAG, "audio remove: " + t); } }
-        }, main);
+        };
+        am.registerAudioDeviceCallback(audioCallback, main);
         ticker = new Thread(() -> {
             long t0 = SystemClock.uptimeMillis();
             long lastRestart = 0;
@@ -99,6 +103,14 @@ public class Backend {
 
     public synchronized void stop() {
         running = false;
+        if (midi != null && midiCallback != null) {
+            midi.unregisterDeviceCallback(midiCallback);
+            midiCallback = null;
+        }
+        if (audioCallback != null) {
+            am.unregisterAudioDeviceCallback(audioCallback);
+            audioCallback = null;
+        }
         try { if (ticker != null) ticker.join(300); } catch (InterruptedException ignored) { }
         Native.stopAudio(engine);
         audioStarted = micStarted = false;

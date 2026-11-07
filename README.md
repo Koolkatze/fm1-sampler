@@ -169,3 +169,7 @@ Las pruebas automatizadas y compilaciones de GitHub no sustituyen una prueba rea
 ![Grabación y micrófono](shots/readme_firstrec_v37.png) ![Micrófono](shots/readme_mic_v37.png)
 
 Las capturas son ilustrativas y pueden no mostrar los cambios recientes de HOME, LIBRARY o PROJECT.
+
+## Android Picture-in-Picture (Scenes APK, Android 8+)
+
+Press Home or switch apps while the FM1 Sampler Scenes APK is open. Android shows a floating 16:9 mini-player with the original animated HOME cassette and current track/playback status. The audio and MIDI engine continues running; tap and expand the window to return to your unchanged editor and project. The document picker does not activate PiP. Android settings may require enabling Picture-in-Picture for this app. Closing the floating player finishes the session.

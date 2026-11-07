@@ -3,6 +3,10 @@ package com.ferluht.fm1sampler;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.app.PictureInPictureParams;
+import android.content.res.Configuration;
+import android.os.Build;
+import android.util.Rational;
 import android.text.InputType;
 import android.widget.EditText;
 import java.util.Arrays;
@@ -27,6 +31,8 @@ public class SamplerActivity extends Activity {
     private volatile boolean packDeletionBusy;
     private final Object packStorageLock = new Object();
     Backend backend;
+    private SamplerView samplerView;
+    private boolean documentPickerPending;
 
     @Override protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -41,15 +47,67 @@ public class SamplerActivity extends Activity {
         backend.onSongExportRequest = this::exportSong;
         backend.onNameRequest = this::nameDialog;
         backend.start();
-        SamplerView v = new SamplerView(this, backend.engine, 0, 0);
-        setContentView(v);
+        samplerView = new SamplerView(this, backend.engine, 0, 0);
+        setContentView(samplerView);
+        updatePipParams();
         hideSystemBars();
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) backend.startMic();
         else requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, 1);
     }
 
+    /** System PiP shows the animated HOME cassette without suspending audio/MIDI. */
+    private boolean canUsePip() {
+        return Build.VERSION.SDK_INT >= 26 &&
+               getPackageManager().hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE);
+    }
+    private void updatePipParams() {
+        if (!canUsePip()) return;
+        PictureInPictureParams.Builder p = new PictureInPictureParams.Builder()
+            .setAspectRatio(new Rational(16, 9));
+        if (Build.VERSION.SDK_INT >= 31) p.setAutoEnterEnabled(!documentPickerPending);
+        setPictureInPictureParams(p.build());
+    }
+    private void launchDocumentPicker(Intent intent, int requestCode) {
+        documentPickerPending = true;
+        updatePipParams();
+        try { startActivityForResult(intent, requestCode); }
+        catch (RuntimeException e) {
+            documentPickerPending = false;
+            updatePipParams();
+            throw e;
+        }
+    }
+    @Override protected void onUserLeaveHint() {
+        super.onUserLeaveHint();
+        if (Build.VERSION.SDK_INT >= 26 && Build.VERSION.SDK_INT < 31 &&
+            canUsePip() && !documentPickerPending && !isFinishing()) {
+            try {
+                enterPictureInPictureMode(new PictureInPictureParams.Builder()
+                    .setAspectRatio(new Rational(16, 9)).build());
+            } catch (IllegalStateException e) {
+                android.util.Log.w("fm1sampler", "PiP unavailable", e);
+            }
+        }
+    }
+    @Override public void onPictureInPictureModeChanged(boolean enabled, Configuration config) {
+        super.onPictureInPictureModeChanged(enabled, config);
+        if (samplerView != null) samplerView.setPictureInPicture(enabled);
+        if (!enabled) hideSystemBars();
+    }
+    @Override protected void onDestroy() {
+        if (isFinishing() && backend != null) {
+            backend.onFileRequest = null;
+            backend.onPackRequest = null;
+            backend.onLoopExportRequest = null;
+            backend.onSongExportRequest = null;
+            backend.onNameRequest = null;
+            backend.stop();
+        }
+        super.onDestroy();
+    }
     /** Full screen: no status or navigation bar (a swipe from the edge shows them for a moment). */
     void hideSystemBars() {
+        if (Build.VERSION.SDK_INT >= 26 && isInPictureInPictureMode()) return;
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
             | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
     }
@@ -74,7 +132,7 @@ public class SamplerActivity extends Activity {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("*/*");
-        try { startActivityForResult(i, PICK); }
+        try { launchDocumentPicker(i, PICK); }
         catch (Exception e) { Native.say(backend.engine, "NO FILE PICKER ON THIS PHONE"); }
     }
 
@@ -85,7 +143,7 @@ public class SamplerActivity extends Activity {
         i.setType("*/*");
         i.putExtra(Intent.EXTRA_MIME_TYPES,
             new String[]{"application/zip", "application/x-zip-compressed", "application/octet-stream"});
-        try { startActivityForResult(i, PICK_PACK); }
+        try { launchDocumentPicker(i, PICK_PACK); }
         catch (Exception e) { Native.say(backend.engine, "NO ZIP PICKER"); }
     }
 
@@ -104,7 +162,7 @@ public class SamplerActivity extends Activity {
         String stamp = new java.text.SimpleDateFormat("yyyyMMdd-HHmmss",
                          Locale.ROOT).format(new java.util.Date());
         intent.putExtra(Intent.EXTRA_TITLE, "FM1-SAMPLER-BACKUP-" + stamp + ".zip");
-        try { startActivityForResult(intent, EXPORT_BACKUP); }
+        try { launchDocumentPicker(intent, EXPORT_BACKUP); }
         catch (Exception e) { Native.say(backend.engine, "BACKUP SAVE PICKER UNAVAILABLE"); }
     }
 
@@ -118,7 +176,7 @@ public class SamplerActivity extends Activity {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*"); // also accept ZIP labelled octet-stream by a provider
-        try { startActivityForResult(intent, RESTORE_BACKUP); }
+        try { launchDocumentPicker(intent, RESTORE_BACKUP); }
         catch (Exception e) { Native.say(backend.engine, "BACKUP IMPORT PICKER UNAVAILABLE"); }
     }
 
@@ -407,6 +465,8 @@ public class SamplerActivity extends Activity {
 
     @Override protected void onActivityResult(int code, int result, Intent data) {
         super.onActivityResult(code, result, data);
+        documentPickerPending = false;
+        updatePipParams();
         if (result != RESULT_OK || data == null || data.getData() == null) return;
         final Uri uri = data.getData();
         if (code == EXPORT_BACKUP) {

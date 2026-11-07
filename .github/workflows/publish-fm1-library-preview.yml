@@ -125,27 +125,28 @@ jobs:
           info=$("$ANDROID_HOME/build-tools/34.0.0/aapt" dump badging "$apk" | head -n 1)
           echo "$info"
           if [[ "$info" != *"name='com.ferluht.fm1sampler.scenes'"* ]] || \
-             [[ "$info" != *"versionCode='59'"* ]]; then
+             [[ "$info" != *"versionCode='60'"* ]]; then
             echo "::error::APK package or version changed; refusing to publish an incompatible upgrade"
             exit 1
           fi
       - name: Stage and check APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.12-preview.apk
-          unzip -t dist/FM1-Sampler-Library-0.38.12-preview.apk | tail -n 1
-          sha256sum dist/FM1-Sampler-Library-0.38.12-preview.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.13-preview.apk
+          unzip -t dist/FM1-Sampler-Library-0.38.13-preview.apk | tail -n 1
+          sha256sum dist/FM1-Sampler-Library-0.38.13-preview.apk
       - name: Publish on GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v0.38-library-preview.13
+          TAG: v0.38-library-preview.14
         run: |
           cat > release-notes.md <<'EOF'
-          ## FM1 Sampler 0.38.12 — Export SONG + 16 projects + update-safe signing
+          ## FM1 Sampler 0.38.13 — animated HOME cassette Picture-in-Picture
 
-          **Installable Android APK:** `FM1-Sampler-Library-0.38.12-preview.apk`.
+          **Installable Android APK:** `FM1-Sampler-Library-0.38.13-preview.apk`.
 
           - **EXPORT SONG next to CLOSE:** renders SONG.wav in the exact arranged sequence (up to 64 saved scenes) through track FX, shared reverb/delay, and master limiter, including the last scene's FX tail. Empty SONG displays NO SCENES IN SONG and does not export.
+          - **Animated Picture-in-Picture (Android 8+):** minimize with Home to see the same continuously animated HOME cassette in a floating 16:9 window while the original audio and MIDI engine keeps running; tapping expands back into the unchanged project. Android document pickers do not trigger PiP.
           - **16 independent FMP2 projects:** SAVE/LOAD PROJECT shows 2 pages of 8 slots (PREV/NEXT). Existing project_1..project_8 files and their scenes/arrangements remain in place; new slots are project_9..project_16.
           - **Stable update signing:** releases require a private, persistent signing keystore and a pinned certificate digest, configured as GitHub Secrets/Variables, or publication is blocked. Once configured and migrated, future versions signed with this identity can update in place without deleting app-private projects, samples or PACKS.
           - **EXPORT ALL LOOPS now bounces the real DSP:** each WAV stem includes tape speed/varispeed, cassette saturation and tone, LO-FI, WOBBLE, hiss, volume, pan, LFO volume/pan, sidechain and its own stereo reverb/delay sends and returns. MASTER.wav mixes all loop tracks through the shared FX and master soft limiter.
@@ -173,9 +174,9 @@ jobs:
           Source: [FM1 Sampler development](https://github.com/Koolkatze/fm1-sampler/pull/3).
           EOF
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.12-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.13-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md --prerelease
           else
-            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.12-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.12 — SONG export, 16 projects and persistent updates"               --notes-file release-notes.md               --prerelease
+            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.13-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.13 — animated cassette Picture-in-Picture"               --notes-file release-notes.md               --prerelease
           fi
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets,isPrerelease             --jq '{url: .url, isPrerelease: .isPrerelease, files: [.assets[].name]}'

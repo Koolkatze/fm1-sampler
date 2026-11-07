@@ -115,6 +115,23 @@ void SamplerUI::frame(uint32_t now) {
     if (sheetOpen_) librarySheet();
 }
 
+// Draw the same HOME cassette with no overlays; preserve navigation and editor state.
+void SamplerUI::pipFrame(uint32_t now) {
+    now_ = now;
+    st_ = app_.status();
+    syncColors();
+    ops_.clear();
+    hits_.clear();
+    rrect({0, 0, W_, H_}, 0, kBg);
+    cassette({W_ * 0.07f, H_ * 0.13f, W_ * 0.86f, H_ * 0.73f});
+    const int track = app_.track();
+    const bool recording = st_.freeRecording || st_.track_clip_rec[track];
+    text(W_ * 0.5f, H_ * 0.065f, 19.f, kPaper, "FM1 SAMPLER", 1, true);
+    text(W_ * 0.5f, H_ * 0.93f, 16.f, recording ? kOrange : kDim,
+         "T" + std::to_string(track + 1) + (recording ? "  REC" : st_.playing ? "  PLAY" : "  STOP"),
+         1, true);
+}
+
 void SamplerUI::topBar(Rect r) {
     rrect(r, 0, SURFACE);
     line(0, r.h, W_, r.h, OUTLINE, 1);
