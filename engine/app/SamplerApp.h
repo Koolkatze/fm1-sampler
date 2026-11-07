@@ -68,6 +68,11 @@ public:
     void browserBack();
     void browserRoot();
     void browserSelect(int index);             // shared touch and PRESETS cursor, auto-loads selected WAV
+    void setLibraryBrowserActive(bool active) { libraryBrowserActive_ = active; }
+    bool canDeleteBrowserSelection() const { return !selectedPackDeletePath().empty(); }
+    void requestDeleteBrowserSelection();
+    std::string takePackDeletePath();
+    uint32_t homeNavigationSerial() const { return homeNavigationSerial_; }
     void loadEntry(int index);                    // at once, on the selected track
     void refreshLibrary();
     void importFile(const std::string& wavPath);  // a file picked from the disk (already copied into the data dir as a WAV)
@@ -218,6 +223,10 @@ private:
     std::vector<Entry> lib_;
     void rebuildBrowser(const std::string& preferred = "");
     void loadBrowserSelection();
+    std::string selectedPackDeletePath() const;
+    std::string pendingPackDeletePath_;
+    bool libraryBrowserActive_ = false;
+    uint32_t homeNavigationSerial_ = 0;
     std::string browserDir_; // Relative to FM1-SAMPLER root
     std::vector<BrowserItem> browserItems_;
     int browserIndex_ = -1;
