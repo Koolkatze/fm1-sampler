@@ -24,6 +24,8 @@ public class SamplerActivity extends Activity {
     static final int EXPORT_BACKUP = 9;
     static final int RESTORE_BACKUP = 10;
     private volatile boolean backupBusy;
+    private volatile boolean packDeletionBusy;
+    private final Object packStorageLock = new Object();
     Backend backend;
 
     @Override protected void onCreate(Bundle b) {
@@ -77,6 +79,7 @@ public class SamplerActivity extends Activity {
     }
 
     void pickPack() {
+        if (packDeletionBusy) { Native.say(backend.engine, "PACK DELETION IN PROGRESS"); return; }
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("*/*");
@@ -89,6 +92,7 @@ public class SamplerActivity extends Activity {
     /** SAVE BACKUP produces an ordinary, portable ZIP under a document URI,
      * not an app-private file that would disappear after uninstalling. */
     void pickBackupExport() {
+        if (packDeletionBusy) { Native.say(backend.engine, "PACK DELETION IN PROGRESS"); return; }
         if (backupBusy) { Native.say(backend.engine, "BACKUP ALREADY RUNNING"); return; }
         if (!Native.backupReady(backend.engine)) {
             Native.say(backend.engine, "FINISH RECORDING OR PROJECT SAVE FIRST");
@@ -105,6 +109,7 @@ public class SamplerActivity extends Activity {
     }
 
     void pickBackupImport() {
+        if (packDeletionBusy) { Native.say(backend.engine, "PACK DELETION IN PROGRESS"); return; }
         if (backupBusy) { Native.say(backend.engine, "BACKUP ALREADY RUNNING"); return; }
         if (!Native.backupReady(backend.engine)) {
             Native.say(backend.engine, "FINISH RECORDING OR PROJECT SAVE FIRST");
@@ -193,6 +198,7 @@ public class SamplerActivity extends Activity {
     }
 
     private void importBackup(Uri uri) {
+        if (packDeletionBusy) { Native.say(backend.engine, "PACK DELETION IN PROGRESS"); return; }
         if (backupBusy) { Native.say(backend.engine, "BACKUP ALREADY RUNNING"); return; }
         backupBusy = true;
         Native.say(backend.engine, "VERIFYING BACKUP...");
@@ -308,8 +314,64 @@ public class SamplerActivity extends Activity {
         }, song ? "fm1-export-song" : "fm1-export-loops").start();
     }
 
+    /**
+     * Display the requested English DELETE / CANCEL dialog on Android's UI
+     * thread. The relative file name was captured at the instant DELETE was
+     * tapped, so moving the physical PRESETS knob cannot change the target.
+     */
+    private void confirmPackDeletion(String relativePath) {
+        if (relativePath == null || relativePath.isEmpty()) {
+            Native.say(backend.engine, "SELECT A FILE OR FOLDER IN PACKS");
+            return;
+        }
+        if (backupBusy || packDeletionBusy || !Native.backupReady(backend.engine)) {
+            Native.say(backend.engine, "FINISH BACKUP OR PROJECT SAVE FIRST");
+            return;
+        }
+        final File target;
+        try {
+            target = PackDeletion.resolveTarget(StorageLayout.packs(this), relativePath);
+        } catch (IOException e) {
+            Native.say(backend.engine, "INVALID PACK FILE - NOTHING DELETED");
+            return;
+        }
+        packDeletionBusy = true; // reserve deletion until user confirms/cancels
+        new AlertDialog.Builder(this)
+            .setTitle(target.isDirectory() ? "DELETE SAMPLE PACK" : "DELETE SAMPLE FILE")
+            .setMessage("Are you sure you want to delete this file?\\n\\n"
+                + relativePath
+                + (target.isDirectory() ? "\\nThis folder and all its contents will be removed." : "")
+                + "\\n\\nThis action cannot be undone.")
+            .setPositiveButton("DELETE", (dialog, which) -> {
+                new Thread(() -> {
+                    try {
+                        final int deleted;
+                        synchronized (packStorageLock) {
+                            deleted = PackDeletion.delete(StorageLayout.packs(this), relativePath);
+                            Native.refreshLibrary(backend.engine);
+                        }
+                        Native.say(backend.engine, "DELETED " + deleted + " PACK FILES");
+                    } catch (IOException error) {
+                        android.util.Log.e("fm1sampler", "pack deletion", error);
+                        Native.say(backend.engine, "DELETE FAILED");
+                        runOnUiThread(() -> {
+                            if (!isFinishing())
+                                new AlertDialog.Builder(this).setTitle("DELETE FAILED")
+                                    .setMessage(error.getMessage()).setPositiveButton("OK", null).show();
+                        });
+                    } finally {
+                        packDeletionBusy = false;
+                    }
+                }, "fm1-delete-pack").start();
+            })
+            .setNegativeButton("CANCEL", (dialog, which) -> packDeletionBusy = false)
+            .setOnCancelListener(dialog -> packDeletionBusy = false)
+            .show();
+    }
+
     /** Native FM-1 graphics keep their aesthetic; use Android's actual keyboard to name files. */
     void nameDialog(int kind) {
+        if (kind == 6) { confirmPackDeletion(Native.takePackDeletePath(backend.engine)); return; }
         if (kind == 4) { pickBackupExport(); return; }
         if (kind == 5) { pickBackupImport(); return; }
         if (kind == 3) {
@@ -348,7 +410,7 @@ public class SamplerActivity extends Activity {
         if (result != RESULT_OK || data == null || data.getData() == null) return;
         final Uri uri = data.getData();
         if (code == EXPORT_BACKUP) {
-            if (backupBusy || !Native.backupReady(backend.engine)) {
+            if (packDeletionBusy || backupBusy || !Native.backupReady(backend.engine)) {
                 Native.say(backend.engine, "FINISH RECORDING FIRST"); return;
             }
             backupBusy = true;
@@ -390,9 +452,16 @@ public class SamplerActivity extends Activity {
                     return;
                 }
                 if (zip) {
+                    if (packDeletionBusy) {
+                        Native.say(backend.engine, "PACK DELETION IN PROGRESS");
+                        return;
+                    }
                     Native.say(backend.engine, "UNPACKING ZIP TO PACKS...");
-                    File pack = PackImport.importZip(this, uri, StorageLayout.root(this));
-                    Native.refreshLibrary(backend.engine);
+                    File pack;
+                    synchronized (packStorageLock) {
+                        pack = PackImport.importZip(this, uri, StorageLayout.root(this));
+                        Native.refreshLibrary(backend.engine);
+                    }
                     Native.say(backend.engine, "PACK IMPORTED: " + pack.getName());
                     return;
                 }
