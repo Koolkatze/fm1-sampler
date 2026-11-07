@@ -203,6 +203,11 @@ FN(jint, takeDialogRequest)(JNIEnv*, jclass, jlong h) {
     auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
     return e.app->takeDialogRequest();
 }
+FN(jstring, takePackDeletePath)(JNIEnv* env, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    const std::string path = e.app->takePackDeletePath();
+    return env->NewStringUTF(path.c_str());
+}
 FN(void, submitName)(JNIEnv* env, jclass, jlong h, jint kind, jstring name) {
     auto& e = *E(h); const char* c = env->GetStringUTFChars(name, nullptr);
     { std::lock_guard<std::mutex> l(e.surfaceMtx); e.app->submitName((int)kind, c); }
