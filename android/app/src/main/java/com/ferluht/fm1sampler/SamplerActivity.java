@@ -338,10 +338,10 @@ public class SamplerActivity extends Activity {
         packDeletionBusy = true; // reserve deletion until user confirms/cancels
         new AlertDialog.Builder(this)
             .setTitle(target.isDirectory() ? "DELETE SAMPLE PACK" : "DELETE SAMPLE FILE")
-            .setMessage("Are you sure you want to delete this file?\\n\\n"
+            .setMessage("Are you sure you want to delete this file?\n\n"
                 + relativePath
-                + (target.isDirectory() ? "\\nThis folder and all its contents will be removed." : "")
-                + "\\n\\nThis action cannot be undone.")
+                + (target.isDirectory() ? "\nThis folder and all its contents will be removed." : "")
+                + "\n\nThis action cannot be undone.")
             .setPositiveButton("DELETE", (dialog, which) -> {
                 new Thread(() -> {
                     try {
