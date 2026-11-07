@@ -18,7 +18,7 @@ final class PackDeletion {
 
     static File resolveTarget(File packsRoot, String relative) throws IOException {
         if (relative == null || relative.isEmpty() || relative.startsWith("/")
-                || relative.indexOf('\\') >= 0 || relative.indexOf('\u0000') >= 0)
+                || relative.indexOf('\\') >= 0 || relative.indexOf((char) 0) >= 0)
             throw new IOException("Invalid pack selection");
         String[] components = relative.split("/", -1);
         File root = packsRoot.getCanonicalFile();
