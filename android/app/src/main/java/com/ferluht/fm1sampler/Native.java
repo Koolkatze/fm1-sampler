@@ -20,6 +20,7 @@ public final class Native {
     public static native boolean exportSong(long h, String temporaryDirectory);
     public static native int loopExportStatus(long h);
     public static native int takeDialogRequest(long h);
+    public static native String takePackDeletePath(long h);
     public static native void submitName(long h, int kind, String name);
     public static native boolean backupReady(long h); // no recording or full-project write/read underway
     public static native void refreshLibrary(long h);
