@@ -256,6 +256,36 @@ void SamplerApp::browserRoot() {
     rebuildBrowser();
     browserTouchedAt_ = nowMs_;
 }
+// Only a selected descendant of PACKS may be removed. PROJECTS, SAVED,
+// OFFICIAL, the PACKS root itself, and all other app files are excluded.
+// Java checks canonical paths again before showing the destructive dialog.
+std::string SamplerApp::selectedPackDeletePath() const {
+    namespace fs = std::filesystem;
+    if (browserDir_ != "PACKS" && browserDir_.rfind("PACKS/", 0) != 0) return {};
+    const BrowserItem* selected = browserSelected();
+    if (!selected) return {};
+    const fs::path packs = fs::path(s_.sampleDir()) / "PACKS";
+    const fs::path file = selected->directory
+        ? fs::path(s_.sampleDir()) / selected->path : fs::path(selected->path);
+    const fs::path relative = file.lexically_relative(packs);
+    if (relative.empty() || relative == "." || relative.is_absolute()) return {};
+    for (const auto& component : relative)
+        if (component.empty() || component == "." || component == "..") return {};
+    return relative.generic_string();
+}
+void SamplerApp::requestDeleteBrowserSelection() {
+    pendingPackDeletePath_ = selectedPackDeletePath();
+    if (pendingPackDeletePath_.empty()) {
+        say("SELECT A FILE OR FOLDER INSIDE PACKS");
+        return;
+    }
+    dialogRequest_ = 6; // Android shows the DELETE / CANCEL confirmation.
+}
+std::string SamplerApp::takePackDeletePath() {
+    std::string path = std::move(pendingPackDeletePath_);
+    pendingPackDeletePath_.clear();
+    return path;
+}
 void SamplerApp::loadEntry(int i) {
     if (i < 0 || i >= (int)lib_.size()) return;
     libCursor_ = i; auditionAt_ = 0;
@@ -993,7 +1023,7 @@ void SamplerApp::button(int b, bool down) {
     }
     if (!down) return;
     switch (b) {
-    case HOME: exitPerformanceMode(); page_ = P_HOME; break;
+    case HOME: exitPerformanceMode(); page_ = P_HOME; ++homeNavigationSerial_; break;
     case FX: page_ = P_FX; break;
     case ENV: page_ = P_ENV; break;
     case LFO: page_ = P_LFO; break;
@@ -1010,6 +1040,13 @@ void SamplerApp::encoder(int i, int delta) {
     if (!delta) return;
     if (i == 0) { selectTrack(track_ + (delta > 0 ? 1 : -1)); return; }
     if (i == 6) { browse(delta); return; }
+    // In the open LIBRARY browser K1 navigates directory levels. Other
+    // pages retain their existing K1 parameter and OCT+ / CUE behavior.
+    if (i == 2 && libraryBrowserActive_) {
+        if (delta > 0) browserEnter();
+        else browserBack();
+        return;
+    }
     if (i == 1) { setAlgo(ts_[track_].algo + (delta > 0 ? 1 : -1)); return; }
     // OCT+ makes K1 the CUE subdivision control BEFORE and DURING PLAY.
     // Crucially, microphone threshold or the underlying page never steals K1.
