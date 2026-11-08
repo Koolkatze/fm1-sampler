@@ -149,6 +149,7 @@ public class Backend {
     // MIDI FROM the FM-1. That is the port required to receive physical
     // OCT+/OCT-/PLAY messages. The device INPUT (phone -> FM-1) is optional.
     boolean connecting;
+    volatile int midiGeneration;
     synchronized void connectMidi() {
         if (device != null || midi == null || connecting || !running) return;
         MidiDeviceInfo pick = null;
@@ -178,8 +179,13 @@ public class Backend {
         }
         final MidiDeviceInfo selected = pick;
         connecting = true;
+        final int generation = midiGeneration;
         midi.openDevice(selected, d -> {
             synchronized (Backend.this) {
+                if (generation != midiGeneration) {
+                    if (d != null) try { d.close(); } catch (Exception ignored) { }
+                    return;
+                }
                 connecting = false;
                 if (d == null || device != null || !running) {
                     if (d != null) try { d.close(); } catch (Exception ignored) { }
@@ -198,6 +204,7 @@ public class Backend {
                     loggedIncomingEvents = 0;
                     rx.connect(new MidiReceiver() {
                         @Override public void onSend(byte[] data, int off, int count, long ts) {
+                            if (generation != midiGeneration || !running) return;
                             try {
                                 // A bounded MIDI input trace lets us diagnose firmware
                                 // that does not forward button note-on/off events.
@@ -226,10 +233,13 @@ public class Backend {
         }, main);
     }
     synchronized void disconnectMidi() {
+        ++midiGeneration;
+        connecting = false;
         try { if (fromFm1 != null) fromFm1.close(); } catch (Exception ignored) { }
         try { if (toFm1 != null) toFm1.close(); } catch (Exception ignored) { }
         try { if (device != null) device.close(); } catch (Exception ignored) { }
         fromFm1 = null; toFm1 = null; device = null;
+        Native.midiDisconnected(engine);
     }
     void send(byte[] b) {
         MidiInputPort port = toFm1;

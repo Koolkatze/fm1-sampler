@@ -11,6 +11,7 @@ public final class Native {
     public static native boolean audioDead(long h);
     public static native int xruns(long h);
     public static native void midiIn(long h, byte[] data, int off, int n);
+    public static native void midiDisconnected(long h);
     public static native byte[] tick(long h, long nowMs);
     public static native boolean wantFile(long h);
     public static native boolean wantPack(long h);

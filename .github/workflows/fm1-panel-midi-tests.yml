@@ -5,6 +5,9 @@ on:
     branches: [feature/scene-launcher-song-mode, feature/oneshot-packs-on-scenes]
     paths:
       - "firmware/app/ctrl.c"
+      - "firmware/app/board/fm1_input.h"
+      - "firmware/app/board/fm1_encoder_decoder.h"
+      - "firmware/hosttest/encoder_decoder_test.c"
       - "firmware/hosttest/ctrl_host.c"
       - "firmware/CUE.md"
       - ".github/workflows/fm1-panel-midi-tests.yml"
@@ -23,3 +26,7 @@ jobs:
       - name: Verify physical OCT On/Off and PLAY over USB
         working-directory: firmware/build/host
         run: ./ctrl_host
+      - name: Verify encoder partial turns, idle and bounce
+        run: |
+          cc -std=c11 -O2 -Wall -Wextra -Werror firmware/hosttest/encoder_decoder_test.c -o firmware/build/host/encoder_decoder_test
+          firmware/build/host/encoder_decoder_test

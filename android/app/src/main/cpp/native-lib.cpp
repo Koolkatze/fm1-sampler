@@ -129,6 +129,15 @@ FN(void, stopAudio)(JNIEnv*, jclass, jlong h) { E(h)->stop(); }
 FN(jboolean, audioDead)(JNIEnv*, jclass, jlong h) { return E(h)->streamDead.exchange(false); }
 FN(jint, xruns)(JNIEnv*, jclass, jlong h) { auto& e = *E(h); return e.stream ? e.stream->getXRunCount().value() : -1; }
 
+FN(void, midiDisconnected)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h);
+    std::lock_guard<std::mutex> lock(e.surfaceMtx);
+    e.inSx = false;
+    e.sx.clear();
+    e.msgLen = 0;
+    e.msgNeed = 3;
+    e.app->onMidiDisconnected();
+}
 FN(void, midiIn)(JNIEnv* env, jclass, jlong h, jbyteArray a, jint off, jint n) {
     if (!a || off < 0 || n <= 0 || off + n > env->GetArrayLength(a)) return;
     jbyte* d = env->GetByteArrayElements(a, nullptr);

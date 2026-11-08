@@ -923,6 +923,28 @@ std::string SamplerApp::midiLastEvent() const {
     return msg;
 }
 
+// A lost OCT+ Note Off on USB detach used to trap K1 in NOTE REPEAT.
+void SamplerApp::onMidiDisconnected() {
+    if (cueActive_) cueHold(false);
+    if (cueSelect_) page_ = cueReturnPage_;
+    cueSelect_ = false;
+    held_ = 0;
+    playModified_ = false;
+    octUpAt_ = 0;
+    for (int raw = 0; raw < 128; ++raw) {
+        for (int i = 0; i < keyCount_[raw]; ++i) playNote(keyNotes_[raw][i], false);
+        keyCount_[raw] = 0;
+    }
+    for (int note = 0; note < 128; ++note)
+        if (heldNote_[note] >= 0) playNote(note, false);
+    haveDropBase_ = false;
+    linkSeen_ = false;
+    needClear_ = true;
+    pending_.clear();
+    pendingBytes_ = 0;
+    clearMidiDebug();
+}
+
 // ---- input ----
 void SamplerApp::onMidi(const uint8_t* m, size_t n) {
     if (n < 3) return;

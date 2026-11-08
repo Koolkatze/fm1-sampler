@@ -173,3 +173,7 @@ Las capturas son ilustrativas y pueden no mostrar los cambios recientes de HOME,
 ## Android Picture-in-Picture (Scenes APK, Android 8+)
 
 Press Home or switch apps while the FM1 Sampler Scenes APK is open. Android shows a floating 16:9 mini-player with the original animated HOME cassette and current track/playback status. The audio and MIDI engine continues running; tap and expand the window to return to your unchanged editor and project. The document picker does not activate PiP. Android settings may require enabling Picture-in-Picture for this app. Closing the floating player finishes the session.
+
+## FM1 knob disconnect recovery (0.38.14)
+
+A USB reconnection after a lost OCT+ or OCT- Note Off no longer traps the physical K1 in the NOTE REPEAT menu. The Android app resets held button/key states and the MIDI packet parser without unloading projects or stopping the loop. A separate physical-firmware source fix also preserves quadrature encoder motion across idle periods; it is not installed by the phone APK and must be built and flashed independently after hardware validation.

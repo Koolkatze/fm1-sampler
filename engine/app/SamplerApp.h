@@ -37,6 +37,7 @@ public:
     SamplerApp(Session& s, Send send);
 
     void onMidi(const uint8_t* msg, size_t n);
+    void onMidiDisconnected();
     void onSysex(const uint8_t* msg, size_t n);
     void tick(uint32_t nowMs);                    // ~30 Hz
 

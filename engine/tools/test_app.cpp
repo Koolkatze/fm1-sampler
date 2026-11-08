@@ -49,6 +49,26 @@ int main() {
     CHECK(s.loopExportStatus() == -3 &&
           !std::filesystem::exists(emptySongDir + "/SONG.wav"),
           "empty SONG export reports -3 and creates no WAV file");
+    // USB disconnect after OCT+ press without Note Off previously froze K1 in CUE.
+    {
+        btn(SamplerApp::ENV);
+        const float before = app.knobs()[0].norm;
+        const int rate = app.cueDivision();
+        uint8_t oct[3] = {0x91, (uint8_t)SamplerApp::OCT_UP, 100};
+        app.onMidi(oct, 3);
+        enc(2, 1);
+        CHECK(app.cueModifierHeld() && app.cueDivision() != rate &&
+              std::fabs(app.knobs()[0].norm - before) < 0.0001f,
+              "OCT+ intentionally changes K1 to CUE rate");
+        app.onMidiDisconnected();
+        CHECK(!app.cueModifierHeld() && !app.octDownModifierHeld() &&
+              app.page() == SamplerApp::P_ENV,
+              "USB disconnect clears stale modifiers without losing page");
+        enc(2, 1);
+        CHECK(app.knobs()[0].norm > before + 0.001f,
+              "K1 responds again after reconnect");
+        btn(SamplerApp::HOME);
+    }
     // algorithms on track 1
     for (int a = 0; a < 6; a++) { app.setAlgo(a); run(0.3); double r = play(60, 1.0); CHECK(r > 0.003, "algorithm %s sounds (rms %.4f)", SamplerApp::algoName(a), r); }
     app.setAlgo(0);
