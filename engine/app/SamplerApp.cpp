@@ -555,12 +555,19 @@ void SamplerApp::toggleSceneTrack(int t) {
 }
 void SamplerApp::saveScene() {
     if (recordingNow()) { say("END RECORDING FIRST"); return; }
-    if (!loopAny_ || st_.loopSamples <= 0) { say("RECORD A LOOP FIRST"); return; }
-    bool usable = false;
-    for (int t = 0; t < kTracks; ++t) if ((sceneTracks_ & (1u << t)) && st_.track_has_clip[t]) usable = true;
-    if (!usable) { say("SELECT A RECORDED TRACK"); return; }
+    const auto status = s_.status();
+    const bool compose = status.compositionValid;
+    const int32_t sourceSamples = compose ? status.compositionSamples
+                                          : (int32_t)status.loopSamples;
+    uint8_t available = compose ? status.compositionTracks : 0;
+    if (!compose)
+        for (int t = 0; t < kTracks; ++t)
+            if (status.track_has_clip[t]) available |= (uint8_t)(1u << t);
+    if (!sourceSamples || !available) { say("RECORD A LOOP FIRST"); return; }
+    if (!(sceneTracks_ & available)) { say("SELECT A RECORDED TRACK"); return; }
+    const bool overwrite = sceneSaved(selectedScene_);
     s_.captureScene(selectedScene_, sceneTracks_);
-    say("SAVED TO " + sceneLabel(selectedScene_));
+    say((overwrite ? "REPLACED " : "SAVED TO ") + sceneLabel(selectedScene_));
 }
 void SamplerApp::deleteScene() {
     s_.clearScene(selectedScene_);

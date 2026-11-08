@@ -407,6 +407,37 @@ int main() {
         CHECK((app.status().sceneMask & 5u) == 5u &&
               (app.status().sceneTracks[2] & 3u) == 3u,
               "D1 contains tracks 1+2 while C1 preserves only track 1");
+        // Regression: replacing an existing C1 while it is PLAYING must capture
+        // new clips from COMPOSE, not recapture the original C1's only track.
+        // Preserve D1, the SONG bank, and the independent COMPOSE workspace.
+        app.setSongMode(false); run(0.12);
+        app.selectScene(0, true); run(1.15);
+        CHECK(app.status().activeScene == 0 && app.status().track_has_clip[0] &&
+              !app.status().track_has_clip[1],
+              "old C1 is active with only its original first track");
+        app.selectScene(0, false); // edit selection without launching again
+        app.toggleSceneTrack(0); app.toggleSceneTrack(1); // T1 -> T2
+        CHECK(app.sceneTracks() == 2u,
+              "REPLACE chooses a completely different track configuration");
+        app.saveScene(); run(0.25);
+        CHECK((app.status().sceneMask & 1u) && app.status().sceneTracks[0] == 2u &&
+              app.status().sceneTracks[2] == 3u,
+              "REPLACE C1 writes T2, removes T1 and preserves untouched D1");
+        app.exitPerformanceMode(); run(0.2);
+        CHECK(app.status().track_has_clip[0] && app.status().track_has_clip[1],
+              "exiting performance keeps both original COMPOSE tracks");
+        app.setSongMode(false); run(0.12);
+        app.selectScene(0, true); run(1.15);
+        CHECK(app.status().activeScene == 0 && !app.status().track_has_clip[0] &&
+              app.status().track_has_clip[1],
+              "relaunching overwritten C1 plays NEW T2, not original T1");
+        app.exitPerformanceMode(); run(0.2);
+        app.selectScene(0, false);
+        app.toggleSceneTrack(1); app.toggleSceneTrack(0); // T2 -> T1
+        app.saveScene(); run(0.25);
+        CHECK(app.status().sceneTracks[0] == 1u &&
+              app.status().sceneTracks[2] == 3u,
+              "C1 can be replaced repeatedly without corrupting other scenes");
         const int32_t compositionLength = app.status().loopSamples;
         const uint32_t originalMask = ((uint32_t)1 << 0) | ((uint32_t)1 << 1);
         CHECK((app.status().track_has_clip[0] && app.status().track_has_clip[1]),

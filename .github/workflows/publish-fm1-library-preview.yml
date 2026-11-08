@@ -125,27 +125,28 @@ jobs:
           info=$("$ANDROID_HOME/build-tools/34.0.0/aapt" dump badging "$apk" | head -n 1)
           echo "$info"
           if [[ "$info" != *"name='com.ferluht.fm1sampler.scenes'"* ]] || \
-             [[ "$info" != *"versionCode='61'"* ]]; then
+             [[ "$info" != *"versionCode='62'"* ]]; then
             echo "::error::APK package or version changed; refusing to publish an incompatible upgrade"
             exit 1
           fi
       - name: Stage and check APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.14-preview.apk
-          unzip -t dist/FM1-Sampler-Library-0.38.14-preview.apk | tail -n 1
-          sha256sum dist/FM1-Sampler-Library-0.38.14-preview.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Library-0.38.15-preview.apk
+          unzip -t dist/FM1-Sampler-Library-0.38.15-preview.apk | tail -n 1
+          sha256sum dist/FM1-Sampler-Library-0.38.15-preview.apk
       - name: Publish on GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v0.38-library-preview.15
+          TAG: v0.38-library-preview.16
         run: |
           cat > release-notes.md <<'EOF'
-          ## FM1 Sampler 0.38.14 — MIDI knob reconnect recovery
+          ## FM1 Sampler 0.38.15 — reliable scene replacement
 
-          **Installable Android APK:** `FM1-Sampler-Library-0.38.14-preview.apk`.
+          **Installable Android APK:** `FM1-Sampler-Library-0.38.15-preview.apk`.
 
           - **EXPORT SONG next to CLOSE:** renders SONG.wav in the exact arranged sequence (up to 64 saved scenes) through track FX, shared reverb/delay, and master limiter, including the last scene's FX tail. Empty SONG displays NO SCENES IN SONG and does not export.
+          - **Correct scene REPLACE:** saved C1–B1 slots are overwritten atomically with the newly selected tracks and the original COMPOSE clips, even if the old scene is currently playing in LOOP/SONG mode. Selecting a pad in PROJECT chooses it for editing; use LAUNCH or physical MIDI to play it. Empty selections cannot erase an existing scene. New tracks appear when the updated scene is launched again. Other scenes, SONG order, projects, and the composition are preserved.
           - **Knobs after MIDI reconnect:** clears stale OCT modifier, held notes and partial MIDI parser data if the USB device disconnects unexpectedly. K1 returns to normal parameter control without resetting the current project. A separate firmware-source fix prevents partial encoder movements being discarded during idle; flashing that firmware requires a verified physical firmware build.
           - **Animated Picture-in-Picture (Android 8+):** minimize with Home to see the same continuously animated HOME cassette in a floating 16:9 window while the original audio and MIDI engine keeps running; tapping expands back into the unchanged project. Android document pickers do not trigger PiP.
           - **16 independent FMP2 projects:** SAVE/LOAD PROJECT shows 2 pages of 8 slots (PREV/NEXT). Existing project_1..project_8 files and their scenes/arrangements remain in place; new slots are project_9..project_16.
@@ -175,9 +176,9 @@ jobs:
           Source: [FM1 Sampler development](https://github.com/Koolkatze/fm1-sampler/pull/3).
           EOF
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.14-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload "$TAG" dist/FM1-Sampler-Library-0.38.15-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md --prerelease
           else
-            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.14-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.14 — recover frozen knobs after MIDI reconnect"               --notes-file release-notes.md               --prerelease
+            gh release create "$TAG" dist/FM1-Sampler-Library-0.38.15-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.38.15 — save and replace live scenes correctly"               --notes-file release-notes.md               --prerelease
           fi
           gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets,isPrerelease             --jq '{url: .url, isPrerelease: .isPrerelease, files: [.assets[].name]}'

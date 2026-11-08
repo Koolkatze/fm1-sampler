@@ -1120,10 +1120,12 @@ void SamplerUI::projectSheet() {
         int count = 0; for (int t = 0; t < SamplerApp::kTracks; ++t) count += (mask >> t) & 1;
         text(pad.x + pad.w / 2, pad.y + H(23), 8, DIM,
              queued ? "NEXT" : saved ? std::to_string(count) + " LOOPS" : "EMPTY", 1, false);
-        tap(pad, [this, slot] { app_.selectScene(slot, true); });
+        // Selecting a pad for editing must not swap the COMPOSE loops with the
+        // old scene. The separate LAUNCH button (and physical MIDI pads) play it.
+        tap(pad, [this, slot] { app_.selectScene(slot, false); });
     }
 
-    text(x, Y(122), 10, DIM, "TRACKS INCLUDED IN " + SamplerApp::sceneLabel(app_.selectedScene()), 0, true);
+    text(x, Y(122), 10, DIM, "TRACKS TO SAVE IN " + SamplerApp::sceneLabel(app_.selectedScene()), 0, true);
     const float trackGap = 4.f, trackW = (w - 7 * trackGap) / 8;
     for (int t = 0; t < SamplerApp::kTracks; ++t) {
         const bool on = !!(app_.sceneTracks() & (1u << t));

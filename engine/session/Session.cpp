@@ -243,6 +243,9 @@ struct Session::Impl {
     std::atomic<int> a_bars{4}, a_sampleState{0}, a_sampleTrack{0}, a_sampleVersion{0}, a_sampleFails{0};
     std::atomic<int32_t> a_loop{0};
     std::atomic<uint32_t> a_sceneMask{0};
+    std::atomic<bool> a_compositionValid{false};
+    std::atomic<int32_t> a_compositionSamples{0};
+    std::atomic<uint8_t> a_compositionTracks{0};
     std::atomic<uint8_t> a_sceneTracks[Session::kScenes];
     std::atomic<int> a_activeScene{-1}, a_queuedScene{-1}, a_songStep{-1}, a_songSize{0};
     std::atomic<bool> a_songPlaying{false}, a_arrangementLoaded{false};
@@ -306,6 +309,12 @@ struct Session::Impl {
             composition.has[(size_t)i] = t.clipHas;
             composition.rec[(size_t)i] = t.clipRec;
         }
+        uint8_t mask = 0;
+        for (int i = 0; i < kTracks; ++i)
+            if (composition.has[(size_t)i]) mask |= (uint8_t)(1u << i);
+        a_compositionTracks = mask;
+        a_compositionSamples = composition.samples;
+        a_compositionValid = true;
     }
     void restoreComposition() {
         // Cancel even a scene which was only queued; prevent it from firing
@@ -315,6 +324,9 @@ struct Session::Impl {
         if (!composition.valid) return;
         const Composition saved = std::move(composition);
         composition = Composition{};
+        a_compositionValid = false;
+        a_compositionTracks = 0;
+        a_compositionSamples = 0;
         freeRec = freeArmed = false; a_free = a_freeArmed = false;
         for (int i = 0; i < kTracks; ++i) {
             auto& t = *tracks[(size_t)i];
@@ -416,6 +428,13 @@ struct Session::Impl {
             composition.clips = std::move(s.compose.clips);
             composition.has = s.compose.has;
         }
+        uint8_t composeTracks = 0;
+        for (int i = 0; i < kTracks; ++i)
+            if (composition.valid && composition.has[(size_t)i])
+                composeTracks |= (uint8_t)(1u << i);
+        a_compositionTracks = composeTracks;
+        a_compositionSamples = composition.valid ? composition.samples : 0;
+        a_compositionValid = composition.valid;
         scenes = std::move(s.savedScenes); songOrder = std::move(s.arrangement);
         activeScene = s.active; pendingScene = s.queued;
         pendingAt = s.pendingAt; songPlaying = s.songPlaying; songStep = s.songStep;
@@ -1146,20 +1165,33 @@ void Session::setCue(bool on, int division) {
 void Session::captureScene(int slot, uint8_t tracks) {
     if (slot < 0 || slot >= kScenes) return;
     d->post([this, slot, tracks] {
-        if (d->loopSamples <= 0 || !tracks || d->freeArmed || d->freeRec) return;
+        if (!tracks || d->freeArmed || d->freeRec) return;
         for (const auto& t : d->tracks) if (t->clipRec) return;
-        auto& sc = d->scenes[(size_t)slot];
-        sc = Impl::Scene{};
-        sc.samples = d->loopSamples; sc.tempo = d->bpm; sc.bars = d->loopBars;
+        // The launched scene replaces the live playback clips. Capturing those
+        // would overwrite the requested slot with its OWN previous contents.
+        // Always use the untouched COMPOSE snapshot while in performance mode.
+        const bool fromComposition = d->composition.valid;
+        const int32_t samples = fromComposition ? d->composition.samples : d->loopSamples;
+        if (samples <= 0) return;
+        Impl::Scene replacement;
+        replacement.samples = samples;
+        replacement.tempo = fromComposition ? d->composition.tempo : d->bpm;
+        replacement.bars = fromComposition ? d->composition.bars : d->loopBars;
         for (int i = 0; i < kTracks; ++i) {
-            const auto& t = *d->tracks[(size_t)i];
-            sc.has[(size_t)i] = !!(tracks & (1u << i)) && t.clipHas &&
-                t.clip && t.clip->size() == (size_t)d->loopSamples * 2;
-            if (sc.has[(size_t)i]) {
-                sc.clips[(size_t)i] = t.clip;
-                sc.filled = true;
+            const bool has = fromComposition ? d->composition.has[(size_t)i]
+                                             : d->tracks[(size_t)i]->clipHas;
+            const auto& clip = fromComposition ? d->composition.clips[(size_t)i]
+                                               : d->tracks[(size_t)i]->clip;
+            if ((tracks & (1u << i)) && has && clip &&
+                clip->size() == (size_t)samples * 2) {
+                replacement.has[(size_t)i] = true;
+                replacement.clips[(size_t)i] = clip;
+                replacement.filled = true;
             }
         }
+        // Invalid/empty replacement must leave the previously saved slot intact.
+        if (!replacement.filled) return;
+        d->scenes[(size_t)slot] = std::move(replacement);
         d->updateSceneMask();
         d->persistScenes();
     });
@@ -1954,6 +1986,9 @@ Session::Status Session::status() const {
     s.sampleState = d->a_sampleState; s.sampleTrack = d->a_sampleTrack; s.sampleSeconds = d->a_sampleSec; s.inputPeak = d->a_inPeak;
     s.sampleVersion = d->a_sampleVersion; s.sampleFails = d->a_sampleFails; s.samplePending = d->a_pending;
     s.sceneMask = d->a_sceneMask; s.activeScene = d->a_activeScene;
+    s.compositionValid = d->a_compositionValid;
+    s.compositionSamples = d->a_compositionSamples;
+    s.compositionTracks = d->a_compositionTracks;
     for (int i = 0; i < kScenes; ++i) s.sceneTracks[i] = d->a_sceneTracks[(size_t)i];
     s.queuedScene = d->a_queuedScene; s.songPlaying = d->a_songPlaying;
     s.songStep = d->a_songStep; s.songSize = d->a_songSize;

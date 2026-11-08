@@ -177,3 +177,7 @@ Press Home or switch apps while the FM1 Sampler Scenes APK is open. Android show
 ## FM1 knob disconnect recovery (0.38.14)
 
 A USB reconnection after a lost OCT+ or OCT- Note Off no longer traps the physical K1 in the NOTE REPEAT menu. The Android app resets held button/key states and the MIDI packet parser without unloading projects or stopping the loop. A separate physical-firmware source fix also preserves quadrature encoder motion across idle periods; it is not installed by the phone APK and must be built and flashed independently after hardware validation.
+
+## Replacing existing scenes (0.38.15)
+
+In PROJECT > SCENES, tap a pad to **select it without launching it**. Choose the tracks to include (1–8), then tap REPLACE and CONFIRM SAVE within three seconds. The slot is overwritten from the **COMPOSE** loops, not the previously playing scene, so newly selected tracks replace the previous configuration. LAUNCH (or the physical MIDI scene key) plays the new version; the original COMPOSE workspace and the other scene slots are untouched. Invalid empty selections cannot wipe a saved scene. The existing SONG arrangement continues to reference the same slot and will play its new content.

@@ -36,6 +36,11 @@ public:
         int sampleVersion;       // bumps when a sample was loaded into a track (sampleTrack)
         int sampleFails;         // bumps when a sample could not be loaded
         uint32_t sceneMask;       // saved scene slots
+        // COW COMPOSE snapshot: save/replace scenes from original loops even while
+        // another scene is active in LOOP or SONG performance mode.
+        bool compositionValid;
+        int32_t compositionSamples;
+        uint8_t compositionTracks;
         uint8_t sceneTracks[kScenes]; // which of 8 loops belongs to each scene
         int activeScene, queuedScene;
         bool songPlaying;
