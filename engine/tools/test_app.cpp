@@ -67,6 +67,7 @@ int main() {
         enc(2, 1);
         CHECK(app.knobs()[0].norm > before + 0.001f,
               "K1 responds again after reconnect");
+        app.setCueDivision(rate); // restore the baseline for later CUE assertions
         btn(SamplerApp::HOME);
     }
     // algorithms on track 1
