@@ -442,6 +442,9 @@ int main() {
         const uint32_t originalMask = ((uint32_t)1 << 0) | ((uint32_t)1 << 1);
         CHECK((app.status().track_has_clip[0] && app.status().track_has_clip[1]),
               "composition has two separately recorded loops before performance");
+        // The waveform cache refreshes eight of 400 bins per audio block.
+        // Complete its refresh after the preceding scene replacements.
+        run(0.55);
         std::vector<float> baseline0(64), baseline1(64);
         s.loopPeaks(0, baseline0.data(), (int)baseline0.size());
         s.loopPeaks(1, baseline1.data(), (int)baseline1.size());
@@ -454,6 +457,7 @@ int main() {
         CHECK(!app.performanceActive() && app.status().track_has_clip[0] &&
               app.status().track_has_clip[1] && app.status().loopSamples == compositionLength,
               "EXIT restores all composition clips and original loop length after launching C1");
+        run(0.55); // finish waveform cache refresh after COMPOSE COW restore
         std::vector<float> restored0(64), restored1(64);
         s.loopPeaks(0, restored0.data(), (int)restored0.size());
         s.loopPeaks(1, restored1.data(), (int)restored1.size());
