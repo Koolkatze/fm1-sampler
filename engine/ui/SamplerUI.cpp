@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 
 using namespace theme;
 
@@ -29,6 +30,7 @@ SamplerUI::SamplerUI(SamplerApp& app) : app_(app) {
         fclose(help);
     }
     syncColors();
+    // Navigation lives in SamplerApp so MIDI PRESETS and the phone share one cursor.
 }
 void SamplerUI::setShortcutHelpVisible(bool on) {
     shortcutHelpVisible_ = on;
@@ -80,6 +82,18 @@ void SamplerUI::button(Rect r, const std::string& label, bool on, std::function<
 // ---- frame ----
 void SamplerUI::frame(uint32_t now) {
     now_ = now;
+    // Physical HOME closes any overlay or sample editor, even if the
+    // native parameter page was already HOME before the button was pressed.
+    if (seenHomeNavigation_ != app_.homeNavigationSerial()) {
+        seenHomeNavigation_ = app_.homeNavigationSerial();
+        sheetOpen_ = false;
+        projectOpen_ = false;
+        projectSlotsMode_ = 0;
+        projectConfirmSlot_ = -1;
+        projectConfirmUntil_ = 0;
+        editor_ = false;
+    }
+    app_.setLibraryBrowserActive(sheetOpen_);
     st_ = app_.status();
     syncColors();
     ops_.clear(); hits_.clear();
@@ -99,6 +113,23 @@ void SamplerUI::frame(uint32_t now) {
     sampleArea({left + MARGIN, tb + MARGIN, W_ - left - right - 2 * MARGIN, H_ - tb - 2 * MARGIN});
     pagePanel({W_ - right, tb + MARGIN, right - MARGIN, H_ - tb - 2 * MARGIN});
     if (sheetOpen_) librarySheet();
+}
+
+// Draw the same HOME cassette with no overlays; preserve navigation and editor state.
+void SamplerUI::pipFrame(uint32_t now) {
+    now_ = now;
+    st_ = app_.status();
+    syncColors();
+    ops_.clear();
+    hits_.clear();
+    rrect({0, 0, W_, H_}, 0, kBg);
+    cassette({W_ * 0.07f, H_ * 0.13f, W_ * 0.86f, H_ * 0.73f});
+    const int track = app_.track();
+    const bool recording = st_.freeRecording || st_.track_clip_rec[track];
+    text(W_ * 0.5f, H_ * 0.065f, 19.f, kPaper, "FM1 SAMPLER", 1, true);
+    text(W_ * 0.5f, H_ * 0.93f, 16.f, recording ? kOrange : kDim,
+         "T" + std::to_string(track + 1) + (recording ? "  REC" : st_.playing ? "  PLAY" : "  STOP"),
+         1, true);
 }
 
 void SamplerUI::topBar(Rect r) {
@@ -122,7 +153,7 @@ void SamplerUI::topBar(Rect r) {
     text(rc.x + 28, cy, 9.5f, recOn ? ON_ACCENT : TEXT, app_.loopExists() ? "OVERDUB" : "REC", 0, true);
     tap(rc, [this] { app_.loopRecord(); });
     x += 94;
-    button({x, 6, 56, r.h - 12}, "SAVE", false, [this] { app_.loopSave(); }, 11);
+    button({x, 6, 56, r.h - 12}, "SAVE", false, [this] { app_.requestName(1); }, 11);
     x += 62;
     button({x, 6, 56, r.h - 12}, "CLEAR", false, [this] { app_.loopClear(); }, 11);
     x += 62;
@@ -295,8 +326,8 @@ void SamplerUI::pageView(Rect r) {
         break; }
     case P::P_CUE: {
         head = std::string("NOTE REPEAT: ") + kn[0].value;
-        text(w.x + 8, cy - 8, 13, kOrange, "HOLD OCT+ + PLAY", 0, true);
-        text(w.x + 8, cy + 16, 10, kDim, "CHANGE K1 WHILE PLAYING", 0, false);
+        text(w.x + 8, cy - 8, 12, kOrange, "OCT+ + OCT- : RATE MENU", 0, true);
+        text(w.x + 8, cy + 16, 10, kDim, "K1: STRAIGHT / TRIPLET   OCT+ + PLAY: REPEAT", 0, false);
         break; }
     case P::P_LEN: {   // the loop as bars: one block per bar with its beats, the orange playhead
         const int bars = std::max(1, st_.loopBars), shown = std::min(bars, 16);
@@ -556,6 +587,23 @@ void SamplerUI::icon(int kind, float cx, float cy, uint32_t c) {
         break; }
     case 6: rrect({cx - 10, cy - 8.7f, 7.3f, 5}, 0, c); rrect({cx - 10, cy - 4.7f, 20, 14}, 0, c); break;   // folder: a file from the disk
     case 7: rrect({cx - 10, cy - 9.3f, 20, 3.4f}, 0, c); rrect({cx - 10, cy - 1.7f, 20, 3.4f}, 0, c); rrect({cx - 10, cy + 6, 13.3f, 3.4f}, 0, c); break;   // project
+    case 8:  // archive: three file drawer fronts
+        for (int i = 0; i < 3; ++i) {
+            rrect({cx - 11, cy - 11 + i * 8.f, 22, 6}, 0, c);
+            rrect({cx - 3, cy - 8 + i * 8.f, 6, 1.5f}, 0, kBg);
+        }
+        break;
+    case 9:  // folder: same visual language as the file-load icon
+        rrect({cx - 10, cy - 8.7f, 7.3f, 5}, 0, c);
+        rrect({cx - 10, cy - 4.7f, 20, 14}, 0, c);
+        break;
+    case 10: { // waveform: solid vertical bars
+        const float heights[] = {5, 12, 18, 9, 22, 12, 17, 10, 6};
+        for (int i = 0; i < 9; ++i)
+            rrect({cx - 11 + i * 2.7f, cy - heights[i] / 2.f, 2, heights[i]}, 0, c);
+        break;
+    }
+
     }
 }
 
@@ -563,42 +611,58 @@ void SamplerUI::deck(Rect r) {
     rrect({0, 0, W_, H_}, 0, kBg);
     const int t = app_.track();
     const bool recOn = st_.freeRecording || st_.track_clip_rec[t], armed = st_.freeArmed, hasLoop = app_.loopExists() && st_.loopSamples > 0;
+    const int mic = app_.micState();
     // One grid: margin M, three zones (tape and transport on the left, tools in the middle, sample and knobs on the right, timeline below).
     // Every icon sits on a 64 px pitch; the bottom icon of the tools column stands on the transport row.
     const float M = 24, zr = W_ - M, x0 = 440, w0 = zr - x0, mx = 351;
-    // header: the track number (tap = next track), the sample name (tap = library), under it the position in the loop
-    text(M, 34, 29, kOrange, std::to_string(t + 1), 0, true);
-    tap({M - 6, 8, 34, 52}, [this, t] { app_.selectTrack((t + 1) % SamplerApp::kTracks); });
-    std::string title = app_.sampleLabel(t); if (title.empty()) title = "Empty";
-    const int mic = app_.micState();
-    if (mic == 1) title = "Listening"; else if (mic == 2) title = "Recording"; else if (mic == 3) title = "Saving";
-    text(M + 27, 34, 29, kPaper, fit(title, mx - M - 52, 29), 0, true);
-    tap({M + 24, 8, mx - M - 40, 52}, [this] { sheetOpen_ = true; sheetScroll_ = std::max(0.f, (float)app_.libraryCursor() * 34.f - 100.f); app_.refreshLibrary(); });
+    // Inline browser: NO Android file picker or modal directory window.
+    // PRESETS selects within this folder and a selected WAV loads right away;
+    // ENTER enters folders only, BACK returns one level.
+    button({M - 5, 9, 48, 36}, "BACK", false, [this] { app_.browserBack(); }, 10);
+    button({M + 47, 9, 52, 36}, "ENTER", false, [this] { app_.browserEnter(); }, 10, true);
+    const SamplerApp::BrowserItem* selected = app_.browserSelected();
+    const std::string& directory = app_.browserDir();
+    const int kind = selected ? (selected->directory ? 9 : selected->entry >= 0 ? 10 : 7) :
+                     directory.empty() ? 8 : 9;
+    const std::string name = selected ? selected->label :
+                             directory.empty() ? "FM1-SAMPLER" :
+                             std::filesystem::path(directory).filename().string();
+    icon(kind, M + 119, 26, kOrange);
+    text(M + 136, 27, 18, kPaper, fit(name, mx - (M + 141), 18), 0, true);
     {
-        float lsec = 0, psec = 0;
-        if (hasLoop) { lsec = (float)(st_.loopSamples / app_.session().sampleRate()); psec = loopPos() * lsec; } else if (st_.freeRecording) psec = lsec = st_.freeSeconds;
-        char cnt[48]; snprintf(cnt, sizeof cnt, "%d:%02d / %d:%02d", (int)psec / 60, (int)psec % 60, (int)lsec / 60, (int)lsec % 60);
-        const std::string ts = app_.toast();
-        text(M, 66, 12, !ts.empty() ? kOrange : kDim, !ts.empty() ? fit(ts, mx - M - 20, 12) : hasLoop || st_.freeRecording ? std::string(cnt) : "No loop", 0, true);
+        const std::string route = directory.empty() ? "FM1-SAMPLER /" :
+                                  "FM1-SAMPLER / " + directory;
+        text(M, 61, 9.2f, kDim, fit(route, mx - M - 55, 9.2f), 0, false);
+        // Only the large orange T1..T8 is drawn left of the waveform.
+        // No background, outline, decorative stripe or "TRACK" caption.
+        // The transparent touch target still cycles through tracks.
+        const Rect trackTap{mx + 38, 35, x0 - (mx + 38) - 5, 97};
+        text(trackTap.x + trackTap.w / 2, trackTap.y + trackTap.h / 2,
+             26, kOrange, "T" + std::to_string(t + 1), 1, true);
+        tap(trackTap, [this, t] {
+            app_.selectTrack((t + 1) % SamplerApp::kTracks);
+        });
     }
     // Compact two-line legend for the FM-1 physical buttons. It is NOT a
     // software OCT control: tapping the small HIDE/INFO chip only changes
     // whether the information is displayed.
     if (shortcutHelpVisible_) {
-        const Rect help{M - 4, 76, 292, 57};
+        const Rect help{M - 4, 76, 292, 75};
         rrect(help, R_CONTROL, theme::SURFACE);
         stroke(help, R_CONTROL, theme::OUTLINE, 1);
         text(help.x + 7, help.y + 9, 9, kPaper,
              "OCT− + PLAY/STOP: RESTART LOOP", 0, true);
-        text(help.x + 7, help.y + 23, 8.6f, kDim,
-             "OCT+ + PLAY/STOP    NOTE REPEAT  (K1: 1/1-1/32)", 0, true);
-        line(help.x + 7, help.y + 29, help.x + help.w - 7, help.y + 29, kLine, 1);
+        text(help.x + 7, help.y + 23, 8.4f, kDim,
+             "OCT+ + PLAY: NOTE REPEAT", 0, true);
+        text(help.x + 7, help.y + 36, 8.6f, kOrange,
+             "OCT+ + OCT- = NOTE REPEAT MENU (K1)", 0, true);
+        line(help.x + 7, help.y + 42, help.x + help.w - 7, help.y + 42, kLine, 1);
         // Notes can arrive in separate USB/BLE callbacks. These strings show
         // their arrival and which modifier is still held; they do not generate
         // any synthetic button events.
-        text(help.x + 7, help.y + 41, 8.3f, kDim,
+        text(help.x + 7, help.y + 53, 8.3f, kDim,
              fit(app_.midiControlStatus(), help.w - 15, 8.3f), 0, false);
-        text(help.x + 7, help.y + 52, 8.3f, kOrange,
+        text(help.x + 7, help.y + 65, 8.3f, kOrange,
              fit(app_.midiLastEvent(), help.w - 15, 8.3f), 0, false);
         const Rect hide{help.x + help.w - 39, help.y + 1, 38, 15};
         rrect(hide, R_CONTROL, theme::RAISED);
@@ -606,7 +670,7 @@ void SamplerUI::deck(Rect r) {
         tap(hide, [this] { setShortcutHelpVisible(false); });
         // Only the decorative cassette is reduced slightly, never the
         // transport keys, timeline or other interactive controls.
-        cassette({M - 4, 136, 292, 100});
+        cassette({M - 4, 154, 292, 82});
     } else {
         cassette({M - 4, 86, 292, 150});
         const Rect show{M + 254, 61, 38, 17};
@@ -634,7 +698,11 @@ void SamplerUI::deck(Rect r) {
     const uint32_t micCol = mic == 1 || mic == 2 ? kOrange : kPaper;
     icon(4, mx, 56, kPaper);  tap({mx - 32, 28, 64, 56}, [this] { setLight(!theme::light); });
     icon(5, mx, 120, micCol); tap({mx - 32, 92, 64, 56}, [this] { app_.micSample(); });
-    icon(6, mx, 184, kPaper); tap({mx - 32, 156, 64, 56}, [this] { app_.requestFile(); });
+    // HOME folder icon restores the familiar library page with IMPORT ZIP,
+    // while the physical PRESETS knob continues using the same directory cursor.
+    icon(6, mx, 184, kPaper);
+    text(mx, 211, 8.5f, kDim, "LIBRARY", 1, true);
+    tap({mx - 32, 156, 64, 56}, [this] { openLibrary(); });
     icon(7, mx, 248, projectOpen_ ? kOrange : kPaper); tap({mx - 32, 220, 64, 56}, [this] { projectOpen_ = true; });
     // the sample of this track, its page and the four knobs of the page
     sampleView({x0, 14, w0, 118});
@@ -763,7 +831,7 @@ void SamplerUI::sampleArea(Rect r) {
         text(nm.x + 10, nm.y + nm.h / 2 + 9, 9, DIM, lib[(size_t)cur].group + "  " + std::to_string(cur + 1) + "/" + std::to_string(lib.size()), 0, false);
     }
     text(nm.x + nm.w - 10, nm.y + nm.h / 2, 9.5f, ACCENT, "LIBRARY", 2, true);
-    tap(nm, [this] { sheetOpen_ = true; sheetScroll_ = std::max(0.f, (float)app_.libraryCursor() * 34.f - 100.f); app_.refreshLibrary(); });
+    tap(nm, [this] { openLibrary(); });
     // microphone and disk
     Rect br{r.x, lr.y + lr.h + 8, r.w, 38};
     const int ms = app_.micState();
@@ -801,40 +869,123 @@ void SamplerUI::pagePanel(Rect r) {
     }
 }
 
+void SamplerUI::openLibrary() {
+    app_.refreshLibrary();
+    app_.browserRoot();
+    projectOpen_ = false;
+    sheetOpen_ = true;
+    app_.setLibraryBrowserActive(true);
+    browseDir_.clear();
+    sheetScroll_ = 0;
+    buildBrowserRows();
+}
+
+void SamplerUI::buildBrowserRows() {
+    // One authoritative cursor for the FM-1 PRESETS encoder AND this sheet.
+    // Do not create a second directory scanner with different audio loading
+    // rules; all WAVs selected here load as a preset immediately.
+    const std::string& dir = app_.browserDir();
+    const bool changedDir = browseDir_ != dir;
+    const int oldSelected = browseSelected_;
+    if (changedDir) sheetScroll_ = 0.f;
+    browseDir_ = dir;
+    browseRows_.clear();
+    for (const auto& row : app_.browserItems())
+        browseRows_.push_back({row.label, row.path, row.entry, row.directory});
+    browseSelected_ = app_.browserIndex();
+    constexpr float rowHeight = 36.f;
+    if (browseSelected_ >= 0 && (changedDir || browseSelected_ != oldSelected) && sheetList_.h > 0) {
+        const float y = rowHeight * browseSelected_;
+        if (y < sheetScroll_) sheetScroll_ = y;
+        else if (y + rowHeight > sheetScroll_ + sheetList_.h)
+            sheetScroll_ = y + rowHeight - sheetList_.h;
+    }
+}
+
+void SamplerUI::browserBack() { app_.browserBack(); buildBrowserRows(); }
+void SamplerUI::browserEnter() { app_.browserEnter(); buildBrowserRows(); }
+
 void SamplerUI::librarySheet() {
-    rrect({0, 0, W_, H_}, 0, theme::withAlpha(BG, 200));
+    buildBrowserRows(); // reflect live physical PRESETS movement on the phone
+    rrect({0, 0, W_, H_}, 0, theme::withAlpha(BG, 215));
     tap({0, 0, W_, H_}, [this] { sheetOpen_ = false; });
-    const Rect box{W_ * 0.22f, 24, W_ * 0.56f, H_ - 48};
+    const Rect box{W_ * 0.17f, 12, W_ * 0.66f, H_ - 24};
     rrect(box, R_CARD, SURFACE); stroke(box, R_CARD, ACCENT, 1);
     tap(box, [] {});
-    text(box.x + 14, box.y + 20, T_TITLE, TEXT, "SAMPLE LIBRARY", 0, true);
-    button({box.x + box.w - 70, box.y + 6, 60, 28}, "CLOSE", false, [this] { sheetOpen_ = false; }, 10);
-    sheetList_ = {box.x + 6, box.y + 44, box.w - 12, box.h - 52};
-    const auto& lib = app_.library();
-    // rows: a header per group, then its entries
-    struct Row { bool head; std::string text; int entry; };
-    std::vector<Row> rows;
-    std::string g;
-    for (int i = 0; i < (int)lib.size(); i++) { if (lib[(size_t)i].group != g) { g = lib[(size_t)i].group; rows.push_back({true, g, -1}); } rows.push_back({false, lib[(size_t)i].label, i}); }
-    const float rh = 34;
-    sheetScroll_ = std::min(std::max(0.f, sheetScroll_), std::max(0.f, rows.size() * rh - sheetList_.h));
+    text(box.x + 15, box.y + 20, 14, TEXT, "FM1-SAMPLER", 0, true);
+    text(box.x + 15, box.y + 38, 9, DIM,
+         "K1 RIGHT: ENTER SELECTED FOLDER   K1 LEFT: GO BACK", 0, true);
+    button({box.x + box.w - 70, box.y + 5, 60, 26}, "CLOSE", false,
+           [this] { sheetOpen_ = false; }, 9);
+    const float top = box.y + 46;
+    // Navigation actions are always to the LEFT of the list.
+    // The three file-type icons are indicators only and sit immediately
+    // before their corresponding names, not in a separate category sidebar.
+    const Rect back{box.x + 10, top + 53, 88, 32};
+    const Rect enter{box.x + 10, top + 93, 88, 32};
+    button(back, "< BACK", false, [this] { browserBack(); }, 11);
+    button(enter, "ENTER >", false, [this] { browserEnter(); }, 11, true);
+    const std::string crumb = browseDir_.empty() ? "FM1-SAMPLER /" : "FM1-SAMPLER / " + browseDir_;
+    icon(browseDir_.empty() ? 8 : 9, box.x + 22, top + 8, ACCENT);
+    text(box.x + 39, top + 8, 10, DIM, fit(crumb, box.w - 58, 10), 0, true);
+
+    sheetList_ = {box.x + 106, top + 53, box.w - 114, box.h - 53 - 85};
+    const float rh = 36.f;
+    sheetScroll_ = std::min(std::max(0.f, sheetScroll_),
+                            std::max(0.f, (float)browseRows_.size() * rh - sheetList_.h));
     clip(sheetList_);
-    for (size_t i = 0; i < rows.size(); i++) {
+    for (int i = 0; i < (int)browseRows_.size(); ++i) {
+        const auto& row = browseRows_[(size_t)i];
         const float y = sheetList_.y + i * rh - sheetScroll_;
         if (y + rh < sheetList_.y || y > sheetList_.y + sheetList_.h) continue;
-        if (rows[i].head) { text(sheetList_.x + 8, y + rh / 2, T_CAPTION, DIM, rows[i].text, 0, true); line(sheetList_.x, y + rh - 3, sheetList_.x + sheetList_.w, y + rh - 3, OUTLINE, 1); continue; }
-        const bool cur = rows[i].entry == app_.libraryCursor();
-        if (cur) { rrect({sheetList_.x, y + 1, sheetList_.w, rh - 2}, R_CONTROL, RAISED); stroke({sheetList_.x, y + 1, sheetList_.w, rh - 2}, R_CONTROL, ACCENT, 1); }
-        text(sheetList_.x + 14, y + rh / 2, T_BODY + 1, cur ? ACCENT : TEXT, fit(rows[i].text, sheetList_.w - 30, T_BODY + 1), 0, cur);
+        const bool selected = i == browseSelected_;
+        if (selected) {
+            rrect({sheetList_.x, y + 1, sheetList_.w, rh - 2}, R_CONTROL, RAISED);
+            stroke({sheetList_.x, y + 1, sheetList_.w, rh - 2}, R_CONTROL, ACCENT, 1.1f);
+        }
+        icon(row.directory ? 9 : row.entry >= 0 ? 10 : 7,
+             sheetList_.x + 20, y + rh / 2, selected ? ACCENT : TEXT);
+        text(sheetList_.x + 42, y + 13, 11, selected ? ACCENT : TEXT,
+             fit(row.label, sheetList_.w - 70, 11), 0, selected);
+        text(sheetList_.x + 42, y + 29, 8.3f, DIM,
+             row.directory ? "FOLDER / ENTER >" : row.entry >= 0 ? "WAV / AUTO LOADS AS PRESET" : "OTHER FILE (PRESERVED)", 0, false);
     }
     endClip();
-    hit(sheetList_, [this](float, float y) { sheetLastY_ = y; sheetMoved_ = 0; },
-        [this](float, float y) { sheetScroll_ -= y - sheetLastY_; sheetMoved_ += std::fabs(y - sheetLastY_); sheetLastY_ = y; },
-        [this, rows, rh]() {
+    if (browseRows_.empty())
+        text(sheetList_.x + sheetList_.w / 2, sheetList_.y + 33, 10, DIM,
+             "EMPTY FOLDER", 1, false);
+    hit(sheetList_,
+        [this](float, float y) { sheetLastY_ = y; sheetMoved_ = 0; },
+        [this](float, float y) {
+            sheetScroll_ -= y - sheetLastY_;
+            sheetMoved_ += std::fabs(y - sheetLastY_);
+            sheetLastY_ = y;
+        },
+        [this, rh] {
             if (sheetMoved_ > 8) return;
-            const int idx = (int)((sheetLastY_ - sheetList_.y + sheetScroll_) / rh);
-            if (idx >= 0 && idx < (int)rows.size() && !rows[(size_t)idx].head) { app_.loadEntry(rows[(size_t)idx].entry); sheetOpen_ = false; }
+            const int index = (int)((sheetLastY_ - sheetList_.y + sheetScroll_) / rh);
+            if (index >= 0 && index < (int)browseRows_.size()) {
+                app_.browserSelect(index);
+                buildBrowserRows();
+            }
         });
+
+    // Backup buttons share this familiar LIBRARY sheet with IMPORT ZIP.
+    // SAF pickers open only when the user explicitly requests export/import.
+    const float actionsY = box.y + box.h - 35;
+    text(box.x + box.w - 14, actionsY - 9, 8.7f, DIM,
+         std::to_string(browseRows_.size()) + " ITEMS  /  PRESETS: SELECT", 2, false);
+    const float gap = 7.f, leftPad = 15.f;
+    const float actionWidth = std::max(40.f, (box.w - 2 * leftPad - 3 * gap) / 4.f);
+    button({box.x + leftPad, actionsY, actionWidth, 28}, "+ IMPORT ZIP", false,
+           [this] { app_.requestPack(); }, 9, true);
+    button({box.x + leftPad + actionWidth + gap, actionsY, actionWidth, 28},
+           "SAVE BACKUP", false, [this] { app_.requestBackupExport(); }, 9);
+    button({box.x + leftPad + 2 * (actionWidth + gap), actionsY, actionWidth, 28},
+           "IMPORT BACKUP", false, [this] { app_.requestBackupImport(); }, 9);
+    button({box.x + leftPad + 3 * (actionWidth + gap), actionsY, actionWidth, 28},
+           "DELETE", false, [this] { app_.requestDeleteBrowserSelection(); },
+           9, app_.canDeleteBrowserSelection());
 }
 
 // PROJECT: original loop actions on the left; scene / song sequencer on the
@@ -863,10 +1014,12 @@ void SamplerUI::projectSheet() {
     // A narrow landscape layout switches between the two columns instead of
     // making buttons overlap or shrinking the text until it is illegible.
     if (!twoColumns) {
-        button({W_ - outer - 160, 20, 75, 28},
+        button({W_ - outer - 279, 20, 75, 28},
                projectRight_ ? "PROJECT" : "SCENES", false,
                [this] { projectRight_ = !projectRight_; }, 10);
     }
+    button({W_ - outer - 194, 20, 108, 28}, "EXPORT SONG", false,
+           [this] { app_.requestSongExport(); }, 9, true);
     button({W_ - outer - 79, 20, 71, 28}, "CLOSE", false,
            [this] { projectOpen_ = false; }, 10);
 
@@ -877,10 +1030,13 @@ void SamplerUI::projectSheet() {
         text(left.x + 14, left.y + 23, 16, ACCENT, "PROJECT", 0, true);
         // Complete project save/load is separate from SAVE LOOP and SAVE SCENE.
         // Files contain COMPOSE, live loops, 12 scenes, SONG, samples and FX.
-        button({left.x + left.w - 217, left.y + 42, 102, 22}, "SAVE PROJECT", false,
-               [this] { projectSlotsMode_ = 1; projectConfirmSlot_ = -1; }, 9);
-        button({left.x + left.w - 110, left.y + 42, 100, 22}, "LOAD PROJECT", false,
-               [this] { projectSlotsMode_ = 2; projectConfirmSlot_ = -1; }, 9);
+        const float buttonW = (left.w - 40.f) / 3.f;
+        button({left.x + 10, left.y + 43, buttonW, 24}, "SAVE PROJECT", false,
+               [this] { projectSlotsMode_ = 1; projectPage_ = 0; projectConfirmSlot_ = -1; }, 8.8f);
+        button({left.x + 20 + buttonW, left.y + 43, buttonW, 24}, "LOAD PROJECT", false,
+               [this] { projectSlotsMode_ = 2; projectPage_ = 0; projectConfirmSlot_ = -1; }, 8.8f);
+        button({left.x + 30 + 2 * buttonW, left.y + 43, buttonW, 24},
+               "EXPORT ALL LOOPS", false, [this] { app_.requestLoopExport(); }, 8.8f, true);
         const std::string note = app_.toast().empty() ? app_.loopText() : app_.toast();
         text(left.x + 14, left.y + 76, 10, DIM, fit(note, left.w - 26, 10), 0, true);
         const float rh = std::min(38.f, (left.h - 100.f) / 7.f - 3.f);
@@ -899,8 +1055,8 @@ void SamplerUI::projectSheet() {
             y += step;
         };
         const std::string tn = "TRACK " + std::to_string(t + 1);
-        row("SAVE LOOP OF " + tn, "into the sample library (USER)", hasClip, false,
-            [this] { app_.loopSave(); });
+        row("SAVE LOOP OF " + tn, "choose a name / SAVED / Loops", hasClip, false,
+            [this] { app_.requestName(1); });
         row("CLEAR LOOP OF " + tn, "the other tracks keep theirs", hasClip, false,
             [this] { app_.loopClearTrack(); });
         const bool armed = clearArmed_ && now_ < clearArmed_;
@@ -964,10 +1120,12 @@ void SamplerUI::projectSheet() {
         int count = 0; for (int t = 0; t < SamplerApp::kTracks; ++t) count += (mask >> t) & 1;
         text(pad.x + pad.w / 2, pad.y + H(23), 8, DIM,
              queued ? "NEXT" : saved ? std::to_string(count) + " LOOPS" : "EMPTY", 1, false);
-        tap(pad, [this, slot] { app_.selectScene(slot, true); });
+        // Selecting a pad for editing must not swap the COMPOSE loops with the
+        // old scene. The separate LAUNCH button (and physical MIDI pads) play it.
+        tap(pad, [this, slot] { app_.selectScene(slot, false); });
     }
 
-    text(x, Y(122), 10, DIM, "TRACKS INCLUDED IN " + SamplerApp::sceneLabel(app_.selectedScene()), 0, true);
+    text(x, Y(122), 10, DIM, "TRACKS TO SAVE IN " + SamplerApp::sceneLabel(app_.selectedScene()), 0, true);
     const float trackGap = 4.f, trackW = (w - 7 * trackGap) / 8;
     for (int t = 0; t < SamplerApp::kTracks; ++t) {
         const bool on = !!(app_.sceneTracks() & (1u << t));
@@ -1071,15 +1229,16 @@ void SamplerUI::projectSlotsSheet() {
                 : "RESTORES ALL TRACKS, RECORDED LOOPS AND SONG", 0, true);
 
     const float gap = 7.f, sx = panel.x + 15, sw = (panel.w - 30 - 3 * gap) / 4.f;
-    for (int slot = 0; slot < Session::kProjectSlots; ++slot) {
+    for (int local = 0; local < 8; ++local) {
+        const int slot = projectPage_ * 8 + local;
         const bool exists = app_.fullProjectExists(slot);
-        const int row = slot / 4, col = slot % 4;
+        const int row = local / 4, col = local % 4;
         Rect r{sx + col * (sw + gap), panel.y + 60 + row * 75, sw, 66};
         const bool armed = projectConfirmSlot_ == slot && now_ < projectConfirmUntil_;
         rrect(r, R_CONTROL, armed ? RAISED : SURFACE);
         stroke(r, R_CONTROL, armed ? ACCENT : exists ? TEXT : OUTLINE, armed ? 2.f : 1.f);
         text(r.x + r.w / 2, r.y + 21, 12, exists ? TEXT : DIM,
-             "PROJECT " + std::to_string(slot + 1), 1, true);
+             fit(app_.projectName(slot), r.w - 8, 12), 1, true);
         text(r.x + r.w / 2, r.y + 44, 9, armed ? ACCENT : DIM,
              armed ? "CONFIRM" : exists ? "SAVED" : "EMPTY", 1, true);
         tap(r, [this, slot, exists, armed, saving] {
@@ -1091,12 +1250,27 @@ void SamplerUI::projectSlotsSheet() {
                 app_.say(saving ? "TAP AGAIN TO OVERWRITE" : "TAP AGAIN TO LOAD");
                 return;
             }
-            if (saving ? app_.saveFullProject(slot) : app_.loadFullProject(slot)) {
+            if (saving) {
+                app_.requestSaveProjectName(slot);
+                projectSlotsMode_ = 0;
+            } else if (app_.loadFullProject(slot)) {
                 projectSlotsMode_ = 0;
             }
             projectConfirmSlot_ = -1;
         });
     }
+    // Persistent two-page navigator: eight large, touchable slots on each
+    // page. Never renumber or relocate existing project_1..project_8 files.
+    button({panel.x + 17, panel.y + 226, 94, 27}, "PREV", projectPage_ == 0,
+           [this] { if (projectPage_ > 0) {
+               --projectPage_; projectConfirmSlot_ = -1; projectConfirmUntil_ = 0;
+           } }, 10);
+    text(panel.x + panel.w / 2, panel.y + 239, 11, ACCENT,
+         "PAGE " + std::to_string(projectPage_ + 1) + " / 2", 1, true);
+    button({panel.x + panel.w - 111, panel.y + 226, 94, 27}, "NEXT",
+           projectPage_ == 1, [this] { if (projectPage_ < 1) {
+               ++projectPage_; projectConfirmSlot_ = -1; projectConfirmUntil_ = 0;
+           } }, 10);
     const int op = app_.fullProjectOperation();
     const std::string msg = op == 1 ? "SAVING AUDIO AND PROJECT DATA..." :
                             op == 3 ? "LOADING AUDIO AND PROJECT DATA..." :
@@ -1104,7 +1278,7 @@ void SamplerUI::projectSlotsSheet() {
                             op == -2 ? "LOAD FAILED: FILE CORRUPT" :
                             op == 2 ? "LAST PROJECT SAVE COMPLETED" :
                             op == 4 ? "LAST PROJECT LOAD COMPLETED" :
-                            "8 INDEPENDENT PROJECT SLOTS";
+                            "16 INDEPENDENT PROJECT SLOTS";
     text(panel.x + panel.w / 2, panel.y + panel.h - 18, 10,
          op < 0 ? ACCENT : DIM, msg, 1, true);
 }

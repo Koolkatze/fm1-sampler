@@ -24,6 +24,8 @@ public class Backend {
     final Handler main = new Handler(Looper.getMainLooper());
     final MidiManager midi;
     final AudioManager am;
+    MidiManager.DeviceCallback midiCallback;
+    AudioDeviceCallback audioCallback;
     MidiDevice device;
     volatile MidiInputPort toFm1;
     MidiOutputPort fromFm1;
@@ -34,6 +36,10 @@ public class Backend {
     int usbAudioId = 0;
     /** Set by the activity: opens the system file picker (the phone UI asked for LOAD FILE FROM DISK). */
     public volatile Runnable onFileRequest;
+    public volatile Runnable onPackRequest;
+    public volatile Runnable onLoopExportRequest;
+    public volatile Runnable onSongExportRequest;
+    public volatile java.util.function.IntConsumer onNameRequest;
 
     public static synchronized Backend get(Context c) {
         if (instance == null) instance = new Backend(c.getApplicationContext());
@@ -42,11 +48,13 @@ public class Backend {
 
     Backend(Context c) {
         ctx = c;
-        java.io.File samples = new java.io.File(c.getFilesDir(), "samples");   // the bundled sample library, copied out once: the engine reads plain files
-        if (!new java.io.File(samples, ".v1").exists()) {
-            try { copyAssets(c, "samples", samples); new java.io.File(samples, ".v1").createNewFile(); } catch (java.io.IOException e) { android.util.Log.w("fm1sampler", "samples: " + e); }
+        try {
+            // One root for the UI, packs, official sounds, recordings and FMP2 projects.
+            java.io.File root = StorageLayout.initialize(c);
+            engine = Native.create(StorageLayout.projects(c).getAbsolutePath(), root.getAbsolutePath());
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Cannot initialize FM1-SAMPLER library", e);
         }
-        engine = Native.create(c.getFilesDir().getAbsolutePath(), samples.getAbsolutePath());
         midi = (MidiManager) c.getSystemService(Context.MIDI_SERVICE);
         am = (AudioManager) c.getSystemService(Context.AUDIO_SERVICE);
     }
@@ -56,16 +64,18 @@ public class Backend {
         running = true;
         startAudio();
         if (midi != null) {
-            midi.registerDeviceCallback(new MidiManager.DeviceCallback() {
+            midiCallback = new MidiManager.DeviceCallback() {
                 @Override public void onDeviceAdded(MidiDeviceInfo i) { try { connectMidi(); } catch (Throwable t) { Log.w(TAG, "midi add: " + t); } }
                 @Override public void onDeviceRemoved(MidiDeviceInfo i) { try { disconnectMidi(); connectMidi(); } catch (Throwable t) { Log.w(TAG, "midi remove: " + t); } }
-            }, main);
+            };
+            midi.registerDeviceCallback(midiCallback, main);
             connectMidi();
         }
-        am.registerAudioDeviceCallback(new AudioDeviceCallback() {
+        audioCallback = new AudioDeviceCallback() {
             @Override public void onAudioDevicesAdded(AudioDeviceInfo[] a) { try { restartAudioIfUsbChanged(); if (micWanted && !micStarted) startMic(); } catch (Throwable t) { Log.w(TAG, "audio add: " + t); } }
             @Override public void onAudioDevicesRemoved(AudioDeviceInfo[] a) { try { restartAudioIfUsbChanged(); } catch (Throwable t) { Log.w(TAG, "audio remove: " + t); } }
-        }, main);
+        };
+        am.registerAudioDeviceCallback(audioCallback, main);
         ticker = new Thread(() -> {
             long t0 = SystemClock.uptimeMillis();
             long lastRestart = 0;
@@ -75,6 +85,11 @@ public class Backend {
                     send(out);
                     Native.uiLink(engine, fromFm1 != null, usbAudioId != 0);
                     if (Native.wantFile(engine)) { Runnable r = onFileRequest; if (r != null) main.post(r); }
+                    if (Native.wantPack(engine)) { Runnable r = onPackRequest; if (r != null) main.post(r); }
+                    if (Native.wantLoopExport(engine)) { Runnable r = onLoopExportRequest; if (r != null) main.post(r); }
+                    if (Native.wantSongExport(engine)) { Runnable r = onSongExportRequest; if (r != null) main.post(r); }
+                    int request = Native.takeDialogRequest(engine);
+                    if (request != 0) { java.util.function.IntConsumer handler = onNameRequest; if (handler != null) main.post(() -> handler.accept(request)); }
                     if (Native.audioDead(engine) && SystemClock.uptimeMillis() - lastRestart > 700) {   // the system closed the stream (USB plugged / unplugged)
                         lastRestart = SystemClock.uptimeMillis();
                         main.postDelayed(() -> { if (running) startAudio(); }, 300);
@@ -88,6 +103,14 @@ public class Backend {
 
     public synchronized void stop() {
         running = false;
+        if (midi != null && midiCallback != null) {
+            midi.unregisterDeviceCallback(midiCallback);
+            midiCallback = null;
+        }
+        if (audioCallback != null) {
+            am.unregisterAudioDeviceCallback(audioCallback);
+            audioCallback = null;
+        }
         try { if (ticker != null) ticker.join(300); } catch (InterruptedException ignored) { }
         Native.stopAudio(engine);
         audioStarted = micStarted = false;
@@ -126,6 +149,7 @@ public class Backend {
     // MIDI FROM the FM-1. That is the port required to receive physical
     // OCT+/OCT-/PLAY messages. The device INPUT (phone -> FM-1) is optional.
     boolean connecting;
+    volatile int midiGeneration;
     synchronized void connectMidi() {
         if (device != null || midi == null || connecting || !running) return;
         MidiDeviceInfo pick = null;
@@ -155,8 +179,13 @@ public class Backend {
         }
         final MidiDeviceInfo selected = pick;
         connecting = true;
+        final int generation = midiGeneration;
         midi.openDevice(selected, d -> {
             synchronized (Backend.this) {
+                if (generation != midiGeneration) {
+                    if (d != null) try { d.close(); } catch (Exception ignored) { }
+                    return;
+                }
                 connecting = false;
                 if (d == null || device != null || !running) {
                     if (d != null) try { d.close(); } catch (Exception ignored) { }
@@ -175,6 +204,7 @@ public class Backend {
                     loggedIncomingEvents = 0;
                     rx.connect(new MidiReceiver() {
                         @Override public void onSend(byte[] data, int off, int count, long ts) {
+                            if (generation != midiGeneration || !running) return;
                             try {
                                 // A bounded MIDI input trace lets us diagnose firmware
                                 // that does not forward button note-on/off events.
@@ -203,10 +233,13 @@ public class Backend {
         }, main);
     }
     synchronized void disconnectMidi() {
+        ++midiGeneration;
+        connecting = false;
         try { if (fromFm1 != null) fromFm1.close(); } catch (Exception ignored) { }
         try { if (toFm1 != null) toFm1.close(); } catch (Exception ignored) { }
         try { if (device != null) device.close(); } catch (Exception ignored) { }
         fromFm1 = null; toFm1 = null; device = null;
+        Native.midiDisconnected(engine);
     }
     void send(byte[] b) {
         MidiInputPort port = toFm1;

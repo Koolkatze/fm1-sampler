@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "fm1_gpio.h"
+#include "fm1_encoder_decoder.h"
 
 enum { FM1_NCOL=11, FM1_NKEY=41, FM1_NENC=7 };
 /* Packed column/row locations, in the application's control order. */
@@ -23,8 +24,7 @@ static struct {
     volatile uint32_t notes,buttons;
     volatile int16_t enc_steps[FM1_NENC];
     uint8_t rows[FM1_NCOL],press[FM1_NKEY],release[FM1_NKEY];
-    uint8_t phase[FM1_NENC],rest[FM1_NENC];
-    uint16_t stable[FM1_NENC];
+    uint8_t phase[FM1_NENC];
     int8_t edges[FM1_NENC];
     uint8_t column,queued,stalled;
 } fm1_in;
@@ -85,27 +85,11 @@ static FM1_AUDIO_CODE void fm1_scan_decode(void)
     }
     for(unsigned e=0;e<FM1_NENC;e++) {
         unsigned phase=(fm1_contact(fm1_encoder_pin[e][0])<<1)|fm1_contact(fm1_encoder_pin[e][1]);
-        unsigned previous=fm1_in.phase[e];
-        if(previous>3) {fm1_in.phase[e]=fm1_in.rest[e]=(uint8_t)phase;continue;}
-        if(phase!=previous) {
-            fm1_in.stable[e]=0;
-            int delta=fm1_quadrature[previous*4+phase];
-            /* A diagonal transition gives no reliable direction. */
-            if((phase^previous)==3)fm1_in.edges[e]=0;
-            else {
-                int edges=fm1_in.edges[e]+delta;
-                fm1_in.edges[e]=(int8_t)(edges>8?8:edges<-8?-8:edges);
-            }
-            fm1_in.phase[e]=(uint8_t)phase;
-        } else {
-            if(fm1_in.stable[e]<900)fm1_in.stable[e]++;
-            if(fm1_in.stable[e]==900) {fm1_in.rest[e]=(uint8_t)phase;fm1_in.edges[e]=0;}
-            if(phase==fm1_in.rest[e]) {
-                int movement=fm1_in.edges[e]/4;
-                int pending=fm1_in.enc_steps[e]+movement;
-                fm1_in.enc_steps[e]=(int16_t)(pending>32767?32767:pending<-32768?-32768:pending);
-                fm1_in.edges[e]=0;
-            }
+        int movement=fm1_encoder_decode(&fm1_in.phase[e], &fm1_in.edges[e],
+                                        phase, fm1_quadrature);
+        if(movement) {
+            int sum=fm1_in.enc_steps[e]+movement;
+            fm1_in.enc_steps[e]=(int16_t)(sum>32767?32767:sum<-32768?-32768:sum);
         }
     }
 }

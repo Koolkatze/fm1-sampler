@@ -13,6 +13,7 @@ import android.view.View;
 /** Replays the draw ops built by the C++ PhoneUI (engine/ui/PhoneUI.cpp) and forwards touches to it. All layout lives in C++. */
 public class SamplerView extends View {
     final long h;
+    private boolean pictureInPicture;
     float d = 1;                         // layout unit -> px: the UI is laid out for a fixed height of 400 units, so it scales to any phone
     final Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
     final RectF r = new RectF();
@@ -27,12 +28,14 @@ public class SamplerView extends View {
         p.setAntiAlias(false);
     }
 
+    void setPictureInPicture(boolean pip) { pictureInPicture = pip; invalidate(); }
+
     static float f(int bits) { return Float.intBitsToFloat(bits); }
 
     @Override protected void onDraw(Canvas c) {
         long now = SystemClock.uptimeMillis();
         d = getHeight() / 400f;
-        Object[] fr = Native.uiFrame(h, getWidth() / d, getHeight() / d, topDp, bottomDp, now);
+        Object[] fr = Native.uiFrame(h, getWidth() / d, getHeight() / d, topDp, bottomDp, now, pictureInPicture);
         int[] a = (int[]) fr[0];
         String[] texts = ((String) fr[1]).split("\u0001", -1);
         int saves = 0;
@@ -81,6 +84,7 @@ public class SamplerView extends View {
     }
 
     @Override public boolean onTouchEvent(MotionEvent e) {
+        if (pictureInPicture) return true;
         int act = e.getActionMasked();
         int a = act == MotionEvent.ACTION_DOWN ? 0 : act == MotionEvent.ACTION_MOVE ? 1 : (act == MotionEvent.ACTION_UP || act == MotionEvent.ACTION_CANCEL) ? 2 : -1;
         if (a < 0) return super.onTouchEvent(e);

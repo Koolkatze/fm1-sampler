@@ -129,6 +129,15 @@ FN(void, stopAudio)(JNIEnv*, jclass, jlong h) { E(h)->stop(); }
 FN(jboolean, audioDead)(JNIEnv*, jclass, jlong h) { return E(h)->streamDead.exchange(false); }
 FN(jint, xruns)(JNIEnv*, jclass, jlong h) { auto& e = *E(h); return e.stream ? e.stream->getXRunCount().value() : -1; }
 
+FN(void, midiDisconnected)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h);
+    std::lock_guard<std::mutex> lock(e.surfaceMtx);
+    e.inSx = false;
+    e.sx.clear();
+    e.msgLen = 0;
+    e.msgNeed = 3;
+    e.app->onMidiDisconnected();
+}
 FN(void, midiIn)(JNIEnv* env, jclass, jlong h, jbyteArray a, jint off, jint n) {
     if (!a || off < 0 || n <= 0 || off + n > env->GetArrayLength(a)) return;
     jbyte* d = env->GetByteArrayElements(a, nullptr);
@@ -170,6 +179,60 @@ FN(void, importFile)(JNIEnv* env, jclass, jlong h, jstring path) {
     { std::lock_guard<std::mutex> l(e.surfaceMtx); e.app->importFile(c); }
     env->ReleaseStringUTFChars(path, c);
 }
+FN(jboolean, wantLoopExport)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    return e.app->wantLoopExport();
+}
+FN(jboolean, wantSongExport)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    return e.app->wantSongExport();
+}
+FN(jboolean, exportSong)(JNIEnv* env, jclass, jlong h, jstring directory) {
+    auto& e = *E(h);
+    const char* path = env->GetStringUTFChars(directory, nullptr);
+    const bool started = e.session.exportSong(path);
+    env->ReleaseStringUTFChars(directory, path);
+    return started;
+}
+FN(jboolean, exportLoops)(JNIEnv* env, jclass, jlong h, jstring directory) {
+    auto& e = *E(h);
+    const char* path = env->GetStringUTFChars(directory, nullptr);
+    const bool started = e.session.exportLoops(path);
+    env->ReleaseStringUTFChars(directory, path);
+    return started;
+}
+FN(jint, loopExportStatus)(JNIEnv*, jclass, jlong h) {
+    return E(h)->session.loopExportStatus();
+}
+FN(jboolean, wantPack)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    return e.app->wantPack();
+}
+FN(jint, takeDialogRequest)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    return e.app->takeDialogRequest();
+}
+FN(jstring, takePackDeletePath)(JNIEnv* env, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    const std::string path = e.app->takePackDeletePath();
+    return env->NewStringUTF(path.c_str());
+}
+FN(void, submitName)(JNIEnv* env, jclass, jlong h, jint kind, jstring name) {
+    auto& e = *E(h); const char* c = env->GetStringUTFChars(name, nullptr);
+    { std::lock_guard<std::mutex> l(e.surfaceMtx); e.app->submitName((int)kind, c); }
+    env->ReleaseStringUTFChars(name, c);
+}
+FN(jboolean, backupReady)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h);
+    std::lock_guard<std::mutex> l(e.surfaceMtx);
+    const int op = e.session.projectOperation();
+    return !e.app->recordingNow() && e.app->micState() == 0 && op != 1 && op != 3;
+}
+FN(void, refreshLibrary)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    e.app->refreshLibrary();
+    e.ui->refreshBrowserAfterImport();
+}
 FN(void, say)(JNIEnv* env, jclass, jlong h, jstring msg) {
     auto& e = *E(h); const char* c = env->GetStringUTFChars(msg, nullptr);
     { std::lock_guard<std::mutex> l(e.surfaceMtx); e.app->say(c); }
@@ -177,11 +240,12 @@ FN(void, say)(JNIEnv* env, jclass, jlong h, jstring msg) {
 }
 FN(void, uiLink)(JNIEnv*, jclass, jlong h, jboolean midi, jboolean usb) { auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx); e.ui->setLink(midi, usb); }
 // one UI frame: Object[]{ int[] ops (9 ints each: type, 6 float bit patterns, colour, text index), String texts joined by \u0001 }
-FN(jobjectArray, uiFrame)(JNIEnv* env, jclass, jlong h, jfloat w, jfloat hh, jfloat top, jfloat bottom, jlong now) {
+FN(jobjectArray, uiFrame)(JNIEnv* env, jclass, jlong h, jfloat w, jfloat hh, jfloat top, jfloat bottom, jlong now, jboolean pip) {
     auto& e = *E(h);
     std::lock_guard<std::mutex> l(e.surfaceMtx);
     e.ui->setSize(w, hh, top, bottom);
-    e.ui->frame((uint32_t)now);
+    if (pip) e.ui->pipFrame((uint32_t)now);
+    else e.ui->frame((uint32_t)now);
     const auto& ops = e.ui->ops();
     std::vector<jint> v; v.reserve(ops.size() * 9);
     std::string texts; int ti = 0;

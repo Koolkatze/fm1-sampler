@@ -27,6 +27,66 @@
 
 namespace {
 constexpr int kBlock = 256;
+std::string safeSampleName(const std::string& name) {
+    std::string out;
+    for (unsigned char ch : name) {
+        if (ch == '/' || ch == '\\' || ch == ':' || ch < 32 || ch == 127) out += '_';
+        else out += (char)ch;
+    }
+    while (!out.empty() && (out.back() == '.' || out.back() == ' ')) out.pop_back();
+    if (out == "." || out == "..") out.clear();
+    if (out.size() > 100) out.resize(100);
+    return out.empty() ? "Loop" : out;
+}
+
+// Write PCM in fixed-size blocks: a three-minute loop at 0.25x tape speed
+// must not allocate a multi-hundred-megabyte WAV vector on the phone.
+class LoopWavStream {
+public:
+    LoopWavStream(const std::string& path, uint64_t frames, int sampleRate)
+        : out_(path, std::ios::binary), expected_(frames) {
+        if (!out_ || !frames || sampleRate < 8000 ||
+            frames > (UINT32_MAX - 36u) / 4u) return;
+        auto u16 = [this](uint16_t v) {
+            const char b[] = {char(v & 255), char((v >> 8) & 255)};
+            out_.write(b, 2);
+        };
+        auto u32 = [this](uint32_t v) {
+            const char b[] = {char(v & 255), char((v >> 8) & 255),
+                              char((v >> 16) & 255), char((v >> 24) & 255)};
+            out_.write(b, 4);
+        };
+        const uint32_t bytes = (uint32_t)(frames * 4);
+        out_.write("RIFF", 4); u32(36u + bytes);
+        out_.write("WAVEfmt ", 8); u32(16); u16(1); u16(2);
+        u32((uint32_t)sampleRate); u32((uint32_t)sampleRate * 4u);
+        u16(4); u16(16); out_.write("data", 4); u32(bytes);
+        valid_ = !!out_;
+    }
+    bool write(const float* stereo, int frames) {
+        if (!valid_ || frames < 0 || done_ + (uint64_t)frames > expected_) return false;
+        std::array<char, kBlock * 4> bytes{};
+        if (frames > kBlock) return false;
+        for (int i = 0; i < frames * 2; ++i) {
+            const int16_t q = (int16_t)std::lrintf(
+                clampf(stereo[i], -1.f, 1.f) * 32767.f);
+            bytes[(size_t)i * 2] = char((uint16_t)q & 255);
+            bytes[(size_t)i * 2 + 1] = char(((uint16_t)q >> 8) & 255);
+        }
+        out_.write(bytes.data(), (std::streamsize)frames * 4);
+        done_ += (uint64_t)frames;
+        return !!out_;
+    }
+    bool finish() {
+        out_.flush();
+        return valid_ && done_ == expected_ && !!out_;
+    }
+private:
+    std::ofstream out_;
+    uint64_t expected_ = 0, done_ = 0;
+    bool valid_ = false;
+};
+
 }
 
 struct Session::Impl {
@@ -101,7 +161,27 @@ struct Session::Impl {
         std::vector<uint8_t> appState;
         std::array<std::string, kTracks> samplePaths;
     };
+    // Only a few primitive settings and shared immutable clip references are
+    // copied on the real-time thread. No DSP delay buffers or large WAVs.
+    struct LoopExportSnapshot {
+        struct TrackData {
+            std::shared_ptr<std::vector<float>> clip;
+            bool has = false;
+            float vol = 0.f, pan = 0.f, send[2] = {0, 0};
+            int scSrc = -1;
+            float scThrDb = -20.f, scRatio = 1.f;
+            Lfo lfo{};
+            float lfoPhase = 0.f, lfoSH = 0.f;
+            TapeInsert::Settings tape{};
+        };
+        std::array<TrackData, kTracks> track{};
+        int sampleRate = 0, loopSamples = 0;
+        float tapeSpeed = 1.f, masterVolume = 0.9f;
+        float returns[2] = {0.35f, 0.7f};
+        float reverbSize = 0.7f, delaySeconds = 0.4f, delayFeedback = 0.4f;
+    };
     std::atomic<int> projectOp{0};
+    std::atomic<int> loopExportOp{0};
     mutable std::mutex projectMtx;
     std::shared_ptr<Session::LoadedProject> projectReady;
     bool projectRestored = false;
@@ -112,6 +192,8 @@ struct Session::Impl {
     std::vector<std::unique_ptr<Track>> tracks;
     Reverb reverb; TapeDelay delay;
     float masterVol = 0.9f, ret[2] = {0.35f, 0.7f};
+    float reverbSize = 0.7f, delaySeconds = 0.4f, delayFeedback = 0.4f;
+    bool offlineRender = false; // bypass visual-only peak scans for offline bounces
     int loopSrc = 1;   // what the loop records: 0 microphone, 1 the track's sound
 
     bool playing = false;
@@ -125,7 +207,7 @@ struct Session::Impl {
     // CUE / beat repeat uses a separate read head. The original transport runs underneath
     // so releasing PLAY drops back on the original beat (slip-style return).
     bool cueActive = false;
-    int cueDivision = 2;                         // 1/4 note by default; 0..5 = 1/1..1/32
+    int cueDivision = 4;                         // interleaved straight/triplet: 1/1,1/1T,...1/32T (0..11)
     double cueStart = 0.0, cuePhase = 0.0;
     float cueMix = 0.f;
     std::vector<double> cueCpArr;
@@ -161,6 +243,9 @@ struct Session::Impl {
     std::atomic<int> a_bars{4}, a_sampleState{0}, a_sampleTrack{0}, a_sampleVersion{0}, a_sampleFails{0};
     std::atomic<int32_t> a_loop{0};
     std::atomic<uint32_t> a_sceneMask{0};
+    std::atomic<bool> a_compositionValid{false};
+    std::atomic<int32_t> a_compositionSamples{0};
+    std::atomic<uint8_t> a_compositionTracks{0};
     std::atomic<uint8_t> a_sceneTracks[Session::kScenes];
     std::atomic<int> a_activeScene{-1}, a_queuedScene{-1}, a_songStep{-1}, a_songSize{0};
     std::atomic<bool> a_songPlaying{false}, a_arrangementLoaded{false};
@@ -171,7 +256,8 @@ struct Session::Impl {
 
     std::vector<float> bus, tmp, sendBus[2], wet;
 
-    explicit Impl(int rate) : sr(rate), reverb(rate), delay(rate) {
+    explicit Impl(int rate, bool offline = false)
+        : sr(rate), reverb(rate), delay(rate), offlineRender(offline) {
         for (int i = 0; i < kTracks; i++) tracks.emplace_back(new Track(rate));
         bus.resize(kBlock * 2); tmp.resize(kBlock * 2); wet.resize(kBlock * 2); sendBus[0].resize(kBlock * 2); sendBus[1].resize(kBlock * 2);
         for (auto& a : a_lpk) a = 0.f;
@@ -182,7 +268,7 @@ struct Session::Impl {
         for (auto& a : a_voiceN) a = 0;
         for (auto& a : a_arrangement) a = -1;
         for (auto& a : a_sceneTracks) a = 0;
-        worker = std::thread([this] {
+        if (!offlineRender) worker = std::thread([this] {
             for (;;) {
                 std::function<void()> j;
                 { std::unique_lock<std::mutex> l(wMtx); wCv.wait(l, [this] { return wStop || !jobs.empty(); }); if (wStop && jobs.empty()) return; j = std::move(jobs.front()); jobs.pop_front(); }
@@ -223,6 +309,12 @@ struct Session::Impl {
             composition.has[(size_t)i] = t.clipHas;
             composition.rec[(size_t)i] = t.clipRec;
         }
+        uint8_t mask = 0;
+        for (int i = 0; i < kTracks; ++i)
+            if (composition.has[(size_t)i]) mask |= (uint8_t)(1u << i);
+        a_compositionTracks = mask;
+        a_compositionSamples = composition.samples;
+        a_compositionValid = true;
     }
     void restoreComposition() {
         // Cancel even a scene which was only queued; prevent it from firing
@@ -232,6 +324,9 @@ struct Session::Impl {
         if (!composition.valid) return;
         const Composition saved = std::move(composition);
         composition = Composition{};
+        a_compositionValid = false;
+        a_compositionTracks = 0;
+        a_compositionSamples = 0;
         freeRec = freeArmed = false; a_free = a_freeArmed = false;
         for (int i = 0; i < kTracks; ++i) {
             auto& t = *tracks[(size_t)i];
@@ -333,6 +428,13 @@ struct Session::Impl {
             composition.clips = std::move(s.compose.clips);
             composition.has = s.compose.has;
         }
+        uint8_t composeTracks = 0;
+        for (int i = 0; i < kTracks; ++i)
+            if (composition.valid && composition.has[(size_t)i])
+                composeTracks |= (uint8_t)(1u << i);
+        a_compositionTracks = composeTracks;
+        a_compositionSamples = composition.valid ? composition.samples : 0;
+        a_compositionValid = composition.valid;
         scenes = std::move(s.savedScenes); songOrder = std::move(s.arrangement);
         activeScene = s.active; pendingScene = s.queued;
         pendingAt = s.pendingAt; songPlaying = s.songPlaying; songStep = s.songStep;
@@ -575,7 +677,9 @@ struct Session::Impl {
         const size_t fade = std::min<size_t>(o.size() / 4, (size_t)sr / 200 * 2);
         for (size_t i = 0; i < fade; i += 2) { const float k = (float)i / fade; o[i] *= k; o[i + 1] *= k; o[o.size() - 2 - i] *= k; o[o.size() - 1 - i] *= k; }
         char name[64]; snprintf(name, sizeof name, "/sample_%lld.wav", (long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
-        const std::string path = (dataDir.empty() ? "." : dataDir) + name;
+        const std::string folder = sampleDir.empty() ? dataDir : sampleDir + "/SAVED/RECORDINGS";
+        std::error_code ec; std::filesystem::create_directories(folder, ec);
+        const std::string path = folder + name;
         writeWav16(path, o, sr);
         { std::lock_guard<std::mutex> l(sampleMtx); samplePath = path; pending = true; a_pending = true; }
         a_sampleState = 0;
@@ -618,7 +722,7 @@ struct Session::Impl {
         }
         const int32_t p0 = (int32_t)pos;
         const bool tl = playing && !freeRec && loopSamples > 0;
-        updateLoopPeaks();
+        if (!offlineRender) updateLoopPeaks();
         const double spd = tapeSpeed.load();
         if (!playing) { rate = 1.0; stopping = false; }
         bool ramp = false; double rateSum = n, tapeEnd = tapePos;
@@ -672,8 +776,12 @@ struct Session::Impl {
             if ((int)cueCpArr.size() < n) {
                 cueCpArr.resize((size_t)n); cueMixArr.resize((size_t)n); cueEdgeArr.resize((size_t)n);
             }
+            // Every binary duration has a triplet alternative (two thirds
+            // of the straight note): 1/4T is 1/6 of a 4/4 bar.
+            const double straight = (240.0 * sr / std::max(1.f, bpm))
+                                  / (double)(1 << (cueDivision / 2));
             const double length = std::max(1.0, std::min((double)loopSamples,
-                (240.0 * sr / std::max(1.f, bpm)) / (double)(1 << cueDivision)));
+                straight * ((cueDivision & 1) ? 2.0 / 3.0 : 1.0)));
             const double fade = std::max(1.0, std::min(0.004 * sr, length * 0.12));
             cuePhase = std::fmod(cuePhase, length);
             const float blendStep = 1.f / std::max(1, (int)(0.006f * sr));
@@ -973,8 +1081,16 @@ void Session::setSidechain(int t, int src, float thresholdDb, float ratio) {
 }
 void Session::setSend(int t, int w, float l) { if (t >= 0 && t < kTracks && (w == 0 || w == 1)) d->post([=] { d->tracks[(size_t)t]->send[w] = clampf(l, 0.f, 1.f); }); }
 void Session::setMasterVolume(float v) { d->post([=] { d->masterVol = clampf(v, 0.f, 1.5f); }); }
-void Session::setReverb(float size) { d->post([=] { d->reverb.setSize(size); }); }
-void Session::setDelay(float sec, float fb) { d->post([=] { d->delay.setTime(sec); d->delay.setFeedback(fb); }); }
+void Session::setReverb(float size) { d->post([=] {
+    d->reverbSize = clampf(size, 0.f, 1.f);
+    d->reverb.setSize(d->reverbSize);
+}); }
+void Session::setDelay(float sec, float fb) { d->post([=] {
+    d->delaySeconds = clampf(sec, 0.02f, 3.f);
+    d->delayFeedback = clampf(fb, 0.f, 0.95f);
+    d->delay.setTime(d->delaySeconds);
+    d->delay.setFeedback(d->delayFeedback);
+}); }
 void Session::setRetLevel(int w, float v) { d->post([=] { d->ret[w & 1] = clampf(v, 0.f, 1.5f); }); }
 
 // ---- looper ----
@@ -1033,7 +1149,7 @@ void Session::seek(float f) {
 }
 void Session::setCue(bool on, int division) {
     d->post([this, on, division] {
-        d->cueDivision = std::min(5, std::max(0, division));
+        d->cueDivision = std::min(11, std::max(0, division));
         if (on && d->loopSamples > 0 && !d->freeRec && !d->freeArmed) {
             if (!d->cueActive) {
                 d->cueStart = d->tapePos;
@@ -1049,20 +1165,33 @@ void Session::setCue(bool on, int division) {
 void Session::captureScene(int slot, uint8_t tracks) {
     if (slot < 0 || slot >= kScenes) return;
     d->post([this, slot, tracks] {
-        if (d->loopSamples <= 0 || !tracks || d->freeArmed || d->freeRec) return;
+        if (!tracks || d->freeArmed || d->freeRec) return;
         for (const auto& t : d->tracks) if (t->clipRec) return;
-        auto& sc = d->scenes[(size_t)slot];
-        sc = Impl::Scene{};
-        sc.samples = d->loopSamples; sc.tempo = d->bpm; sc.bars = d->loopBars;
+        // The launched scene replaces the live playback clips. Capturing those
+        // would overwrite the requested slot with its OWN previous contents.
+        // Always use the untouched COMPOSE snapshot while in performance mode.
+        const bool fromComposition = d->composition.valid;
+        const int32_t samples = fromComposition ? d->composition.samples : d->loopSamples;
+        if (samples <= 0) return;
+        Impl::Scene replacement;
+        replacement.samples = samples;
+        replacement.tempo = fromComposition ? d->composition.tempo : d->bpm;
+        replacement.bars = fromComposition ? d->composition.bars : d->loopBars;
         for (int i = 0; i < kTracks; ++i) {
-            const auto& t = *d->tracks[(size_t)i];
-            sc.has[(size_t)i] = !!(tracks & (1u << i)) && t.clipHas &&
-                t.clip && t.clip->size() == (size_t)d->loopSamples * 2;
-            if (sc.has[(size_t)i]) {
-                sc.clips[(size_t)i] = t.clip;
-                sc.filled = true;
+            const bool has = fromComposition ? d->composition.has[(size_t)i]
+                                             : d->tracks[(size_t)i]->clipHas;
+            const auto& clip = fromComposition ? d->composition.clips[(size_t)i]
+                                               : d->tracks[(size_t)i]->clip;
+            if ((tracks & (1u << i)) && has && clip &&
+                clip->size() == (size_t)samples * 2) {
+                replacement.has[(size_t)i] = true;
+                replacement.clips[(size_t)i] = clip;
+                replacement.filled = true;
             }
         }
+        // Invalid/empty replacement must leave the previously saved slot intact.
+        if (!replacement.filled) return;
+        d->scenes[(size_t)slot] = std::move(replacement);
         d->updateSceneMask();
         d->persistScenes();
     });
@@ -1140,12 +1269,295 @@ void Session::saveArrangement(const std::vector<int>& order) {
 
 void Session::setLoopSpeed(float v) { d->tapeSpeed.store(clampf(v, 0.25f, 2.f)); }
 void Session::setLoopSource(int src) { d->post([=] { d->loopSrc = src ? 1 : 0; }); }
-bool Session::saveClip(int t) {
-    if (t < 0 || t >= kTracks || !d->tracks[(size_t)t]->clipHas) return false;
-    std::vector<float> c = *d->tracks[(size_t)t]->clip;   // a copy, written on the worker
-    d->job([this, c = std::move(c)]() mutable { d->finishSample(std::move(c)); d->a_pending = false; });
+bool Session::saveClip(int t, const std::string& name) {
+    if (t < 0 || t >= kTracks || !(d->a_clip_mask.load() & (1u << t))) return false;
+    const std::string label = safeSampleName(name);
+    const std::string folder = d->sampleDir + "/SAVED/LOOPS";
+    // Capture a shared immutable clip on the audio thread; disk I/O stays on the worker.
+    d->post([this, t, label, folder] {
+        const auto& track = *d->tracks[(size_t)t];
+        if (!track.clipHas || !track.clip || track.clip->empty()) return;
+        auto clip = track.clip;
+        d->job([this, clip, folder, label] {
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            fs::create_directories(folder, ec);
+            if (ec) return;
+            std::string file = folder + "/" + label + ".wav";
+            for (int n = 2; fs::exists(file, ec) && n < 10000; ++n)
+                file = folder + "/" + label + " (" + std::to_string(n) + ").wav";
+            writeWav16(file, *clip, d->sr); // preserve entire loop length, including silence
+        });
+    });
     return true;
 }
+bool Session::exportLoops(const std::string& directory) {
+    // Export the ACTUAL post-loop DSP, not unprocessed recording buffers.
+    // Capture only a small, consistent audio-thread snapshot; all expensive
+    // processing, 16-bit PCM conversion and disk I/O happen on the worker.
+    if (directory.empty()) return false;
+    int prior = d->loopExportOp.load();
+    do {
+        if (prior == 1) return false;
+    } while (!d->loopExportOp.compare_exchange_weak(prior, 1));
+    d->post([this, directory] {
+        if (d->freeRec || d->freeArmed || d->sampling || d->armedWait ||
+            d->loopSamples <= 0) {
+            d->loopExportOp = -1; return;
+        }
+        for (const auto& t : d->tracks)
+            if (t->clipRec) { d->loopExportOp = -1; return; }
+        Impl::LoopExportSnapshot snap;
+        snap.sampleRate = d->sr;
+        snap.loopSamples = d->loopSamples;
+        snap.tapeSpeed = d->tapeSpeed.load();
+        snap.masterVolume = d->masterVol;
+        snap.returns[0] = d->ret[0]; snap.returns[1] = d->ret[1];
+        snap.reverbSize = d->reverbSize;
+        snap.delaySeconds = d->delaySeconds;
+        snap.delayFeedback = d->delayFeedback;
+        int populated = 0;
+        for (int i = 0; i < kTracks; ++i) {
+            const auto& t = *d->tracks[(size_t)i];
+            auto& dst = snap.track[(size_t)i];
+            if (t.clipHas && t.clip &&
+                t.clip->size() == (size_t)snap.loopSamples * 2) {
+                dst.clip = t.clip;  // COW: overdubs never mutate the snapshot
+                dst.has = true; ++populated;
+            } else if (t.clipHas) {
+                d->loopExportOp = -2; return; // invalid/incomplete clip
+            }
+            dst.vol = t.vol; dst.pan = t.pan;
+            dst.send[0] = t.send[0]; dst.send[1] = t.send[1];
+            dst.scSrc = t.scSrc; dst.scThrDb = t.scThrDb; dst.scRatio = t.scRatio;
+            dst.lfo = t.lfo; dst.lfoPhase = t.lfoPhase; dst.lfoSH = t.lfoSH;
+            dst.tape = t.tape.settings();
+        }
+        if (!populated) { d->loopExportOp = -1; return; }
+
+        d->job([this, snap = std::move(snap), directory] {
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            fs::create_directories(directory, ec);
+            if (ec) { d->loopExportOp = -2; return; }
+            // The real engine uses its integer head when speed is near 1x.
+            const double speed = std::fabs(snap.tapeSpeed - 1.f) < 0.01f
+                ? 1.0 : std::max(0.25, (double)snap.tapeSpeed);
+            const uint64_t frames = (uint64_t)std::ceil(snap.loopSamples / speed);
+            bool ok = frames > 0 && frames <= (UINT32_MAX - 36u) / 4u;
+            // The MASTER pass includes the sum before shared FX returns and
+            // tanh limiter. Each isolated stem contains its own tape insert,
+            // mixer, keyed sidechain, FX sends/returns and master gain.
+            // Since delay has nonlinear feedback and the master has tanh,
+            // processed stems need not sum bit-identically to MASTER.
+            for (int pass = 0; ok && pass <= kTracks; ++pass) {
+                const int solo = pass - 1; // pass 0 = MASTER; 1..8 = stems
+                if (solo >= 0 && !snap.track[(size_t)solo].has) continue;
+                Impl bounce(snap.sampleRate, true); // NO background thread
+                bounce.loopSamples = snap.loopSamples;
+                bounce.a_loop = snap.loopSamples;
+                bounce.playing = true; bounce.stopping = false; bounce.rate = 1.0;
+                bounce.tapeSpeed = (float)speed;
+                bounce.masterVol = snap.masterVolume;
+                bounce.ret[0] = snap.returns[0];
+                bounce.ret[1] = snap.returns[1];
+                bounce.reverb.setSize(snap.reverbSize);
+                bounce.delay.setTime(snap.delaySeconds);
+                bounce.delay.setFeedback(snap.delayFeedback);
+                for (int t = 0; t < kTracks; ++t) {
+                    const auto& src = snap.track[(size_t)t];
+                    auto& dst = *bounce.tracks[(size_t)t];
+                    dst.clipHas = src.has; dst.clip = src.clip ? src.clip
+                        : std::make_shared<std::vector<float>>();
+                    dst.vol = (solo < 0 || t == solo) ? src.vol : 0.f;
+                    dst.pan = src.pan;
+                    dst.send[0] = src.send[0]; dst.send[1] = src.send[1];
+                    dst.scSrc = src.scSrc; dst.scThrDb = src.scThrDb;
+                    dst.scRatio = src.scRatio; dst.scEnv = 0.f; dst.scGain = 1.f;
+                    dst.lfo = src.lfo; dst.lfoPhase = src.lfoPhase;
+                    dst.lfoSH = src.lfoSH;
+                    const auto& p = src.tape;
+                    dst.tape.setParams(p.sat, p.tone, p.wobble,
+                                       p.hiss, p.mix, p.bits);
+                }
+                std::array<float, kBlock * 2> audio{};
+                // Prime effect tails with the end of the repeated loop. This
+                // includes previous-cycle reverb/delay without lengthening
+                // exported stems and breaking DAW loop alignment.
+                const uint64_t prime = std::min<uint64_t>(frames,
+                    (uint64_t)std::max(1, snap.sampleRate) * 8);
+                if (speed == 1.0) {
+                    bounce.pos = (double)(snap.loopSamples - (int)prime);
+                    bounce.tapePos = bounce.pos;
+                } else {
+                    bounce.pos = 0;
+                    const double prior = std::fmod((double)prime * speed,
+                                                   (double)snap.loopSamples);
+                    bounce.tapePos = std::fmod((double)snap.loopSamples - prior,
+                                                (double)snap.loopSamples);
+                }
+                for (uint64_t done = 0; done < prime;) {
+                    const int n = (int)std::min<uint64_t>(kBlock, prime - done);
+                    bounce.block(audio.data(), nullptr, n);
+                    done += (uint64_t)n;
+                }
+                bounce.pos = bounce.tapePos = 0;
+                bounce.playing = true; bounce.stopping = false; bounce.rate = 1.0;
+                char name[40];
+                if (solo < 0) std::snprintf(name, sizeof name, "MASTER.wav");
+                else std::snprintf(name, sizeof name, "TRACK_%02d.wav", solo + 1);
+                const std::string path = directory + "/" + name;
+                LoopWavStream wav(path, frames, snap.sampleRate);
+                for (uint64_t done = 0; ok && done < frames;) {
+                    const int n = (int)std::min<uint64_t>(kBlock, frames - done);
+                    bounce.block(audio.data(), nullptr, n);
+                    ok = wav.write(audio.data(), n);
+                    done += (uint64_t)n;
+                }
+                if (ok) ok = wav.finish();
+                if (!ok) fs::remove(path, ec);
+            }
+            d->loopExportOp = ok ? 2 : -2;
+        });
+    });
+    return true;
+}
+bool Session::exportSong(const std::string& directory) {
+    // A SONG is an arrangement of saved scene audio, not the currently
+    // selected live loop. Capture the complete order + immutable scene clips
+    // and the post-loop DSP settings at one audio-thread boundary.
+    if (directory.empty()) return false;
+    int prior = d->loopExportOp.load();
+    do {
+        if (prior == 1) return false; // mutual exclusion with EXPORT ALL LOOPS
+    } while (!d->loopExportOp.compare_exchange_weak(prior, 1));
+    d->post([this, directory] {
+        if (d->freeRec || d->freeArmed || d->sampling || d->armedWait) {
+            d->loopExportOp = -1; return;
+        }
+        for (const auto& tr : d->tracks) {
+            if (tr->clipRec) { d->loopExportOp = -1; return; }
+        }
+        if (d->songOrder.empty()) {
+            d->loopExportOp = -3; return; // no scenes: no file created
+        }
+        const auto scenes = d->scenes; // shared_ptr copy; no audio-data copy
+        const auto order = d->songOrder;
+        uint64_t songFrames = 0;
+        for (int slot : order) {
+            if (slot < 0 || slot >= kScenes || !scenes[(size_t)slot].filled ||
+                scenes[(size_t)slot].samples <= 0 ||
+                scenes[(size_t)slot].samples > d->sr * 180) {
+                d->loopExportOp = -3; return;
+            }
+            const auto& scene = scenes[(size_t)slot];
+            songFrames += (uint64_t)scene.samples;
+            for (int t = 0; t < kTracks; ++t) {
+                if (scene.has[(size_t)t] &&
+                    (!scene.clips[(size_t)t] ||
+                     scene.clips[(size_t)t]->size() != (size_t)scene.samples * 2)) {
+                    d->loopExportOp = -3; return;
+                }
+            }
+        }
+        if (!songFrames || order.size() > 64) {
+            d->loopExportOp = -3; return;
+        }
+        Impl::LoopExportSnapshot fx;
+        fx.sampleRate = d->sr;
+        fx.masterVolume = d->masterVol;
+        fx.tapeSpeed = d->tapeSpeed.load();
+        fx.returns[0] = d->ret[0]; fx.returns[1] = d->ret[1];
+        fx.reverbSize = d->reverbSize;
+        fx.delaySeconds = d->delaySeconds;
+        fx.delayFeedback = d->delayFeedback;
+        for (int t = 0; t < kTracks; ++t) {
+            const auto& src = *d->tracks[(size_t)t];
+            auto& dst = fx.track[(size_t)t];
+            dst.vol = src.vol; dst.pan = src.pan;
+            dst.send[0] = src.send[0]; dst.send[1] = src.send[1];
+            dst.scSrc = src.scSrc; dst.scThrDb = src.scThrDb;
+            dst.scRatio = src.scRatio;
+            dst.lfo = src.lfo; dst.lfoPhase = src.lfoPhase;
+            dst.lfoSH = src.lfoSH;
+            dst.tape = src.tape.settings();
+        }
+        // A song needs its decay after the last scene; unlike loop stems it
+        // is not meant to wrap seamlessly. Two to eight seconds captures
+        // the audible reverb and tape-delay tail.
+        const float decaySeconds = clampf(2.f + 4.f * fx.reverbSize +
+                                         2.f * fx.delayFeedback, 2.f, 8.f);
+        const uint64_t tail = (uint64_t)std::ceil(decaySeconds * fx.sampleRate);
+        if (songFrames > (UINT32_MAX - 36u) / 4u - tail) {
+            d->loopExportOp = -2; return; // WAV 32-bit RIFF size limit
+        }
+
+        d->job([this, directory, scenes, order, fx, songFrames, tail]() {
+            namespace fs = std::filesystem;
+            std::error_code ec;
+            fs::create_directories(directory, ec);
+            if (ec) { d->loopExportOp = -2; return; }
+            const std::string output = directory + "/SONG.wav";
+            // The same audio mixer used by live playback and processed-loop
+            // export; its separate FX state cannot touch the live session.
+            Impl bounce(fx.sampleRate, true);
+            bounce.scenes = scenes;
+            bounce.songOrder = order;
+            bounce.songPlaying = true;
+            bounce.masterVol = fx.masterVolume;
+            bounce.tapeSpeed = fx.tapeSpeed;
+            bounce.ret[0] = fx.returns[0];
+            bounce.ret[1] = fx.returns[1];
+            bounce.reverb.setSize(fx.reverbSize);
+            bounce.delay.setTime(fx.delaySeconds);
+            bounce.delay.setFeedback(fx.delayFeedback);
+            for (int t = 0; t < kTracks; ++t) {
+                const auto& src = fx.track[(size_t)t];
+                auto& dst = *bounce.tracks[(size_t)t];
+                dst.vol = src.vol; dst.pan = src.pan;
+                dst.send[0] = src.send[0]; dst.send[1] = src.send[1];
+                dst.scSrc = src.scSrc; dst.scThrDb = src.scThrDb;
+                dst.scRatio = src.scRatio;
+                dst.lfo = src.lfo; dst.lfoPhase = src.lfoPhase;
+                dst.lfoSH = src.lfoSH; dst.scEnv = 0.f; dst.scGain = 1.f;
+                const auto& p = src.tape;
+                dst.tape.setParams(p.sat, p.tone, p.wobble,
+                                   p.hiss, p.mix, p.bits);
+            }
+            LoopWavStream wav(output, songFrames + tail, fx.sampleRate);
+            bool ok = true;
+            std::array<float, kBlock * 2> audio{};
+            for (size_t step = 0; ok && step < order.size(); ++step) {
+                bounce.songStep = (int)step;
+                bounce.activateScene(order[step]);
+                const uint64_t frames = (uint64_t)scenes[(size_t)order[step]].samples;
+                for (uint64_t done = 0; ok && done < frames;) {
+                    const int n = (int)std::min<uint64_t>(kBlock, frames - done);
+                    bounce.block(audio.data(), nullptr, n);
+                    ok = wav.write(audio.data(), n);
+                    done += (uint64_t)n;
+                }
+            }
+            // Stop the tape after the final scene: the delay/reverb networks
+            // continue processing existing tails, but no new loop audio enters.
+            bounce.songPlaying = false;
+            bounce.playing = false;
+            for (uint64_t done = 0; ok && done < tail;) {
+                const int n = (int)std::min<uint64_t>(kBlock, tail - done);
+                bounce.block(audio.data(), nullptr, n);
+                ok = wav.write(audio.data(), n);
+                done += (uint64_t)n;
+            }
+            if (ok) ok = wav.finish();
+            if (!ok) fs::remove(output, ec);
+            d->loopExportOp = ok ? 2 : -2;
+        });
+    });
+    return true;
+}
+
+int Session::loopExportStatus() const { return d->loopExportOp.load(); }
+
 int Session::loopPeaks(int track, float* out, int maxBins) const {
     const int n = std::min(maxBins, kLoopBins);
     for (int i = 0; i < n; i++) out[i] = track < 0 ? d->a_lpk[i].load() : d->a_tpk[std::min(track, kTracks - 1)][i].load();
@@ -1574,6 +1986,9 @@ Session::Status Session::status() const {
     s.sampleState = d->a_sampleState; s.sampleTrack = d->a_sampleTrack; s.sampleSeconds = d->a_sampleSec; s.inputPeak = d->a_inPeak;
     s.sampleVersion = d->a_sampleVersion; s.sampleFails = d->a_sampleFails; s.samplePending = d->a_pending;
     s.sceneMask = d->a_sceneMask; s.activeScene = d->a_activeScene;
+    s.compositionValid = d->a_compositionValid;
+    s.compositionSamples = d->a_compositionSamples;
+    s.compositionTracks = d->a_compositionTracks;
     for (int i = 0; i < kScenes; ++i) s.sceneTracks[i] = d->a_sceneTracks[(size_t)i];
     s.queuedScene = d->a_queuedScene; s.songPlaying = d->a_songPlaying;
     s.songStep = d->a_songStep; s.songSize = d->a_songSize;

@@ -352,6 +352,17 @@ void groove_screen_control(void)
         for (unsigned i = 0; i < 2; ++i) {
             const uint32_t bit = 1U << i;
             if (pressed & bit) { oct_since[i] = now; oct_used[i] = 0; }
+        }
+        /* OCT+ and OCT- together select the phone's NOTE REPEAT rate menu.
+         * Treat BOTH as consumed even if one was pressed earlier, so neither
+         * release shifts the keyboard's octave by accident. MIDI events for
+         * both buttons still leave on USB independently below. */
+        if ((c.buttons & oct_mask) == oct_mask) {
+            oct_used[BTN_OCT_DOWN] = 1;
+            oct_used[BTN_OCT_UP] = 1;
+        }
+        for (unsigned i = 0; i < 2; ++i) {
+            const uint32_t bit = 1U << i;
             if (c.buttons & bit) {
                 if (c.buttons & (1U << BTN_PLAY)) oct_used[i] = 1;
                 if (i == BTN_OCT_UP && (uint32_t)(now - oct_since[i]) >= 2000U) oct_used[i] = 1;

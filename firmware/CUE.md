@@ -12,9 +12,18 @@ It does not describe another firmware.
 | Tap OCT+ by itself | Shift keyboard up one octave |
 | **Hold OCT− first, then press PLAY/STOP** | **RESTART LOOP**, immediately on PLAY/STOP press |
 | **Hold OCT+ first, then press and hold PLAY/STOP** | **NOTE REPEAT** from the current position at BPM-synced division |
-| Turn K1 while holding the NOTE REPEAT combination | Choose 1/1, 1/2, 1/4, 1/8, 1/16, or 1/32 in real time |
+| **Hold OCT+ and OCT− together** (either press order) | Immediately display the NOTE REPEAT subdivisions menu; no loop playback starts |
+| Turn K1 on the rate page | Select 1/1, 1/1T, 1/2, 1/2T, 1/4, 1/4T, 1/8, 1/8T, 1/16, 1/16T, 1/32, or 1/32T |
+| Turn K1 while holding the NOTE REPEAT combination | Change the selected straight or triplet rate live |
 | Release PLAY/STOP | End NOTE REPEAT; the original recorded loop is unchanged |
 | Release OCT first, then press PLAY/STOP again | Normal play/stop; previous modifier cannot latch |
+
+The firmware marks **both OCT buttons as consumed** after the two-key
+menu gesture so releasing them does not shift the keyboard by accident.
+Straight durations are 4/4-bar time divided by 1, 2, 4, 8, 16 or 32.
+Each **T** variant is exactly **2/3** of the corresponding straight
+duration at the current BPM, including 1/1T and 1/32T. Existing saved
+projects (settings v2) retain their original straight division values.
 
 The OCT key's MIDI Note On may arrive long before the PLAY/STOP Note On.
 The Android software remembers whether an OCT modifier is held. No single
@@ -37,7 +46,7 @@ The INFO panel is diagnostic only; it does not emulate physical buttons.
 
 - Firmware implementation: `firmware/app/ctrl.c`.
 - Physical button and USB-only validation:
-  `firmware/hosttest/ctrl_host.c`.
+  `firmware/hosttest/ctrl_host.c` (now includes both OCT key orders).
 - CI test: `.github/workflows/fm1-panel-midi-tests.yml`.
 
 The test compiles and simulates the panel logic on Linux. Passing these
