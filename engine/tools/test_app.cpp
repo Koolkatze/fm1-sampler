@@ -101,6 +101,38 @@ int main() {
       run(1.2); size_t m3 = all.size(); run(0.5); CHECK(rmsFrom(m3) < 0.15 * playing1, "...and stands still afterwards (only effect tails: rms %.5f)", rmsFrom(m3));
       app.transportPlay(); run(0.1); size_t m4 = all.size(); run(0.3); const double up = rmsFrom(m4); size_t m5 = all.size(); run(1.5);
       CHECK(app.status().playing && up < rmsFrom(m5) && rmsFrom(m5) > 0.003, "PLAY runs the tape up again (ramp rms %.4f, then %.4f)", up, rmsFrom(m5));
+      // FM-1 hardware modifiers: restart, enter CUE selection by holding OCT+,
+      // beat repeat under PLAY, change rate on K1 and release without stopping.
+      auto hold = [&](int key, bool down) {
+          uint8_t m[3] = {(uint8_t)(down ? 0x91 : 0x81), (uint8_t)key, 100};
+          app.onMidi(m, 3);
+      };
+      const int octaveBefore = app.scale().octave;
+      s.seek(0.65f); run(0.06);
+      hold(SamplerApp::OCT_DOWN, true);
+      hold(SamplerApp::PLAY, true); run(0.08);
+      hold(SamplerApp::PLAY, false);
+      hold(SamplerApp::OCT_DOWN, false); run(0.08);
+      CHECK(app.status().pos < app.status().loopSamples * 0.4 && app.status().playing,
+            "OCT- + PLAY starts the playing loop from zero (pos %.1f)", app.status().pos);
+      CHECK(app.scale().octave == octaveBefore, "OCT modifier does not shift the app's octave");
+      const auto originalPage = app.page();
+      hold(SamplerApp::OCT_UP, true); run(2.15);
+      CHECK(app.page() == SamplerApp::P_CUE && app.knobs()[0].value == "1/4",
+            "OCT+ held two seconds opens CUE at 1/4");
+      app.knobs()[0].set(1.f); run(0.05);
+      CHECK(app.knobs()[0].value == "1/32", "K1 chooses the 1/32 beat division");
+      hold(SamplerApp::PLAY, true);
+      run(0.15); const float cq0 = app.status().clipPos[0];
+      run(0.10); const float cq1 = app.status().clipPos[0];
+      CHECK(std::fabs(cq1 - cq0) < 0.15f,
+            "while PLAY is held, CUE repeats a short BPM-locked region (%.3f -> %.3f)", cq0, cq1);
+      enc(2, -1); run(0.05);
+      CHECK(app.knobs()[0].value == "1/16", "K1 changes the subdivision live during CUE");
+      hold(SamplerApp::PLAY, false); run(0.15);
+      CHECK(app.status().playing, "releasing PLAY returns to the running loop");
+      hold(SamplerApp::OCT_UP, false); run(0.04);
+      CHECK(app.page() == originalPage, "releasing OCT+ restores the previous page");
       app.loopClear(); run(0.3); }
     {   // loudness normalisation and auto-tune, on synthetic samples: a quiet and a loud 220 Hz tone
       auto tone = [&](const char* path, float amp, double hz) { std::vector<float> st; for (int i = 0; i < 2 * sr; i++) { const float v = amp * (float)std::sin(2 * M_PI * hz * i / sr) * (i < 100 ? i / 100.f : 1.f); st.push_back(v); st.push_back(v); } writeWav16(path, st, sr); };

@@ -15,8 +15,8 @@ void syncColors() { kBg = theme::BG; kPaper = theme::TEXT; kOrange = theme::ACCE
 namespace {
 float clamp01(float v) { return std::min(1.f, std::max(0.f, v)); }
 std::string num(const char* f, double v) { char b[48]; snprintf(b, sizeof b, f, v); return b; }
-const SamplerApp::Page kTabs[] = {SamplerApp::P_HOME, SamplerApp::P_FX, SamplerApp::P_ENV, SamplerApp::P_LFO, SamplerApp::P_ARP, SamplerApp::P_SEQ, SamplerApp::P_MIX, SamplerApp::P_KEY, SamplerApp::P_SAVE, SamplerApp::P_LEN};
-const char* kTabName[] = {"SAMPLE", "FX", "ENV", "LFO", "ARP", "TAPE", "MIX", "KEY", "LOOP", "LEN"};
+const SamplerApp::Page kTabs[] = {SamplerApp::P_HOME, SamplerApp::P_FX, SamplerApp::P_ENV, SamplerApp::P_LFO, SamplerApp::P_ARP, SamplerApp::P_SEQ, SamplerApp::P_MIX, SamplerApp::P_KEY, SamplerApp::P_SAVE, SamplerApp::P_LEN, SamplerApp::P_CUE};
+const char* kTabName[] = {"SAMPLE", "FX", "ENV", "LFO", "ARP", "TAPE", "MIX", "KEY", "LOOP", "LEN", "CUE"};
 }  // namespace
 
 SamplerUI::SamplerUI(SamplerApp& app) : app_(app) {
@@ -278,6 +278,11 @@ void SamplerUI::pageView(Rect r) {
         rrect({x0, cy - 5, std::max(2.f, ww * lv), 10}, 0, lv > std::min(1.f, 2.f * app_.micThreshold()) ? kOrange : kPaper);
         vbar(x0 + ww * thr, cy - 26, cy + 26, kOrange, 2.7f);
         text(x0, w.y + w.h - 8, 9, kDim, "TRIGGER LEVEL " + num("%.0f DB", 20 * std::log10(app_.micThreshold())), 0, true);
+        break; }
+    case P::P_CUE: {
+        head = std::string("CUE BEAT REPEAT: ") + kn[0].value;
+        text(w.x + 8, cy - 8, 13, kOrange, "HOLD PLAY FOR CUE", 0, true);
+        text(w.x + 8, cy + 16, 10, kDim, "CHANGE K1 WHILE PLAYING", 0, false);
         break; }
     case P::P_LEN: {   // the loop as bars: one block per bar with its beats, the orange playhead
         const int bars = std::max(1, st_.loopBars), shown = std::min(bars, 16);
@@ -568,10 +573,22 @@ void SamplerUI::deck(Rect r) {
     for (int i = 0; i < 4; i++) {
         const float cx = M + 20 + i * 64;
         const bool on = i == 0 ? st_.playing : i == 2 ? recOn : false;
-        icon(i, cx, ty, i == 2 ? kOrange : on ? kOrange : kPaper);
-        if (on) rrect({cx - 12, ty + 17, 24, 2.7f}, 0, kOrange);
-        if (i == 2 && armed && (now_ / 400) % 2 == 0) rrect({cx - 12, ty + 17, 24, 2.7f}, 0, kOrange);
-        tap({cx - 32, ty - 28, 64, 58}, [this, i] { if (i == 0) app_.transportSet(true); else if (i == 1) app_.transportSet(false); else if (i == 2) app_.loopRecord(); else app_.loopClearTrack(); });
+        if (i == 0 && app_.page() == SamplerApp::P_CUE) {
+            // In the CUE page, the PLAY control is momentary. Releasing the
+            // finger restores the main loop without altering its timeline.
+            const bool active = app_.cueActive();
+            rrect({cx - 29, ty - 23, 58, 46}, R_CONTROL, active ? kOrange : kLine);
+            text(cx, ty, 13, active ? kBg : kPaper, "CUE", 1, true);
+            hit({cx - 32, ty - 28, 64, 58},
+                [this](float, float) { app_.cueHold(true); },
+                {},
+                [this] { app_.cueHold(false); });
+        } else {
+            icon(i, cx, ty, i == 2 ? kOrange : on ? kOrange : kPaper);
+            if (on) rrect({cx - 12, ty + 17, 24, 2.7f}, 0, kOrange);
+            if (i == 2 && armed && (now_ / 400) % 2 == 0) rrect({cx - 12, ty + 17, 24, 2.7f}, 0, kOrange);
+            tap({cx - 32, ty - 28, 64, 58}, [this, i] { if (i == 0) app_.transportSet(true); else if (i == 1) app_.transportSet(false); else if (i == 2) app_.loopRecord(); else app_.loopClearTrack(); });
+        }
     }
     // tools in the middle: theme, microphone, file from disk, project
     const uint32_t micCol = mic == 1 || mic == 2 ? kOrange : kPaper;
@@ -583,8 +600,8 @@ void SamplerUI::deck(Rect r) {
     sampleView({x0, 14, w0, 118});
     const float py = 163;
     text(x0, py, 15, kOrange, SamplerApp::pageName(app_.page()), 0, true);
-    for (int i = 0; i < 10; i++) {   // the pages as notches: tap one to go there (the FM-1 buttons do the same)
-        Rect nr{zr - (10 - i) * 19.f, py - 14, 19, 28};
+    for (int i = 0; i < 11; i++) {   // all pages, including CUE, stay accessible from the phone
+        Rect nr{zr - (11 - i) * 19.f, py - 14, 19, 28};
         rrect({nr.x + 2, py - 2, 15, 4}, 0, kTabs[i] == app_.page() ? kOrange : kLine);
         tap(nr, [this, i] { app_.gotoPage(kTabs[i]); });
     }
@@ -719,12 +736,12 @@ void SamplerUI::sampleArea(Rect r) {
 
 void SamplerUI::pagePanel(Rect r) {
     const float tw = (r.w - 4 * 4) / 5;
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 11; i++) {
         Rect c{r.x + (i % 5) * (tw + 4), r.y + (i / 5) * 32, tw, 28};
         button(c, kTabName[i], app_.page() == kTabs[i], [this, i] { app_.gotoPage(kTabs[i]); }, 9.5f);
     }
     auto k = app_.knobs();
-    const float top = r.y + 72, rh = (r.h - 72) / 4;
+    const float top = r.y + 104, rh = (r.h - 104) / 4;
     for (int i = 0; i < 4; i++) {
         const auto& p = k[(size_t)i];
         const float y = top + i * rh;

@@ -63,6 +63,14 @@ struct Session::Impl {
     float bpm = 120.f; int loopBars = 4;
     double pos = 0; int32_t loopSamples = 0;
     std::atomic<float> tapeSpeed{1.f}; double tapePos = 0;   // ONE tape pointer for every loop clip, so they never drift apart
+    // CUE / beat repeat uses a separate read head. The original transport runs underneath
+    // so releasing PLAY drops back on the original beat (slip-style return).
+    bool cueActive = false;
+    int cueDivision = 2;                         // 1/4 note by default; 0..5 = 1/1..1/32
+    double cueStart = 0.0, cuePhase = 0.0;
+    float cueMix = 0.f;
+    std::vector<double> cueCpArr;
+    std::vector<float> cueMixArr, cueEdgeArr;
 
     // free take
     bool freeRec = false, freeArmed = false; int freeTrack = 0; std::vector<float> freeBuf;
@@ -163,7 +171,7 @@ struct Session::Impl {
     }
     void clearIfEmpty() {
         for (auto& t : tracks) if (t->clipHas) return;
-        loopSamples = 0; a_loop = 0; pos = 0; tapePos = 0;
+        loopSamples = 0; a_loop = 0; pos = 0; tapePos = 0; cueActive = false; cueMix = 0.f;
     }
 
     // ---- samples ----
@@ -322,6 +330,30 @@ struct Session::Impl {
             tapeEnd = acc;
         }
         const bool locked = !ramp && std::fabs(spd - 1.0) < 0.01;
+        // All eight clips read from the same CUE head, generated only once per
+        // audio frame (not once per track). 1/1 is one 4/4 bar at the session BPM.
+        const bool cueAudible = (cueActive || cueMix > 0.f) && tl && !scrubbing;
+        if (cueAudible) {
+            if ((int)cueCpArr.size() < n) {
+                cueCpArr.resize((size_t)n); cueMixArr.resize((size_t)n); cueEdgeArr.resize((size_t)n);
+            }
+            const double length = std::max(1.0, std::min((double)loopSamples,
+                (240.0 * sr / std::max(1.f, bpm)) / (double)(1 << cueDivision)));
+            const double fade = std::max(1.0, std::min(0.004 * sr, length * 0.12));
+            cuePhase = std::fmod(cuePhase, length);
+            const float blendStep = 1.f / std::max(1, (int)(0.006f * sr));
+            for (int i = 0; i < n; ++i) {
+                cueMix = clampf(cueMix + (cueActive ? blendStep : -blendStep), 0.f, 1.f);
+                cueCpArr[(size_t)i] = std::fmod(cueStart + cuePhase, (double)loopSamples);
+                cueMixArr[(size_t)i] = cueMix;
+                // A 4 ms wrap crossfade removes discontinuities on sharp beat rolls.
+                cueEdgeArr[(size_t)i] = (float)std::max(0.0, (cuePhase - (length - fade)) / fade);
+                if (cueActive) {
+                    cuePhase += 1.0;
+                    if (cuePhase >= length) cuePhase -= length;
+                }
+            }
+        }
         const double tb = loopSamples > 0 ? (locked ? (double)(p0 % loopSamples) : tapePos) : 0.0;
         if (loopSamples > 0) tapePos = ramp ? tapeEnd : !tl ? (double)(p0 % loopSamples) : locked ? (double)((p0 + n) % loopSamples) : std::fmod(tb + n * spd, (double)loopSamples);
         bool anyEvents;
@@ -376,13 +408,30 @@ struct Session::Impl {
                     const int32_t k = (int32_t)cp % loopSamples;
                     if (t.clipHas) {
                         auto& c = t.clip;
-                        if (locked) { bus[2 * i] += c[(size_t)2 * k]; bus[2 * i + 1] += c[(size_t)2 * k + 1]; }
-                        else {   // tape speed: its own read pointer, linear interpolation
-                            const int32_t k1 = (k + 1) % loopSamples; const float fr = (float)(cp - std::floor(cp));
-                            bus[2 * i] += (c[(size_t)2 * k] + (c[(size_t)2 * k1] - c[(size_t)2 * k]) * fr) * lg; bus[2 * i + 1] += (c[(size_t)2 * k + 1] + (c[(size_t)2 * k1 + 1] - c[(size_t)2 * k + 1]) * fr) * lg;
+                        // Linear interpolation permits a fractional CUE start and avoids
+                        // the octave/pitch artifacts of rounded read pointers.
+                        auto sampleAt = [&](double at, int ch) {
+                            const int32_t j = (int32_t)at % loopSamples;
+                            const int32_t j1 = (j + 1) % loopSamples;
+                            const float frac = (float)(at - std::floor(at));
+                            const float a = c[(size_t)2 * j + ch], b = c[(size_t)2 * j1 + ch];
+                            return a + (b - a) * frac;
+                        };
+                        float baseL = sampleAt(cp, 0), baseR = sampleAt(cp, 1);
+                        if (cueAudible && cueMixArr[(size_t)i] > 0.f) {
+                            const float edge = cueEdgeArr[(size_t)i];
+                            const double q = cueCpArr[(size_t)i], anchor = std::fmod(cueStart, (double)loopSamples);
+                            const float qL = sampleAt(q, 0) * (1.f - edge) + sampleAt(anchor, 0) * edge;
+                            const float qR = sampleAt(q, 1) * (1.f - edge) + sampleAt(anchor, 1) * edge;
+                            const float mix = cueMixArr[(size_t)i];
+                            baseL += (qL - baseL) * mix;
+                            baseR += (qR - baseR) * mix;
                         }
+                        bus[2 * i] += baseL * lg;
+                        bus[2 * i + 1] += baseR * lg;
                     }
-                    if (t.clipRec && !ramp) {
+                    // Never overdub stuttered audio into the original clip.
+                    if (t.clipRec && !ramp && !cueAudible) {
                         if (t.clip.size() != (size_t)loopSamples * 2) t.clip.assign((size_t)loopSamples * 2, 0.f);
                         auto& c = t.clip;
                         // recording works at any tape speed, as the head of a tape machine: the input lands on the moving tape position.
@@ -442,7 +491,7 @@ struct Session::Impl {
                 if (++freeCnt >= bin && freeN < kFreeBins) { freePk[freeN.load()].store(freeAcc); freeN++; freeAcc = 0; freeCnt = 0; }
             }
         }
-        a_clipPos.store(loopSamples > 0 ? (float)(tapePos / loopSamples) : 0.f);
+        a_clipPos.store(loopSamples > 0 ? (float)((cueAudible && cueActive ? cueCpArr[(size_t)n - 1] : tapePos) / loopSamples) : 0.f);
         reverb.process(sendBus[0].data(), wet.data(), n);
         for (int i = 0; i < n * 2; i++) out[i] += wet[(size_t)i] * ret[0];
         delay.process(sendBus[1].data(), wet.data(), n);
@@ -605,6 +654,21 @@ void Session::seek(float f) {
         if (d->loopSamples <= 0 || d->freeRec) return;
         const double p = clampf(f, 0.f, 0.9999f) * d->loopSamples;
         d->pos = p; d->tapePos = p;
+    });
+}
+void Session::setCue(bool on, int division) {
+    d->post([this, on, division] {
+        d->cueDivision = std::min(5, std::max(0, division));
+        if (on && d->loopSamples > 0 && !d->freeRec && !d->freeArmed) {
+            if (!d->cueActive) {
+                d->cueStart = d->tapePos;
+                d->cuePhase = 0.0;
+                d->cueActive = true;
+            }
+            if (!d->playing || d->stopping) { d->playing = true; d->stopping = false; d->rate = 1.0; }
+        } else {
+            d->cueActive = false;   // the audio thread blends back to the running transport
+        }
     });
 }
 void Session::setLoopSpeed(float v) { d->tapeSpeed.store(clampf(v, 0.25f, 2.f)); }
