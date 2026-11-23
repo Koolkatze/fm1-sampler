@@ -36,6 +36,7 @@ public:
     struct SequencerHit { uint8_t velocity = 0, note = 60; };
     static constexpr int kSeqSteps = Session::kSeqMaxSteps;
     static constexpr int kSeqTracks = Session::kSeqTracks;
+    static constexpr int kSeqScenes = Session::kSeqScenes;
 
     SamplerApp(Session& s, Send send);
 
@@ -51,6 +52,8 @@ public:
     void enterSequencer();
     void exitSequencer();
     int sequencerTrack() const { return seqTrack_; }
+    int sequencerScene() const { return seqScene_; }
+    void selectSequencerScene(int slot);
     void selectSequencerTrack(int track);
     int sequencerPage() const { return seqPage_; }
     int sequencerBeats() const { return seqBeats_; }
@@ -163,6 +166,8 @@ public:
     int selectedScene() const { return selectedScene_; }
     void selectScene(int slot, bool trigger = false);
     uint8_t sceneTracks() const { return sceneTracks_; }
+    int loopSequencerScene() const { return loopSeqScene_; } // -1 OFF, 0..7 whole sequencer scene
+    void selectLoopSequencerScene(int slot);
     void toggleSceneTrack(int t);
     bool sceneSaved(int slot) const { return slot >= 0 && slot < Session::kScenes && (st_.sceneMask & (1u << slot)); }
     void saveScene();
@@ -249,6 +254,12 @@ private:
     bool sequencerMode_ = false;
     int seqTrack_ = 0, seqPage_ = 0, seqBeats_ = 4, seqEditStep_ = 0;
     std::array<std::array<SequencerHit, kSeqSteps>, kSeqTracks> seqGrid_{};
+    struct SequencerScene {
+        std::array<std::array<SequencerHit, kSeqSteps>, kSeqTracks> grid{};
+        int beats = 4;
+    };
+    std::array<SequencerScene, kSeqScenes> seqScenes_{};
+    int seqScene_ = 0;
     std::array<std::string, kSeqTracks> seqSourcePaths_{};
     std::array<std::string, kSeqTracks> seqSourceNames_{};
     float tempoFlexBpm_ = 120.f, pitchedTempo_ = 1.f;
@@ -292,6 +303,7 @@ private:
     bool songMode_ = false, scenesLoaded_ = false, sceneKeys_ = false;
     int selectedScene_ = 0, songSelected_ = -1;
     uint8_t sceneTracks_ = 0xff;   // which loop tracks to capture in the selected pad
+    int loopSeqScene_ = -1; // optional complete sequencer scene chosen for LOOP pad
     std::vector<int> songOrder_;
     int mic_ = 0, micTrack_ = 0;
     int lastProjectOperation_ = 0;

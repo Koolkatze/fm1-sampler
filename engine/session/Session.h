@@ -17,8 +17,11 @@ public:
     static constexpr int kVoiceMax = 32;
     static constexpr int kLoopBins = 400;
     static constexpr int kScenes = 12;   // C1..B1
+    static constexpr int kSeqScenes = 8;  // eight complete independent step-pattern scenes
     static constexpr int kSeqTracks = 8;    // EXTRA tracks, never shared with the 8 looper clips
     static constexpr int kSeqMaxSteps = 256; // 64/4 at 16th-note resolution
+    struct SeqHit { uint8_t velocity = 0, note = 60; };
+    using SeqPattern = std::array<std::array<SeqHit, kSeqMaxSteps>, kSeqTracks>;
 
     struct Status {
         bool playing;
@@ -27,6 +30,7 @@ public:
         float bpm;
         int loopBars;
         int seqStep, seqBeats;
+        int seqScene; // 0..7 selected active sequencer scene, -1 when silent
         bool sequencerEnabled;
         bool flexProcessing;  // true while pitch-preserving loop render is pending
         float master_peak;
@@ -47,6 +51,7 @@ public:
         int32_t compositionSamples;
         uint8_t compositionTracks;
         uint8_t sceneTracks[kScenes]; // which of 8 loops belongs to each scene
+        uint8_t sceneSequencers[kScenes]; // 0 = no sequencer, 1..8 = complete step scene
         int activeScene, queuedScene;
         bool songPlaying;
         int songStep, songSize;
@@ -73,6 +78,8 @@ public:
     // Independent eight-lane 16th-note step sequencer. Its clock uses the
     // same transport/BPM as the looper but its samples and clips never overlap.
     void setSequencerEnabled(bool on);
+    void selectSequencerScene(int slot);  // 0..7: selects a complete pattern, never individual tracks
+    void replaceSequencerScene(int slot, int beats, const SeqPattern& grid); // project restoration, one queued update
     void setSequencerBeats(int beats);           // numerator 1..64, denominator 4
     void setSequencerStep(int track, int step, int velocity, int note = 60); // velocity 0..127, note 0..127
     void loadSequencerSamplePath(const std::string& path, int track);
@@ -121,7 +128,7 @@ public:
     void scrubEnd();                      // the finger lifts: the tape returns to the transport speed, or comes to a stop
     void seek(float fraction);            // move the playhead to a place of the loop (0..1): all loops share it
     void setCue(bool on, int division);    // momentary beat-repeat from current position; 0..5 = 1/1..1/32
-    void captureScene(int slot, uint8_t tracks = 0xff); // capture chosen loops, up to eight
+    void captureScene(int slot, uint8_t tracks = 0xff, int sequencerScene = -1); // -1 OFF; otherwise one of 8 complete sequencer scenes
     void clearScene(int slot);
     void launchScene(int slot);            // quantized to the next bar
     void startSong(const std::vector<int>& order);

@@ -120,6 +120,7 @@ struct Session::Impl {
     };
 
     struct Scene {
+        uint8_t seqScene = 0; // 0 = OFF, 1..8 = complete sequencer scene
         bool filled = false;
         int32_t samples = 0;
         float tempo = 120.f;
@@ -203,7 +204,31 @@ struct Session::Impl {
 
     struct SequencerHit { uint8_t velocity = 0, note = 60; };
     std::array<std::array<SequencerHit, Session::kSeqMaxSteps>, Session::kSeqTracks> seqGrid{};
+    struct SeqBank {
+        std::array<std::array<SequencerHit, Session::kSeqMaxSteps>, Session::kSeqTracks> steps{};
+        int beats = 4;
+    };
+    std::array<SeqBank, Session::kSeqScenes> seqBanks{};
+    int seqEditScene = 0, seqActiveScene = 0;
+    bool seqPerformance = false, seqAudible = true;
+    void activateSequencer(int slot) {
+        // Prevent the tail of the previously active ONE-SHOT scene from
+        // leaking into the next one. All eight sampler lanes are independent.
+        for (auto& voice : seqSampler) if (voice) voice->allOff();
+        seqActiveScene = slot;
+        seqAudible = slot >= 0 && slot < Session::kSeqScenes;
+        if (seqAudible) {
+            const auto& sc = seqBanks[(size_t)slot];
+            seqGrid = sc.steps;
+            seqBeats = sc.beats;
+            a_seqBeats = seqBeats;
+        }
+        seqPhase = 0.;
+        seqLastStep = -1;
+        a_seqScene = seqAudible ? slot : -1;
+    }
     std::array<std::unique_ptr<Sampler>, Session::kSeqTracks> seqSampler{};
+    std::array<std::string, Session::kSeqTracks> seqSourcePaths{};
     int seqBeats = 4, seqLastStep = -1;
     bool seqEnabled = true;
     double seqPhase = 0.;
@@ -213,7 +238,7 @@ struct Session::Impl {
     float clipReferenceBpm = 120.f;
     std::atomic<uint64_t> flexTicket{0};
     std::atomic<bool> a_flexPending{false};
-    std::atomic<int> a_seqStep{0}, a_seqBeats{4};
+    std::atomic<int> a_seqStep{0}, a_seqBeats{4}, a_seqScene{0};
     std::atomic<bool> a_seqEnabled{true};
     Reverb reverb; TapeDelay delay;
     float masterVol = 0.9f, ret[2] = {0.35f, 0.7f};
@@ -273,6 +298,7 @@ struct Session::Impl {
     std::atomic<int32_t> a_compositionSamples{0};
     std::atomic<uint8_t> a_compositionTracks{0};
     std::atomic<uint8_t> a_sceneTracks[Session::kScenes];
+    std::atomic<uint8_t> a_sceneSequencers[Session::kScenes];
     std::atomic<int> a_activeScene{-1}, a_queuedScene{-1}, a_songStep{-1}, a_songSize{0};
     std::atomic<bool> a_songPlaying{false}, a_arrangementLoaded{false};
     std::atomic<int> a_arrangementSize{0};
@@ -294,6 +320,9 @@ struct Session::Impl {
         for (auto& a : a_voiceN) a = 0;
         for (auto& a : a_arrangement) a = -1;
         for (auto& a : a_sceneTracks) a = 0;
+        for (auto& a : a_sceneSequencers) a = 0;
+        for (auto& bank : seqBanks) for (auto& lane : bank.steps)
+            for (auto& hit : lane) hit.note = 60;
         if (!offlineRender) worker = std::thread([this] {
             for (;;) {
                 std::function<void()> j;
@@ -314,6 +343,7 @@ struct Session::Impl {
             for (int t = 0; t < kTracks; ++t)
                 if (scenes[(size_t)i].has[(size_t)t]) tracks |= (uint8_t)(1u << t);
             a_sceneTracks[(size_t)i].store(tracks);
+            a_sceneSequencers[(size_t)i].store(scenes[(size_t)i].seqScene);
             if (scenes[(size_t)i].filled) mask |= 1u << i;
         }
         a_sceneMask.store(mask);
@@ -333,7 +363,7 @@ struct Session::Impl {
             seqPhase = std::fmod(tapePos * clipReferenceBpm * 4.0 / (60.0 * sr),
                                  (double)total);
             seqLastStep = -1;
-        } else if (seqEnabled && playing) {
+        } else if (seqEnabled && seqAudible && playing) {
             const double advance = (loopSamples > 0
                 ? clipReferenceBpm * 4.0 * tapeRate
                 : bpm * pitchedTempo * 4.0) / (60.0 * sr);
@@ -348,6 +378,7 @@ struct Session::Impl {
             }
         }
         a_seqStep.store((int)seqPhase % total);
+        if (!seqAudible) return; // other sequencer scenes are retained, never mixed
         for (int t = 0; t < Session::kSeqTracks; ++t) {
             auto& voice = seqSampler[(size_t)t];
             if (!voice) continue;
@@ -496,6 +527,8 @@ struct Session::Impl {
         // after EXIT/HOME/COMPOSE during the next audio callback.
         pendingScene = -1; songPlaying = false; songStep = -1;
         a_queuedScene = -1; a_songPlaying = false; a_songStep = -1;
+        seqPerformance = false;
+        activateSequencer(seqEditScene);
         if (!composition.valid) return;
         const Composition saved = std::move(composition);
         composition = Composition{};
@@ -545,7 +578,8 @@ struct Session::Impl {
         clipReferenceBpm = sc.tempo;
         bpm = tempoFlexOverride ? tempoFlexReference : sc.tempo;
         a_bpm = bpm * pitchedTempo;
-        seqPhase = 0.; seqLastStep = -1;
+        seqPerformance = true;
+        activateSequencer(sc.seqScene ? (int)sc.seqScene - 1 : -1);
         activeScene = slot; pendingScene = -1; a_activeScene = slot; a_queuedScene = -1;
         pos = tapePos = 0.0;
         playing = true; stopping = false; rate = 1.0;
@@ -630,6 +664,10 @@ struct Session::Impl {
         a_compositionValid = composition.valid;
         scenes = std::move(s.savedScenes); songOrder = std::move(s.arrangement);
         activeScene = s.active; pendingScene = s.queued;
+        seqPerformance = s.hasCompose || s.active >= 0;
+        activateSequencer(s.active >= 0 && scenes[(size_t)s.active].seqScene
+            ? (int)scenes[(size_t)s.active].seqScene - 1
+            : seqPerformance ? -1 : seqEditScene);
         pendingAt = s.pendingAt; songPlaying = s.songPlaying; songStep = s.songStep;
         sceneFadeFrames = std::max(1, sr / 180);
         updateSceneMask();
@@ -657,12 +695,12 @@ struct Session::Impl {
             std::ofstream out(temp, std::ios::binary | std::ios::trunc);
             if (!out) return;
             auto put = [&](const auto& value) { out.write(reinterpret_cast<const char*>(&value), sizeof(value)); };
-            const uint32_t magic = 0x314E4353; // SCN1
+            const uint32_t magic = 0x324E4353; // SCN2: adds sequencer scene source per LOOP scene
             const uint32_t rate = (uint32_t)sampleRate;
             put(magic); put(rate);
             for (const auto& sc : copy) {
                 const uint8_t filled = sc.filled ? 1 : 0;
-                put(filled);
+                put(filled); put(sc.seqScene);
                 if (!filled) continue;
                 put(sc.samples); put(sc.tempo); put(sc.bars);
                 for (int t = 0; t < kTracks; ++t) {
@@ -697,19 +735,24 @@ struct Session::Impl {
             std::vector<int> order;
             std::ifstream in(path, std::ios::binary);
             bool ok = (bool)in;
+            bool scnV2 = false;
             auto get = [&](auto& value) {
                 in.read(reinterpret_cast<char*>(&value), sizeof(value));
                 if (!in) ok = false;
             };
             if (ok) {
                 uint32_t magic = 0, rate = 0; get(magic); get(rate);
-                if (magic != 0x314E4353 || rate != (uint32_t)sampleRate) ok = false;
+                if ((magic != 0x314E4353 && magic != 0x324E4353) || rate != (uint32_t)sampleRate) ok = false;
+                // Old SCN1 scene banks are still readable.
+                scnV2 = magic == 0x324E4353;
             }
             size_t totalFloats = 0;
             for (int i = 0; ok && i < Session::kScenes; ++i) {
                 auto& sc = loaded[(size_t)i];
                 uint8_t filled = 0; get(filled);
-                if (!filled) continue;
+                if (scnV2) { get(sc.seqScene); if (sc.seqScene > Session::kSeqScenes) ok = false; }
+                if (!ok || !filled) continue;
+                sc.filled = true;
                 get(sc.samples); get(sc.tempo); get(sc.bars);
                 if (sc.samples <= 0 || sc.samples > sampleRate * 180 ||
                     sc.tempo < 30.f || sc.tempo > 300.f ||
@@ -1278,9 +1321,33 @@ void Session::setSequencerEnabled(bool on) {
         if (on) d->seqLastStep = -1;
     });
 }
+void Session::selectSequencerScene(int slot) {
+    if (slot < 0 || slot >= kSeqScenes) return;
+    d->post([this, slot] {
+        d->seqEditScene = slot;
+        if (!d->seqPerformance) d->activateSequencer(slot);
+    });
+}
+void Session::replaceSequencerScene(int slot, int beats, const SeqPattern& grid) {
+    if (slot < 0 || slot >= kSeqScenes) return;
+    beats = std::max(1, std::min(64, beats));
+    d->post([this, slot, beats, grid] {
+        auto& bank = d->seqBanks[(size_t)slot];
+        bank.beats = beats;
+        for (int t = 0; t < kSeqTracks; ++t)
+            for (int i = 0; i < kSeqMaxSteps; ++i) {
+                auto& dst = bank.steps[(size_t)t][(size_t)i];
+                dst.velocity = grid[(size_t)t][(size_t)i].velocity;
+                dst.note = grid[(size_t)t][(size_t)i].note;
+            }
+        if (slot == d->seqActiveScene) d->activateSequencer(slot);
+    });
+}
 void Session::setSequencerBeats(int beats) {
     beats = std::max(1, std::min(64, beats));
     d->post([this, beats] {
+        d->seqBanks[(size_t)d->seqEditScene].beats = beats;
+        if (d->seqEditScene != d->seqActiveScene) return;
         d->seqBeats = beats; d->a_seqBeats = beats;
         d->seqPhase = std::fmod(d->seqPhase, (double)(beats * 4));
         d->seqLastStep = -1;
@@ -1291,8 +1358,10 @@ void Session::setSequencerStep(int track, int step, int velocity, int note) {
     velocity = std::max(0, std::min(127, velocity));
     note = std::max(0, std::min(127, note));
     d->post([this, track, step, velocity, note] {
-        auto& hit = d->seqGrid[(size_t)track][(size_t)step];
+        auto& hit = d->seqBanks[(size_t)d->seqEditScene].steps[(size_t)track][(size_t)step];
         hit.velocity = (uint8_t)velocity; hit.note = (uint8_t)note;
+        if (d->seqEditScene == d->seqActiveScene)
+            d->seqGrid[(size_t)track][(size_t)step] = hit;
     });
 }
 void Session::loadSequencerSamplePath(const std::string& path, int track) {
@@ -1303,8 +1372,9 @@ void Session::loadSequencerSamplePath(const std::string& path, int track) {
         if (!prepared->load(path)) return;
         prepared->setMode(Sampler::ONESHOT);
         auto holder = std::make_shared<std::unique_ptr<Sampler>>(std::move(prepared));
-        d->post([this, track, holder] {
+        d->post([this, track, holder, path] {
             auto& dst = d->seqSampler[(size_t)track];
+            d->seqSourcePaths[(size_t)track] = path;
             std::swap(dst, *holder);
             d->bury(std::move(*holder));
         });
@@ -1313,6 +1383,7 @@ void Session::loadSequencerSamplePath(const std::string& path, int track) {
 void Session::clearSequencerSample(int track) {
     if (track < 0 || track >= kSeqTracks) return;
     d->post([this, track] {
+        d->seqSourcePaths[(size_t)track].clear();
         d->bury(std::move(d->seqSampler[(size_t)track]));
     });
 }
@@ -1500,21 +1571,29 @@ void Session::setCue(bool on, int division) {
         }
     });
 }
-void Session::captureScene(int slot, uint8_t tracks) {
-    if (slot < 0 || slot >= kScenes) return;
-    d->post([this, slot, tracks] {
-        if (!tracks || d->freeArmed || d->freeRec) return;
+void Session::captureScene(int slot, uint8_t tracks, int sequencerScene) {
+    if (slot < 0 || slot >= kScenes || sequencerScene < -1 || sequencerScene >= kSeqScenes) return;
+    d->post([this, slot, tracks, sequencerScene] {
+        if ((!tracks && sequencerScene < 0) || d->freeArmed || d->freeRec) return;
         for (const auto& t : d->tracks) if (t->clipRec) return;
         // The launched scene replaces the live playback clips. Capturing those
         // would overwrite the requested slot with its OWN previous contents.
         // Always use the untouched COMPOSE snapshot while in performance mode.
         const bool fromComposition = d->composition.valid;
-        const int32_t samples = fromComposition ? d->composition.samples : d->loopSamples;
+        int32_t samples = fromComposition ? d->composition.samples : d->loopSamples;
+        const int beats = sequencerScene >= 0 ? d->seqBanks[(size_t)sequencerScene].beats : 4;
+        const float sourceTempo = fromComposition ? d->composition.tempo : d->clipReferenceBpm;
+        // A LOOP part may contain only a complete sequencer scene.
+        if (samples <= 0 && sequencerScene >= 0)
+            samples = (int32_t)std::lround(d->sr * 60.0 * beats / std::max(30.f, d->bpm));
         if (samples <= 0) return;
         Impl::Scene replacement;
+        replacement.seqScene = sequencerScene >= 0 ? (uint8_t)(sequencerScene + 1) : 0;
+        replacement.filled = replacement.seqScene != 0;
         replacement.samples = samples;
-        replacement.tempo = fromComposition ? d->composition.tempo : d->clipReferenceBpm;
-        replacement.bars = fromComposition ? d->composition.bars : d->loopBars;
+        replacement.tempo = fromComposition && d->composition.samples > 0 ? sourceTempo : d->bpm;
+        replacement.bars = fromComposition && d->composition.samples > 0 ? d->composition.bars :
+                           d->loopSamples > 0 ? d->loopBars : std::max(1, (beats + 3) / 4);
         for (int i = 0; i < kTracks; ++i) {
             const bool has = fromComposition ? d->composition.has[(size_t)i]
                                              : d->tracks[(size_t)i]->clipHas;
@@ -1577,7 +1656,7 @@ void Session::startSong(const std::vector<int>& order) {
     });
 }
 void Session::beginPerformanceMode() {
-    d->post([this] { d->retainComposition(); });
+    d->post([this] { d->retainComposition(); d->seqPerformance = true; d->activateSequencer(-1); });
 }
 void Session::restoreComposition() {
     d->post([this] { d->restoreComposition(); });
@@ -1838,6 +1917,10 @@ bool Session::exportSong(const std::string& directory) {
             d->loopExportOp = -3; return; // no scenes: no file created
         }
         const auto scenes = d->scenes; // shared_ptr copy; no audio-data copy
+        const auto seqBanks = d->seqBanks;
+        const auto seqSourcePaths = d->seqSourcePaths;
+        const bool seqEnabled = d->seqEnabled;
+        const float seqTapePitch = 12.f * std::log2(std::max(.25f, d->pitchedTempo));
         const auto order = d->songOrder;
         const bool flexible = d->tempoFlexOverride;
         const float desiredBpm = d->bpm;
@@ -1902,7 +1985,8 @@ bool Session::exportSong(const std::string& directory) {
             d->loopExportOp = -2; return; // WAV 32-bit RIFF size limit
         }
 
-        d->job([this, directory, scenes, order, sceneFrames, flexible,
+        d->job([this, directory, scenes, seqBanks, seqSourcePaths, seqEnabled,
+                seqTapePitch, order, sceneFrames, flexible,
                 fx, songFrames, tail]() {
             namespace fs = std::filesystem;
             std::error_code ec;
@@ -1913,6 +1997,17 @@ bool Session::exportSong(const std::string& directory) {
             // export; its separate FX state cannot touch the live session.
             Impl bounce(fx.sampleRate, true);
             bounce.scenes = scenes;
+            bounce.seqBanks = seqBanks;
+            bounce.seqEnabled = seqEnabled;
+            bounce.seqPitchSemis = fx.globalPitch + seqTapePitch;
+            for (int t = 0; t < Session::kSeqTracks; ++t) {
+                const auto& path = seqSourcePaths[(size_t)t];
+                if (path.empty()) continue;
+                auto voice = std::make_unique<Sampler>(fx.sampleRate);
+                if (!voice->load(path)) { d->loopExportOp = -2; return; }
+                voice->setMode(Sampler::ONESHOT);
+                bounce.seqSampler[(size_t)t] = std::move(voice);
+            }
             bounce.songOrder = order;
             bounce.songPlaying = true;
             bounce.masterVol = fx.masterVolume;
@@ -2022,7 +2117,7 @@ int Session::loopPeaks(int track, float* out, int maxBins) const {
 // Snapshots are captured at one audio callback and written asynchronously.
 namespace {
 constexpr uint32_t kProjectMagic = 0x32504d46;  // FMP2
-constexpr uint32_t kProjectVersion = 3; // 3 adds eight sequencer assets; 2 remains readable
+constexpr uint32_t kProjectVersion = 4; // 4 stores LOOP -> sequencer scene mapping; 2/3 readable
 constexpr uint64_t kProjectMaxBytes = 536870912ULL; // 512 MiB decompressed
 constexpr uint32_t kSampleMax = 67108864U; // 64 MiB per WAV
 std::string projectPath(const std::string& dir, int slot) {
@@ -2162,7 +2257,7 @@ bool writeProjectFile(const std::string& dir, int slot, const Session::Impl::Pro
     for (const auto& scene : s.savedScenes) {
         if (!ok) break;
         const uint8_t filled = scene.filled;
-        ok = w.value(filled);
+        ok = w.value(filled) && w.value(scene.seqScene);
         if (!filled || !ok) continue;
         ok = scene.samples > 0 && scene.samples <= sr * 180 &&
              scene.bars > 0 && scene.bars <= 32 &&
@@ -2209,7 +2304,7 @@ bool readProjectFile(const std::string& file, Session::Impl::ProjectSnapshot& sn
     ProjectRead r(file);
     uint32_t magic = 0, ver = 0, rate = 0, metaLen = 0;
     if (!r.value(magic) || !r.value(ver) || !r.value(rate) || !r.value(metaLen) ||
-        magic != kProjectMagic || (ver != 2 && ver != kProjectVersion) ||
+        magic != kProjectMagic || (ver != 2 && ver != 3 && ver != kProjectVersion) ||
         rate != (uint32_t)sr || metaLen == 0 || metaLen > 65536) return false;
     snap.appState.resize(metaLen);
     if (!r.get(snap.appState.data(), metaLen)) return false;
@@ -2236,6 +2331,7 @@ bool readProjectFile(const std::string& file, Session::Impl::ProjectSnapshot& sn
         uint8_t filled = 0;
         if (!r.value(filled) || filled > 1) return false;
         scene.filled = filled;
+        if (ver >= 4) { if (!r.value(scene.seqScene) || scene.seqScene > Session::kSeqScenes) return false; }
         if (!filled) continue;
         if (!r.value(scene.samples) || !r.value(scene.bars) || !r.value(scene.tempo) ||
             scene.samples <= 0 || scene.samples > sr * 180 || scene.bars < 1 ||
@@ -2481,6 +2577,7 @@ Session::Status Session::status() const {
     s.playing = d->a_playing; s.pos = d->a_pos; s.loopSamples = d->a_loop;
     s.bpm = d->a_bpm; s.loopBars = d->a_bars;
     s.seqStep = d->a_seqStep; s.seqBeats = d->a_seqBeats;
+    s.seqScene = d->a_seqScene;
     s.sequencerEnabled = d->a_seqEnabled;
     s.flexProcessing = d->a_flexPending;
     s.master_peak = d->a_master; s.cpu_permille = d->a_cpu;
@@ -2498,7 +2595,10 @@ Session::Status Session::status() const {
     s.compositionValid = d->a_compositionValid;
     s.compositionSamples = d->a_compositionSamples;
     s.compositionTracks = d->a_compositionTracks;
-    for (int i = 0; i < kScenes; ++i) s.sceneTracks[i] = d->a_sceneTracks[(size_t)i];
+    for (int i = 0; i < kScenes; ++i) {
+        s.sceneTracks[i] = d->a_sceneTracks[(size_t)i];
+        s.sceneSequencers[i] = d->a_sceneSequencers[(size_t)i];
+    }
     s.queuedScene = d->a_queuedScene; s.songPlaying = d->a_songPlaying;
     s.songStep = d->a_songStep; s.songSize = d->a_songSize;
     s.arrangementLoaded = d->a_arrangementLoaded;

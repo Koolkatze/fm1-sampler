@@ -99,6 +99,24 @@ int main() {
               app.status().track_has_clip[0] == priorClip,
               "SEQ sample import does not replace looper sound or clip");
         app.sequencerToggleStep(0);
+        // The eight sequencer scenes are complete independent 8-lane patterns.
+        const auto originalVelocity = app.sequencerHit(0, 0).velocity;
+        app.selectSequencerScene(1);
+        CHECK(app.sequencerScene() == 1 && app.sequencerHit(0, 0).velocity == 0,
+              "changing to SEQ SCENE 2 silences the saved pattern in scene 1");
+        app.setSequencerBeats(7);
+        app.sequencerToggleStep(26);
+        CHECK(app.sequencerHit(0, 26).velocity > 0 && app.sequencerBeats() == 7,
+              "SEQ SCENE 2 retains its own 7/4 pattern and full eight-lane grid");
+        enc(5, -1); // Physical FM-1 K4 selects whole scene, not a lane
+        CHECK(app.sequencerScene() == 0 && app.sequencerHit(0, 0).velocity == originalVelocity &&
+              app.sequencerBeats() == 4,
+              "K4 restores SEQ SCENE 1 with its original steps and signature");
+        app.selectSequencerScene(1);
+        CHECK(app.sequencerHit(0, 26).velocity > 0 && app.sequencerBeats() == 7,
+              "reselecting scene 2 restores its pattern without altering scene 1");
+        app.sequencerToggleStep(26);
+        app.selectSequencerScene(0);
         app.setTempoFlexBpm(148);
         run(0.12);
         CHECK(std::fabs(app.status().bpm - 148.f) < .1f,
@@ -489,7 +507,18 @@ int main() {
         app.selectTrack(1); app.loopRecord(); run(0.15);
         app.playNote(65, true); run(0.4); app.playNote(65, false); run(0.25);
         app.loopRecord(); run(0.18);
-        app.selectScene(2); app.saveScene(); run(0.22);
+        // Each LOOP part may select one WHOLE sequencer scene, alongside looper clips.
+        app.enterSequencer();
+        app.selectSequencerScene(1);
+        app.selectSequencerTrack(0);
+        app.setSequencerBeats(4);
+        app.sequencerToggleStep(0);
+        app.exitSequencer();
+        app.selectScene(2);
+        app.selectLoopSequencerScene(1); // user sees SEQ SCENE 2, 0-based engine ID 1
+        app.saveScene(); run(0.22);
+        CHECK(app.status().sceneSequencers[2] == 2,
+              "LOOP part D1 references all of sequencer scene 2 without individual lanes");
         CHECK((app.status().sceneMask & 5u) == 5u &&
               (app.status().sceneTracks[2] & 3u) == 3u,
               "D1 contains tracks 1+2 while C1 preserves only track 1");
@@ -554,12 +583,16 @@ int main() {
         CHECK(maxDiff < 1e-5f, "EXIT restores the exact original loop audio (peak diff %.7f)", maxDiff);
         app.setSongMode(false); run(0.06);
         app.onMidi(d1, 3); run(1.2);
+        CHECK(app.status().seqScene == 1,
+              "launching LOOP part D1 plays selected sequencer scene 2 with its looper clips");
         CHECK(app.status().activeScene == 2 && app.status().track_has_clip[1],
               "pressing Ableton MIDI D1 (38) launches a different loop structure");
         // Scientific C1=24 also launches the C1 scene for alternate controllers.
         uint8_t scientificC1[3] = {0x90, 24, 100};
         app.onMidi(scientificC1, 3); run(1.1);
-        CHECK(app.status().activeScene == 0, "scientific MIDI C1 (24) also launches C1");
+        CHECK(app.status().activeScene == 0 && app.status().seqScene == -1,
+              "switching to LOOP part C1 mutes unselected sequencer scene without deleting D1");
+        
         // FM-1 physical first C-scene key uses firmware's 53 offset.
         uint8_t physicalC1[3] = {0x90, 53, 100};
         app.onMidi(physicalC1, 3); run(1.1);
@@ -615,6 +648,7 @@ int main() {
             }
             CHECK(loaded.arrangementLoaded && (loaded.sceneMask & 5u) == 5u &&
                   loaded.sceneTracks[0] == 1u && (loaded.sceneTracks[2] & 3u) == 3u &&
+                  loaded.sceneSequencers[2] == 2 &&
                   loaded.arrangementSize == 3 && loaded.arrangement[0] == 0 &&
                   loaded.arrangement[1] == 2 && loaded.arrangement[2] == 0,
                   "saved C1/D1 loop packs and the C1-D1-C1 song survive app restart");
@@ -732,9 +766,10 @@ int main() {
         const auto originalSample1 = app.sampleLabel(1);
         CHECK(app.status().track_has_clip[0] && app.status().track_has_clip[1],
               "two COMPOSE recordings are present before full-project save");
-        // V4 projects must persist the *independent* 8-lane sequencer,
+        // V5 projects must persist all eight independent full-pattern scenes,
         // including its audio asset, pitched bass note and uncommon meter.
         app.enterSequencer();
+        app.selectSequencerScene(0); // write bass note to scene 1, keep scene 2's drums
         app.selectSequencerTrack(5);
         app.setSequencerBeats(11);
         app.setSequencerPage(2);
@@ -779,7 +814,16 @@ int main() {
               app.pitchSemitones() == -3 && app.pitchCents() == 17 &&
               std::fabs(app.pitchedTempo() - 1.10f) < .001f &&
               std::fabs(app.tempoFlexBpm() - 134.f) < .1f,
-              "v4 project restores sequencer meter, steps, bass notes, source and tempo/pitch");
+              "v5 project restores sequencer meter, steps, bass notes, source and tempo/pitch");
+        CHECK(app.status().sceneSequencers[2] == 2,
+              "full project restores LOOP part D1 -> complete sequencer scene 2");
+        app.selectSequencerScene(1);
+        CHECK(app.sequencerHit(0, 0).velocity > 0 &&
+              app.sequencerBeats() == 4,
+              "v5 project retains a second complete sequencer scene, independent of scene 1");
+        app.selectSequencerScene(0);
+        CHECK(app.sequencerHit(5, 39).note == 47,
+              "switching back after project load restores the first scene note");
         CHECK(seqPath.empty() ||
               std::filesystem::is_regular_file("/tmp/fm1sampler_t2/project_assets/slot_1/seq_track_6.wav"),
               "v4 project embeds independent sequencer source WAV, not just its file name");

@@ -1,6 +1,6 @@
 # FM1 Sampler 0.39 — Sequencer / Tempo Flex
 
-This preview adds **eight independent step-sequencer tracks** alongside the existing eight looper tracks. The sequencer's lanes are not listed in LOOP, and the looper's tracks do not appear in SEQUENCER. They share **PLAY/STOP and the master project clock**; each uses its own sample assignment.
+This preview adds **eight independent step-sequencer tracks** alongside the existing eight looper tracks. The sequencer's individual lanes are not listed in LOOP. **LOOP Mode selects any combination of looper tracks plus optionally ONE entire sequencer scene (1–8).** The looper's tracks do not appear inside the SEQUENCER editor. They share **PLAY/STOP and the master project clock**; each uses its own sample assignment.
 
 ## Getting started
 
@@ -31,12 +31,22 @@ These are generated only if missing in `FM1-SAMPLER/OFFICIAL/SEQUENCER`; existin
 | **K1** | Move the visible 16-step window along the timeline |
 | **K2** | Choose the MIDI note of the most recently edited step (useful for bass) |
 | **K3** | Set pattern length, 1/4 through 64/4 |
-| **K4** | Set master tempo in BPM |
+| **K4** | Select sequencer scene 1–8 (whole pattern) |
 | **PLAY/STOP** | Shared transport for looper and sequencer |
 
 Each 16-step window represents four quarter-note beats, with 1/16-note step resolution. **64/4** spans **256 steps** or sixteen windows. The selected track and active steps also appear on the FM-1 LCD, with the original light/dark colour theme.
 
 The physical buttons must actually transmit the supported USB-MIDI messages. The Android APK does **not** install or flash the FM-1 firmware.
+
+## Independent sequencer scenes and LOOP Mode
+
+The step sequencer has **eight separate scenes, numbered 1–8**. K4 on the SEQUENCER page selects a scene, and the phone interface has previous/next scene controls. Each scene remembers the patterns for all eight sequencer lanes, their step velocities and notes, and its own 1/4–64/4 length. Only the currently selected scene plays in normal SEQUENCER mode; the seven others remain saved and silent. Switching scenes does not erase previously entered steps. The eight sample slots are shared across the sequencer scene bank; editing a pattern never replaces the original looper audio or its sample assignments.
+
+In **PROJECT → LOOP MODE**, pick a normal looper scene pad (C1–B1), select any of the **eight original looper track buttons**, and choose **SEQ OFF** or **SEQ SCENE 1–8**. When you save or replace this LOOP pad, it remembers the chosen looper clips and a reference to **one whole sequencer scene**. LOOP does not offer the sequencer's eight individual tracks as selectable looper tracks. A pad may also contain only the selected sequencer scene, with no recorded looper tracks.
+
+Launching a LOOP pad switches its looper clips and starts **only its chosen sequencer scene**. If **SEQ OFF** is saved, all sequencer scenes are silent for that pad. Other sequencer patterns remain intact. The original SONG order can use these LOOP pads as parts, including the chosen complete sequencer scene; SONG.wav export renders that selected sequencer audio along with the looper clips.
+
+A saved sequencer scene is referenced by number in LOOP: editing that sequencer scene later changes what that LOOP pad plays. This is not a separate copy of its audio for each LOOP pad. The pattern bank and references are included in new complete project saves, while previous app-state v4, archive v2/v3 and standalone SCN1 scene banks remain readable.
 
 ## Global TEMPO / PITCH
 
@@ -55,9 +65,9 @@ Tempo Flex targets the project-wide tempo; it does not permanently rewrite the s
 
 ## Saving, loading and updating
 
-**SAVE PROJECT** stores the eight sequencer patterns, step notes/velocities, pattern length, sample assignments and the source WAV data alongside COMPOSE, LOOP and SONG. Loading an existing v2/v3 project remains supported. The new preview uses app-state v4 and project archive v3.
+**SAVE PROJECT** stores all eight complete sequencer scene patterns, their step notes/velocities and lengths, the shared sequencer sample assignments and embedded source WAV data, and the LOOP scene-to-sequencer references alongside COMPOSE and SONG. Existing v2/v3/v4 app settings and project archives v2/v3 remain readable. This development branch uses app-state v5 and project archive v4.
 
-This release retains the package name `com.ferluht.fm1sampler.scenes` and increases Android versionCode from 62 to **63**. A safe in-place upgrade **also requires the exact same signing certificate** as the APK already installed on the phone. GitHub's signed-release workflow blocks publication if the permanent keystore or pinned SHA-256 does not match. **Do not uninstall a previous APK** before making and verifying a complete backup of projects and samples, because an uninstall can remove app-private files.
+The previously published 0.39 preview used Android versionCode **63**. The new scene-selection changes in this branch have not yet been published as an upgrade APK. A safe in-place upgrade **also requires the exact same signing certificate** as the APK already installed on the phone. GitHub's signed-release workflow blocks publication if the permanent keystore or pinned SHA-256 does not match. **Do not uninstall a previous APK** before making and verifying a complete backup of projects and samples, because an uninstall can remove app-private files.
 
 ## Limitations to validate on real hardware
 
@@ -67,4 +77,6 @@ This release retains the package name `com.ferluht.fm1sampler.scenes` and increa
 - Whether exported SONG and per-track WAVs sound identical to live playback in demanding projects
 - Upgrade/restore behavior on the specific Android device and currently installed signing identity
 
-Source and code review: https://github.com/Koolkatze/fm1-sampler/pull/5
+Scene-selection development review: https://github.com/Koolkatze/fm1-sampler/pull/6
+
+Original 0.39 preview: https://github.com/Koolkatze/fm1-sampler/pull/5

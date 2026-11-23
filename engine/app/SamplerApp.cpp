@@ -93,10 +93,28 @@ SamplerApp::SamplerApp(Session& s, Send send) : s_(s), send_(std::move(send)) {
             s_.loadSequencerSamplePath(source, i);
         }
     }
+    for (auto& scene : seqScenes_) {
+        for (auto& lane : scene.grid)
+            for (auto& hit : lane) hit.note = 60;
+    }
+    s_.selectSequencerScene(0);
     s_.setSequencerBeats(seqBeats_);
     s_.setSequencerEnabled(true);
 }
 
+void SamplerApp::selectSequencerScene(int slot) {
+    if (slot < 0 || slot >= kSeqScenes || slot == seqScene_) return;
+    // Every scene remembers its entire 8-track grid and its own time signature.
+    seqScenes_[(size_t)seqScene_].grid = seqGrid_;
+    seqScenes_[(size_t)seqScene_].beats = seqBeats_;
+    seqScene_ = slot;
+    seqGrid_ = seqScenes_[(size_t)slot].grid;
+    seqBeats_ = seqScenes_[(size_t)slot].beats;
+    seqPage_ = 0;
+    seqEditStep_ = 0;
+    s_.selectSequencerScene(slot);
+    lastLed_ = ~0ull;
+}
 void SamplerApp::enterSequencer() {
     sequencerMode_ = true;
     page_ = P_STEP;
@@ -117,6 +135,7 @@ void SamplerApp::setSequencerPage(int page) {
 }
 void SamplerApp::setSequencerBeats(int beats) {
     seqBeats_ = std::max(1, std::min(64, beats));
+    seqScenes_[(size_t)seqScene_].beats = seqBeats_;
     setSequencerPage(seqPage_);
     s_.setSequencerBeats(seqBeats_);
 }
@@ -125,6 +144,7 @@ void SamplerApp::sequencerToggleStep(int step) {
     seqEditStep_ = step;
     auto& hit = seqGrid_[(size_t)seqTrack_][(size_t)step];
     hit.velocity = hit.velocity ? 0 : 108;
+    seqScenes_[(size_t)seqScene_].grid[(size_t)seqTrack_][(size_t)step] = hit;
     s_.setSequencerStep(seqTrack_, step, hit.velocity, hit.note);
     lastLed_ = ~0ull;
 }
@@ -133,6 +153,7 @@ void SamplerApp::sequencerSetStepNote(int step, int note) {
     seqEditStep_ = step;
     auto& hit = seqGrid_[(size_t)seqTrack_][(size_t)step];
     hit.note = (uint8_t)std::max(0, std::min(127, note));
+    seqScenes_[(size_t)seqScene_].grid[(size_t)seqTrack_][(size_t)step] = hit;
     s_.setSequencerStep(seqTrack_, step, hit.velocity, hit.note);
 }
 void SamplerApp::setTempoFlexBpm(float bpm) {
@@ -628,9 +649,9 @@ SamplerApp::Knobs SamplerApp::knobs(Page p) {
                     (seqBeats_ - 1) / 63.f,
                     [this](int d) { setSequencerBeats(seqBeats_ + (d > 0 ? 1 : -1)); },
                     [this](float v) { setSequencerBeats(1 + (int)std::lround(cl(v) * 63)); });
-        k[3] = make("TEMPO", fmt("%.0f BPM", tempoFlexBpm_), (tempoFlexBpm_ - 30.f) / 270.f,
-                    [this](int d) { setTempoFlexBpm(tempoFlexBpm_ + (d > 0 ? 1.f : -1.f)); },
-                    [this](float v) { setTempoFlexBpm(30.f + cl(v) * 270.f); });
+        k[3] = make("SEQ SCENE", std::to_string(seqScene_ + 1) + "/8", seqScene_ / 7.f,
+                    [this](int d) { selectSequencerScene(seqScene_ + (d > 0 ? 1 : -1)); },
+                    [this](float v) { selectSequencerScene((int)std::lround(cl(v) * 7)); });
         break;
     }
     case P_CUE:
@@ -676,11 +697,15 @@ void SamplerApp::selectScene(int slot, bool trigger) {
     if (slot < 0 || slot >= Session::kScenes) return;
     selectedScene_ = slot;
     sceneTracks_ = sceneSaved(slot) ? st_.sceneTracks[slot] : 0xff;
+    loopSeqScene_ = sceneSaved(slot) ? (int)st_.sceneSequencers[slot] - 1 : -1;
     if (!trigger || songMode_) return;
     if (recordingNow()) { say("FINISH RECORDING FIRST"); return; }
     if (!sceneSaved(slot)) { say("EMPTY PAD " + sceneLabel(slot)); return; }
     s_.launchScene(slot);
     say("SCENE " + sceneLabel(slot) + " QUEUED");
+}
+void SamplerApp::selectLoopSequencerScene(int slot) {
+    loopSeqScene_ = std::max(-1, std::min(kSeqScenes - 1, slot));
 }
 void SamplerApp::toggleSceneTrack(int t) {
     if (t >= 0 && t < kTracks) sceneTracks_ ^= (uint8_t)(1u << t);
@@ -695,10 +720,11 @@ void SamplerApp::saveScene() {
     if (!compose)
         for (int t = 0; t < kTracks; ++t)
             if (status.track_has_clip[t]) available |= (uint8_t)(1u << t);
-    if (!sourceSamples || !available) { say("RECORD A LOOP FIRST"); return; }
-    if (!(sceneTracks_ & available)) { say("SELECT A RECORDED TRACK"); return; }
+    if ((!sourceSamples || !(sceneTracks_ & available)) && loopSeqScene_ < 0) {
+        say("SELECT A LOOP OR SEQ SCENE"); return;
+    }
     const bool overwrite = sceneSaved(selectedScene_);
-    s_.captureScene(selectedScene_, sceneTracks_);
+    s_.captureScene(selectedScene_, sceneTracks_, loopSeqScene_);
     say((overwrite ? "REPLACED " : "SAVED TO ") + sceneLabel(selectedScene_));
 }
 void SamplerApp::deleteScene() {
@@ -714,6 +740,7 @@ void SamplerApp::selectSongStep(int step) {
         songSelected_ = step;
         selectedScene_ = songOrder_[(size_t)step];
         sceneTracks_ = st_.sceneTracks[selectedScene_];
+        loopSeqScene_ = (int)st_.sceneSequencers[selectedScene_] - 1;
     }
 }
 void SamplerApp::songAdd() {
@@ -758,7 +785,7 @@ namespace {
 struct FullProjectSettings {
     uint32_t magic = 0x32505041;  // APP2
     // v4 adds independent sequencer and tempo fields without changing the v2/v3 prefix.
-    uint32_t version = 4, bytes = sizeof(FullProjectSettings);
+    uint32_t version = 5, bytes = sizeof(FullProjectSettings);
     std::array<SamplerApp::TrackState, SamplerApp::kTracks> tracks{};
     SamplerApp::ScaleState scale{};
     float reverbSize = .7f, reverbWet = .35f, delayTime = .4f, delayFeedback = .45f;
@@ -777,6 +804,12 @@ struct FullProjectSettings {
     float tempoBpm = 120.f, pitchedTempo = 1.f;
     int32_t pitchSemis = 0, pitchCents = 0;
     uint8_t sequencerMode = 0, sequencerEnabled = 1, reservedSeq[2] = {};
+    // Appended v5: eight distinct complete sequencer patterns + per-scene length.
+    // No entries refer to individual sequencer tracks in LOOP Mode.
+    std::array<std::array<std::array<uint8_t, SamplerApp::kSeqSteps>, SamplerApp::kSeqTracks>, SamplerApp::kSeqScenes> seqScenesVelocity{};
+    std::array<std::array<std::array<uint8_t, SamplerApp::kSeqSteps>, SamplerApp::kSeqTracks>, SamplerApp::kSeqScenes> seqScenesNote{};
+    std::array<uint8_t, SamplerApp::kSeqScenes> seqScenesBeats{};
+    int32_t selectedSeqScene = 0, selectedLoopSeqScene = -1;
 };
 static_assert(std::is_trivially_copyable_v<FullProjectSettings>);
 }
@@ -818,6 +851,18 @@ bool SamplerApp::saveFullProject(int slot) {
     m.sceneTrackMask = sceneTracks_; m.performance = sceneKeys_; m.songMode = songMode_;
     m.songSize = (uint32_t)std::min<size_t>(64, songOrder_.size());
     m.seqTrack = seqTrack_; m.seqPage = seqPage_; m.seqBeats = seqBeats_;
+    m.selectedSeqScene = seqScene_;
+    m.selectedLoopSeqScene = loopSeqScene_;
+    for (int scene = 0; scene < kSeqScenes; ++scene) {
+        const auto& pattern = seqScenes_[(size_t)scene];
+        m.seqScenesBeats[(size_t)scene] = (uint8_t)pattern.beats;
+        for (int t = 0; t < kSeqTracks; ++t)
+            for (int step = 0; step < kSeqSteps; ++step) {
+                const auto& hit = pattern.grid[(size_t)t][(size_t)step];
+                m.seqScenesVelocity[(size_t)scene][(size_t)t][(size_t)step] = hit.velocity;
+                m.seqScenesNote[(size_t)scene][(size_t)t][(size_t)step] = hit.note;
+            }
+    }
     m.seqEditedStep = seqEditStep_; m.sequencerMode = sequencerMode_;
     m.sequencerEnabled = 1;
     m.tempoBpm = tempoFlexBpm_; m.pitchedTempo = pitchedTempo_;
@@ -874,13 +919,14 @@ bool SamplerApp::loadFullProject(int slot) {
 void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
     const size_t legacySize = offsetof(FullProjectSettings, seqVelocity);
     const bool oldProject = project.appState.size() == legacySize;
-    if (!oldProject && project.appState.size() != sizeof(FullProjectSettings)) {
+    const bool v4Project = project.appState.size() == offsetof(FullProjectSettings, seqScenesVelocity);
+    if (!oldProject && !v4Project && project.appState.size() != sizeof(FullProjectSettings)) {
         say("PROJECT SETTINGS INCOMPATIBLE"); return;
     }
     FullProjectSettings m{};
     std::memcpy(&m, project.appState.data(), project.appState.size());
     if (m.magic != 0x32505041 ||
-        (oldProject ? (m.version != 2 && m.version != 3) : (m.version != 4)) ||
+        (oldProject ? (m.version != 2 && m.version != 3) : v4Project ? m.version != 4 : m.version != 5) ||
         m.bytes != project.appState.size() || m.songSize > 64 ||
         m.selectedTrack < 0 || m.selectedTrack >= kTracks ||
         m.page < 0 || m.page >= kPages || m.selectedScene < 0 ||
@@ -900,6 +946,7 @@ void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
     track_ = m.selectedTrack; page_ = (Page)m.page;
     selectedScene_ = m.selectedScene; songSelected_ = m.selectedSongStep;
     sceneTracks_ = m.sceneTrackMask;
+    loopSeqScene_ = v4Project || oldProject ? -1 : std::max(-1, std::min(kSeqScenes - 1, (int)m.selectedLoopSeqScene));
     cueDivision_ = m.version == 2 ? m.cueDivision * 2 : m.cueDivision;
     // v2 saved 0..5 as straight divisions. v3 interleaves T values,
     // keeping the original rhythmic choice without losing old projects.
@@ -914,7 +961,31 @@ void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
         pitchedTempo_ = std::isfinite(m.pitchedTempo) ? cl(m.pitchedTempo, .25f, 2.f) : 1.f;
         pitchSemis_ = std::max(-24, std::min(24, (int)m.pitchSemis));
         pitchCents_ = std::max(-100, std::min(100, (int)m.pitchCents));
-        s_.setSequencerBeats(seqBeats_);
+        seqScene_ = v4Project ? 0 : std::max(0, std::min(kSeqScenes - 1, (int)m.selectedSeqScene));
+        // Legacy v4 had one pattern; migrate it into sequencer scene 1.
+        for (int scene = 0; scene < kSeqScenes; ++scene) {
+            auto& bank = seqScenes_[(size_t)scene];
+            bank.beats = v4Project ? (scene == 0 ? seqBeats_ : 4) :
+                std::max(1, std::min(64, (int)m.seqScenesBeats[(size_t)scene]));
+            for (int t = 0; t < kSeqTracks; ++t)
+                for (int step = 0; step < kSeqSteps; ++step) {
+                    auto& hit = bank.grid[(size_t)t][(size_t)step];
+                    hit.velocity = v4Project ? (scene == 0 ? m.seqVelocity[(size_t)t][(size_t)step] : 0)
+                        : m.seqScenesVelocity[(size_t)scene][(size_t)t][(size_t)step];
+                    hit.note = v4Project ? (scene == 0 ? m.seqNote[(size_t)t][(size_t)step] : 60)
+                        : m.seqScenesNote[(size_t)scene][(size_t)t][(size_t)step];
+                }
+            Session::SeqPattern restored{};
+            for (int t = 0; t < kSeqTracks; ++t)
+                for (int step = 0; step < kSeqSteps; ++step) {
+                    const auto hit = bank.grid[(size_t)t][(size_t)step];
+                    restored[(size_t)t][(size_t)step] = {hit.velocity, hit.note};
+                }
+            s_.replaceSequencerScene(scene, bank.beats, restored);
+        }
+        seqGrid_ = seqScenes_[(size_t)seqScene_].grid;
+        seqBeats_ = seqScenes_[(size_t)seqScene_].beats;
+        s_.selectSequencerScene(seqScene_);
         s_.setSequencerEnabled(m.sequencerEnabled != 0);
         for (int t = 0; t < kSeqTracks; ++t) {
             const auto& source = project.seqSamplePaths[(size_t)t];
@@ -926,9 +997,7 @@ void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
             else s_.loadSequencerSamplePath(source, t);
             for (int i = 0; i < kSeqSteps; ++i) {
                 auto& hit = seqGrid_[(size_t)t][(size_t)i];
-                hit.velocity = m.seqVelocity[(size_t)t][(size_t)i];
-                hit.note = m.seqNote[(size_t)t][(size_t)i];
-                s_.setSequencerStep(t, i, hit.velocity, hit.note);
+                hit = seqGrid_[(size_t)t][(size_t)i];
             }
         }
         s_.setMasterBpm(tempoFlexBpm_);
@@ -937,6 +1006,12 @@ void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
     } else {
         // v2/v3 archives remain playable with fresh, unmodified sequencer lanes.
         sequencerMode_ = false;
+        seqScene_ = 0;
+        for (auto& bank : seqScenes_) {
+            bank.beats = 4;
+            for (auto& lane : bank.grid)
+                for (auto& hit : lane) hit = {0, 60};
+        }
         for (int t = 0; t < kSeqTracks; ++t)
             for (int i = 0; i < kSeqSteps; ++i) {
                 seqGrid_[(size_t)t][(size_t)i] = {0, 60};

@@ -747,6 +747,14 @@ void SamplerUI::sequencerView() {
            [this] { openLibrary(); }, 10);
     button({260, 9, 123, 31}, "TEMPO / PITCH", tempoOpen_,
            [this] { tempoOpen_ = true; }, 9);
+    if (W_ >= 760) {
+        button({393, 9, 34, 31}, "<", false,
+               [this] { app_.selectSequencerScene(app_.sequencerScene() - 1); }, 12);
+        text(475, 25, 11, ACCENT,
+             "SCENE " + std::to_string(app_.sequencerScene() + 1) + "/8", 1, true);
+        button({524, 9, 34, 31}, ">", false,
+               [this] { app_.selectSequencerScene(app_.sequencerScene() + 1); }, 12);
+    }
     text(W_ - 16, 25, 16, st_.flexProcessing ? ACCENT : TEXT,
          "SEQUENCER  " + num("%.0f BPM", st_.bpm) + (st_.flexProcessing ? "  FLEX..." : ""), 2, true);
 
@@ -756,8 +764,8 @@ void SamplerUI::sequencerView() {
     const float firstY = 76.f, rowH = std::max(20.f, (H_ - 164.f) / 8.f);
     const int firstStep = app_.sequencerPage() * 16;
     const int limit = app_.sequencerBeats() * 4;
-    text(14, 63, 12, ACCENT, "8 EXTRA TRACKS", 0, true);
-    text(x0, 63, 10, DIM, "SELECT / BLACK KEYS: TRACK    K1: TIMELINE    WHITE KEYS: STEPS");
+    text(14, 63, 12, ACCENT, "8 EXTRA TRACKS · SCENE " + std::to_string(app_.sequencerScene() + 1) + "/8", 0, true);
+    text(x0, 63, 10, DIM, "SELECT / BLACK KEYS: TRACK    K1: TIMELINE    K4: SCENE    WHITE: STEPS");
     for (int t = 0; t < SamplerApp::kSeqTracks; ++t) {
         const bool selected = t == app_.sequencerTrack();
         const float y = firstY + rowH * t;
@@ -1232,13 +1240,24 @@ void SamplerUI::projectSheet() {
         const uint8_t mask = st_.sceneTracks[slot];
         int count = 0; for (int t = 0; t < SamplerApp::kTracks; ++t) count += (mask >> t) & 1;
         text(pad.x + pad.w / 2, pad.y + H(23), 8, DIM,
-             queued ? "NEXT" : saved ? std::to_string(count) + " LOOPS" : "EMPTY", 1, false);
+             queued ? "NEXT" : saved ?
+             (st_.sceneSequencers[slot]
+                ? std::to_string(count) + "L+S" + std::to_string(st_.sceneSequencers[slot])
+                : std::to_string(count) + " LOOPS") : "EMPTY", 1, false);
         // Selecting a pad for editing must not swap the COMPOSE loops with the
         // old scene. The separate LAUNCH button (and physical MIDI pads) play it.
         tap(pad, [this, slot] { app_.selectScene(slot, false); });
     }
 
-    text(x, Y(122), 10, DIM, "TRACKS TO SAVE IN " + SamplerApp::sceneLabel(app_.selectedScene()), 0, true);
+    text(x, Y(122), 10, DIM, "LOOPER TRACKS · " + SamplerApp::sceneLabel(app_.selectedScene()), 0, true);
+    // A LOOP part selects zero or ONE complete sequencer scene; never its lanes.
+    button({x + w - 176, Y(110), 28, H(21)}, "<", false,
+           [this] { app_.selectLoopSequencerScene(app_.loopSequencerScene() - 1); }, 10);
+    text(x + w - 143, Y(122), 10, ACCENT,
+         app_.loopSequencerScene() < 0 ? "SEQ OFF" :
+         "SEQ SCENE " + std::to_string(app_.loopSequencerScene() + 1), 0, true);
+    button({x + w - 30, Y(110), 28, H(21)}, ">", false,
+           [this] { app_.selectLoopSequencerScene(app_.loopSequencerScene() + 1); }, 10);
     const float trackGap = 4.f, trackW = (w - 7 * trackGap) / 8;
     for (int t = 0; t < SamplerApp::kTracks; ++t) {
         const bool on = !!(app_.sceneTracks() & (1u << t));
