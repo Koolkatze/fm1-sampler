@@ -41,6 +41,8 @@ private:
 
     void topBar(Rect r);
     void deck(Rect r);
+    void sequencerView(); // original palette shared by light and dark
+    void tempoPanel();     // Tempo Flex, semitones, cents, Pitched Tempo
     void icon(int kind, float cx, float cy, uint32_t c);
     void setLight(bool on);
     void cassette(Rect r);
@@ -76,7 +78,7 @@ private:
     uint32_t now_ = 0;
     uint32_t seenHomeNavigation_ = 0;
     Session::Status st_{};
-    bool linkMidi_ = false, linkAudio_ = false, sheetOpen_ = false, editor_ = false, projectOpen_ = false;
+    bool linkMidi_ = false, linkAudio_ = false, sheetOpen_ = false, editor_ = false, projectOpen_ = false, tempoOpen_ = false;
     float sheetScroll_ = 0, sheetLastY_ = 0, sheetMoved_ = 0;
     std::string browseDir_;   // path relative to FM1-SAMPLER, empty means root
     std::vector<BrowserRow> browseRows_;

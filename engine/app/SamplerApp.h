@@ -22,7 +22,7 @@ public:
     using Send = std::function<void(const uint8_t*, size_t)>;
     static constexpr int kTracks = 8;
     enum Button { OCT_DOWN, OCT_UP, FX, SEL, ENV, LFO, EDIT, GLO, HOME, SAVE, ARP, SEQ, PLAY, REC, STOP };  // STOP=14 is an optional external MIDI/software transport; native FM-1 has PLAY
-    enum Page { P_HOME, P_FX, P_ENV, P_LFO, P_ARP, P_SEQ, P_MIX, P_KEY, P_SAVE, P_LEN, P_CUE, kPages };
+    enum Page { P_HOME, P_FX, P_ENV, P_LFO, P_ARP, P_SEQ, P_MIX, P_KEY, P_SAVE, P_LEN, P_CUE, P_STEP, P_TEMPO, kPages };
     struct Knob {
         std::string name, value;
         float norm = 0;
@@ -33,6 +33,9 @@ public:
     using Knobs = std::array<Knob, 4>;
     struct Entry { std::string label, group, path; bool kit = false; std::string pack, folder; };
     struct ScaleState { int scale = 3, root = 0, octave = 0, mode = 0; };
+    struct SequencerHit { uint8_t velocity = 0, note = 60; };
+    static constexpr int kSeqSteps = Session::kSeqMaxSteps;
+    static constexpr int kSeqTracks = Session::kSeqTracks;
 
     SamplerApp(Session& s, Send send);
 
@@ -44,6 +47,34 @@ public:
     // ---- state for the phone UI (all of it can also be edited from there) ----
     Page page() const { return page_; }
     void gotoPage(Page p);
+    bool sequencerMode() const { return sequencerMode_; }
+    void enterSequencer();
+    void exitSequencer();
+    int sequencerTrack() const { return seqTrack_; }
+    void selectSequencerTrack(int track);
+    int sequencerPage() const { return seqPage_; }
+    int sequencerBeats() const { return seqBeats_; }
+    int sequencerEditStep() const { return seqEditStep_; }
+    void setSequencerBeats(int beats);
+    void setSequencerPage(int page);
+    void sequencerToggleStep(int step);
+    void sequencerSetStepNote(int step, int note);
+    SequencerHit sequencerHit(int track, int step) const {
+        return seqGrid_[(size_t)std::max(0, std::min(kSeqTracks - 1, track))]
+                       [(size_t)std::max(0, std::min(kSeqSteps - 1, step))];
+    }
+    std::string sequencerSoundName(int t) const {
+        return seqSourceNames_[(size_t)std::max(0, std::min(kSeqTracks - 1, t))];
+    }
+    float tempoFlexBpm() const { return tempoFlexBpm_; }
+    int pitchSemitones() const { return pitchSemis_; }
+    int pitchCents() const { return pitchCents_; }
+    float pitchedTempo() const { return pitchedTempo_; }
+    void setTempoFlexBpm(float bpm);
+    void setPitchSemitones(int semis);
+    void setPitchCents(int cents);
+    void setPitchedTempo(float ratio);
+
     static const char* pageName(Page p);
     int track() const { return track_; }
     void selectTrack(int t);
@@ -215,6 +246,15 @@ private:
     Page page_ = P_HOME;
     int track_ = 0;
     std::array<TrackState, kTracks> ts_;
+    bool sequencerMode_ = false;
+    int seqTrack_ = 0, seqPage_ = 0, seqBeats_ = 4, seqEditStep_ = 0;
+    std::array<std::array<SequencerHit, kSeqSteps>, kSeqTracks> seqGrid_{};
+    std::array<std::string, kSeqTracks> seqSourcePaths_{};
+    std::array<std::string, kSeqTracks> seqSourceNames_{};
+    float tempoFlexBpm_ = 120.f, pitchedTempo_ = 1.f;
+    double observedLoopSamples_ = 0.;
+    int observedScene_ = -1;
+    int pitchSemis_ = 0, pitchCents_ = 0;
     // global effects
     float reverbSize_ = 0.7f, reverbDw_ = 0.35f, delayTime_ = 0.4f, delayFb_ = 0.45f;
     int loopSrc_ = 1;

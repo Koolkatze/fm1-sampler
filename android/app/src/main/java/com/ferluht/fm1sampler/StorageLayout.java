@@ -51,6 +51,8 @@ final class StorageLayout {
             File dest = new File(official(context), category);
             if (!dest.exists()) Backend.copyAssets(context, "samples/" + category, dest);
         }
+        // Update-safe: synthesize only missing starter one-shots, never replace user sounds.
+        DefaultSeqSamples.ensure(new File(official(context), "SEQUENCER"));
         return root;
     }
 

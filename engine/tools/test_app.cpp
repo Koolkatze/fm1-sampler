@@ -39,6 +39,92 @@ int main() {
     run(2.5);
     CHECK(app.hasSample(0) && app.hasSample(1) && app.hasSample(2) && app.hasSample(3), "four default tracks load (%s, %s, %s, %s)", app.sampleLabel(0).c_str(), app.sampleLabel(1).c_str(), app.sampleLabel(2).c_str(), app.sampleLabel(3).c_str());
     CHECK(!app.hasSample(4), "track 5 is empty");
+    // Independent 8-lane drum/bass step sequencer: keyboard mapping, 64/4
+    // upper bound, tempo and no changes to existing looper assignments.
+    {
+        const std::string looperLabel = app.sampleLabel(0);
+        const auto priorClip = app.status().track_has_clip[0];
+        app.enterSequencer();
+        CHECK(app.sequencerMode() && app.page() == SamplerApp::P_STEP,
+              "SEQUENCER opens independently of the original tape deck");
+        // Both UI themes must render the *same* sequencer grid, buttons and
+        // global tempo controls with the original dynamically selected palette.
+        {
+            SamplerUI themeUI(app);
+            themeUI.setSize(860, 400, 0, 0);
+            for (bool light : {true, false}) {
+                theme::apply(light);
+                themeUI.frame(now + (light ? 1 : 2));
+                int lanes = 0;
+                bool modeTitle = false, bpmTitle = false, lengthLabel = false;
+                for (const auto& op : themeUI.ops()) {
+                    if (op.type != UiOp::TEXT) continue;
+                    if (op.text.find("8 EXTRA TRACKS") != std::string::npos) modeTitle = true;
+                    if (op.text.find("BPM") != std::string::npos) bpmTitle = true;
+                    if (op.text.find("1/16 STEPS") != std::string::npos) lengthLabel = true;
+                    if (op.text.rfind("T", 0) == 0 && op.text.size() > 1 &&
+                        op.text[1] >= '1' && op.text[1] <= '8') ++lanes;
+                }
+                CHECK(modeTitle && bpmTitle && lengthLabel && lanes == 8,
+                      "%s mode keeps original sequencer design with 8 lanes, BPM and steps",
+                      light ? "LIGHT" : "DARK");
+                themeUI.openProject(false);
+            }
+            theme::apply(true);
+        }
+        app.setSequencerBeats(64);
+        app.selectSequencerTrack(7);
+        app.setSequencerPage(15);
+        app.sequencerToggleStep(255);
+        CHECK(app.sequencerBeats() == 64 && app.sequencerHit(7, 255).velocity > 0,
+              "64/4 meter supports all 256 sixteenth-note steps");
+        const auto before = app.sequencerHit(7, 240).velocity;
+        uint8_t wDown[3] = {0x90, 53, 100}, wUp[3] = {0x80, 53, 0};
+        app.onMidi(wDown, 3); app.onMidi(wUp, 3);
+        CHECK(app.sequencerHit(7, 240).velocity != before,
+              "white physical FM-1 key toggles the current timeline step");
+        uint8_t bDown[3] = {0x90, 54, 100}, bUp[3] = {0x80, 54, 0};
+        app.onMidi(bDown, 3); app.onMidi(bUp, 3);
+        CHECK(app.sequencerTrack() == 0,
+              "first black physical key selects extra sequencer track 1");
+        enc(0, 1);
+        CHECK(app.sequencerTrack() == 1, "SELECT encoder changes sequencer lane");
+        enc(2, -1);
+        CHECK(app.sequencerPage() == 14, "K1 encoder moves through sequencer timeline");
+        app.setSequencerBeats(4); app.setSequencerPage(0);
+        app.selectSequencerTrack(0);
+        if (!app.library().empty()) app.loadEntry(0);
+        run(0.25);
+        CHECK(app.sampleLabel(0) == looperLabel &&
+              app.status().track_has_clip[0] == priorClip,
+              "SEQ sample import does not replace looper sound or clip");
+        app.sequencerToggleStep(0);
+        app.setTempoFlexBpm(148);
+        run(0.12);
+        CHECK(std::fabs(app.status().bpm - 148.f) < .1f,
+              "TEMPO FLEX updates shared project BPM");
+        app.setPitchSemitones(7); app.setPitchCents(25);
+        CHECK(app.pitchSemitones() == 7 && app.pitchCents() == 25 &&
+              std::fabs(app.tempoFlexBpm() - 148.f) < .1f,
+              "independent semitone/cent controls preserve BPM setting");
+        app.setPitchedTempo(1.25f);
+        run(0.15);
+        CHECK(std::fabs(app.status().bpm - 185.f) < .1f,
+              "PITCHED TEMPO couples effective BPM to tape-rate ratio");
+        app.setPitchedTempo(1.f);
+        app.setTempoFlexBpm(120.f);
+        app.setPitchSemitones(0); app.setPitchCents(0);
+        for (int t = 0; t < SamplerApp::kSeqTracks; ++t)
+            for (int i = 0; i < SamplerApp::kSeqSteps; ++i)
+                if (app.sequencerHit(t, i).velocity) {
+                    app.selectSequencerTrack(t);
+                    app.sequencerToggleStep(i);
+                }
+        app.exitSequencer();
+        run(.25);
+        CHECK(!app.sequencerMode() && app.page() == SamplerApp::P_HOME,
+              "HOME exits SEQUENCER without changing looper tracks");
+    }
     // Empty SONG must not cause a file picker, or publish any audio at all.
     app.requestSongExport();
     CHECK(!app.wantSongExport() && app.toast() == "NO SCENES IN SONG",
@@ -646,11 +732,36 @@ int main() {
         const auto originalSample1 = app.sampleLabel(1);
         CHECK(app.status().track_has_clip[0] && app.status().track_has_clip[1],
               "two COMPOSE recordings are present before full-project save");
+        // V4 projects must persist the *independent* 8-lane sequencer,
+        // including its audio asset, pitched bass note and uncommon meter.
+        app.enterSequencer();
+        app.selectSequencerTrack(5);
+        app.setSequencerBeats(11);
+        app.setSequencerPage(2);
+        app.sequencerSetStepNote(39, 47); // bass-compatible per-step pitch
+        app.sequencerToggleStep(39);
+        const auto seqPath = app.library().empty() ? std::string() : app.library()[0].path;
+        if (!app.library().empty()) app.loadEntry(0);
+        const std::string seqName = app.sequencerSoundName(5);
+        app.setPitchSemitones(-3);
+        app.setPitchCents(17);
+        app.setPitchedTempo(1.10f);
+        app.setTempoFlexBpm(134.f);
+        app.exitSequencer();
+        run(.20);
         CHECK(app.saveFullProject(0), "Save Full Project starts asynchronous FMP2 snapshot");
         for (int spin = 0; spin < 20 && app.fullProjectOperation() == 1; ++spin) run(0.14);
         CHECK(app.fullProjectOperation() == 2 && app.fullProjectExists(0) &&
               std::filesystem::file_size("/tmp/fm1sampler_t2/project_1.fm1p") > 100000,
               "project slot 1 contains a real self-contained archive with audio");
+        // Mutate all sequencer state, then load; restored data must win.
+        app.enterSequencer();
+        app.selectSequencerTrack(5);
+        app.sequencerToggleStep(39);
+        app.setSequencerBeats(4);
+        app.setPitchSemitones(0); app.setPitchCents(0);
+        app.setPitchedTempo(1.f); app.setTempoFlexBpm(120.f);
+        app.exitSequencer();
         app.setAlgo(5); app.selectScene(0); app.deleteScene(); run(0.25);
         app.loopClear(); run(0.25);
         CHECK(!app.status().track_has_clip[0] && !app.status().track_has_clip[1],
@@ -661,6 +772,17 @@ int main() {
         CHECK(app.fullProjectOperation() == 4 &&
               app.status().track_has_clip[0] && app.status().track_has_clip[1],
               "project load restores both independent recorded COMPOSE loops");
+        CHECK(app.sequencerBeats() == 11 &&
+              app.sequencerHit(5, 39).velocity > 0 &&
+              app.sequencerHit(5, 39).note == 47 &&
+              app.sequencerSoundName(5) == seqName &&
+              app.pitchSemitones() == -3 && app.pitchCents() == 17 &&
+              std::fabs(app.pitchedTempo() - 1.10f) < .001f &&
+              std::fabs(app.tempoFlexBpm() - 134.f) < .1f,
+              "v4 project restores sequencer meter, steps, bass notes, source and tempo/pitch");
+        CHECK(seqPath.empty() ||
+              std::filesystem::is_regular_file("/tmp/fm1sampler_t2/project_assets/slot_1/seq_track_6.wav"),
+              "v4 project embeds independent sequencer source WAV, not just its file name");
         CHECK(app.status().sceneMask == originalSceneMask &&
               app.songOrder() == originalSong,
               "project load restores all scenes and exact song arrangement");
@@ -852,6 +974,79 @@ int main() {
         CHECK(lo.size() >= hi.size() && !win.empty() && win[0] >= 20000, "threshold: %zu slices at 0, %zu at 1, window starts at %d", lo.size(), hi.size(), win.empty() ? -1 : win[0]);
         auto eq = findSlices(std::vector<float>((size_t)N * 2, 0.1f), N, 44100, 16);
         CHECK(eq.size() == 16, "no hits: %zu equal slices", eq.size());
+    }
+    {   // Tempo Flex must actually change the duration of RECORDED loops
+        // without raising their acoustic pitch. This is measured from audio,
+        // not just from the number shown in the Tempo UI.
+        Session flex(SAMPLERATE);
+        flex.setDataDir("/tmp/fm1sampler_t2/flex-test");
+        flex.setSampleDir(std::string(getenv("HOME")) + "/fm1-sampler/samples");
+        flex.setLoopSource(0);
+        flex.freeRecord(0, true);
+        std::vector<float> x(512), y(512);
+        double phase = 0.;
+        for (int b = 0; b < 190; ++b) {
+            for (int i = 0; i < 256; ++i) {
+                const float v = 0.33f * std::sin(phase);
+                phase += 2. * M_PI * 220. / SAMPLERATE;
+                x[(size_t)i * 2] = x[(size_t)i * 2 + 1] = v;
+            }
+            flex.process(y.data(), x.data(), 256);
+        }
+        flex.freeRecord(0, false);
+        std::fill(x.begin(), x.end(), 0.f);
+        for (int b = 0; b < 8; ++b) flex.process(y.data(), x.data(), 256);
+        const auto baseBpm = flex.status().bpm;
+        CHECK(flex.status().track_has_clip[0] && baseBpm >= 30.f,
+              "Tempo Flex test starts with a captured 220-Hz recorded audio loop");
+        auto collectHz = [&](int blocks) {
+            // Ignore the first transient; frequency of positive crossings is
+            // stable even if the tape starts near a bar boundary.
+            int crossings = 0;
+            float prev = 0.f;
+            for (int b = 0; b < blocks; ++b) {
+                flex.process(y.data(), x.data(), 256);
+                for (int i = 0; i < 256; ++i) {
+                    const float v = y[(size_t)i * 2];
+                    crossings += prev < 0.f && v >= 0.f;
+                    prev = v;
+                }
+            }
+            return crossings / (blocks * 256.0 / SAMPLERATE);
+        };
+        flex.setMasterBpm(std::min(300.f, baseBpm * 1.2f));
+        flex.process(y.data(), x.data(), 256);
+        for (int k = 0; k < 300 && flex.status().flexProcessing; ++k) {
+            flex.process(y.data(), x.data(), 256);
+            std::this_thread::sleep_for(std::chrono::milliseconds(3));
+        }
+        CHECK(!flex.status().flexProcessing,
+              "WSOLA Tempo Flex worker finishes without changing original loop buffer");
+        const float flexHz = (float)collectHz(75);
+        CHECK(std::fabs(flexHz - 220.f) < 25.f,
+              "Tempo Flex preserves 220-Hz source pitch (%.1f Hz)", flexHz);
+        const float heldBpm = flex.status().bpm;
+        flex.setGlobalPitch(12.f, 0.f);
+        flex.process(y.data(), x.data(), 256);
+        for (int k = 0; k < 300 && flex.status().flexProcessing; ++k) {
+            flex.process(y.data(), x.data(), 256);
+            std::this_thread::sleep_for(std::chrono::milliseconds(3));
+        }
+        CHECK(!flex.status().flexProcessing,
+              "global pitch shift renders non-destructively on background worker");
+        const float shiftedHz = (float)collectHz(75);
+        CHECK(std::fabs(shiftedHz - 440.f) < 45.f &&
+              std::fabs(flex.status().bpm - heldBpm) < .1f,
+              "semitone pitch changes sample pitch, not project BPM (%.1f Hz)", shiftedHz);
+        // A 64/4 pattern must keep advancing across repeated shorter
+        // recorded loops rather than resetting to step zero on each wrap.
+        flex.setSequencerBeats(64);
+        flex.seek(0.f);
+        for (int k = 0; k < (int)(3.0 * SAMPLERATE / 256); ++k)
+            flex.process(y.data(), x.data(), 256);
+        CHECK(flex.status().seqStep >= 30 && flex.status().seqStep <= 63,
+              "64/4 sequencer advances across three shorter loop cycles (step %d)",
+              flex.status().seqStep);
     }
     {   // sidechain: track 2 ducked by track 1, send effects return something
         app.loopClear(); run(0.3);

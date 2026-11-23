@@ -17,6 +17,8 @@ public:
     static constexpr int kVoiceMax = 32;
     static constexpr int kLoopBins = 400;
     static constexpr int kScenes = 12;   // C1..B1
+    static constexpr int kSeqTracks = 8;    // EXTRA tracks, never shared with the 8 looper clips
+    static constexpr int kSeqMaxSteps = 256; // 64/4 at 16th-note resolution
 
     struct Status {
         bool playing;
@@ -24,6 +26,9 @@ public:
         double loopSamples;      // 0 = no loop yet
         float bpm;
         int loopBars;
+        int seqStep, seqBeats;
+        bool sequencerEnabled;
+        bool flexProcessing;  // true while pitch-preserving loop render is pending
         float master_peak;
         float track_peak[kTracks];
         bool track_has_clip[kTracks], track_clip_rec[kTracks];
@@ -64,6 +69,18 @@ public:
     void play(bool on);
     void noteOn(int track, int note, int vel);
     void noteOff(int track, int note);
+
+    // Independent eight-lane 16th-note step sequencer. Its clock uses the
+    // same transport/BPM as the looper but its samples and clips never overlap.
+    void setSequencerEnabled(bool on);
+    void setSequencerBeats(int beats);           // numerator 1..64, denominator 4
+    void setSequencerStep(int track, int step, int velocity, int note = 60); // velocity 0..127, note 0..127
+    void loadSequencerSamplePath(const std::string& path, int track);
+    void clearSequencerSample(int track);
+    void setMasterBpm(float bpm);
+    void setGlobalPitch(float semitones, float cents);  // independent of tempo
+    void setPitchedTempo(float ratio);                 // tape-like coupling
+
 
     // ---- sampler (per track) ----
     void loadSamplePath(const std::string& path, bool kit, int track, const std::string& displayName = "");          // worker thread builds it, then it replaces the track's sampler
@@ -122,9 +139,11 @@ public:
         int slot = -1;
         std::vector<uint8_t> appState;
         std::array<std::string, kTracks> samplePaths;
+        std::array<std::string, kSeqTracks> seqSamplePaths;
     };
     bool saveProject(int slot, std::vector<uint8_t> appState,
-                     const std::array<std::string, kTracks>& samplePaths);
+                     const std::array<std::string, kTracks>& samplePaths,
+                     const std::array<std::string, kSeqTracks>& seqSamplePaths);
     bool loadProject(int slot);
     bool takeLoadedProject(LoadedProject& output);
     bool projectExists(int slot) const;

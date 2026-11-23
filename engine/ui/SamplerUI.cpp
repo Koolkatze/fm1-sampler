@@ -92,6 +92,7 @@ void SamplerUI::frame(uint32_t now) {
         projectConfirmSlot_ = -1;
         projectConfirmUntil_ = 0;
         editor_ = false;
+        tempoOpen_ = false;
     }
     app_.setLibraryBrowserActive(sheetOpen_);
     st_ = app_.status();
@@ -99,6 +100,12 @@ void SamplerUI::frame(uint32_t now) {
     ops_.clear(); hits_.clear();
     rrect({0, 0, W_, H_}, 0, BG);
     const float tb = 44, left = 176, right = 252;
+    if (app_.sequencerMode()) {
+        sequencerView();
+        if (sheetOpen_) librarySheet();
+        if (tempoOpen_) tempoPanel();
+        return;
+    }
     if (!editor_) {   // the cassette deck fills the screen; the old sample / page editor stays one tap away (EDIT)
         deck({0, 0, W_, H_});
         if (sheetOpen_) librarySheet();
@@ -106,6 +113,7 @@ void SamplerUI::frame(uint32_t now) {
             projectSheet();
             if (projectSlotsMode_) projectSlotsSheet();
         }
+        if (tempoOpen_) tempoPanel();
         return;
     }
     topBar({0, 0, W_, tb});
@@ -113,6 +121,7 @@ void SamplerUI::frame(uint32_t now) {
     sampleArea({left + MARGIN, tb + MARGIN, W_ - left - right - 2 * MARGIN, H_ - tb - 2 * MARGIN});
     pagePanel({W_ - right, tb + MARGIN, right - MARGIN, H_ - tb - 2 * MARGIN});
     if (sheetOpen_) librarySheet();
+    if (tempoOpen_) tempoPanel();
 }
 
 // Draw the same HOME cassette with no overlays; preserve navigation and editor state.
@@ -706,6 +715,12 @@ void SamplerUI::deck(Rect r) {
     icon(7, mx, 248, projectOpen_ ? kOrange : kPaper); tap({mx - 32, 220, 64, 56}, [this] { projectOpen_ = true; });
     // the sample of this track, its page and the four knobs of the page
     sampleView({x0, 14, w0, 118});
+    // New modes sit on the same HOME screen, without replacing its tape/editor.
+    button({x0 + 6, 260, 121, 27}, "SEQUENCER", false,
+           [this] { app_.enterSequencer(); sheetOpen_ = false; }, 10, true);
+    button({x0 + 135, 260, 99, 27}, "TEMPO / PITCH", tempoOpen_,
+           [this] { tempoOpen_ = true; }, 9);
+    text(zr - 5, 274, 10, kOrange, num("%.0f BPM", st_.bpm), 2, true);
     const float py = 163;
     text(x0, py, 15, kOrange, SamplerApp::pageName(app_.page()), 0, true);
     for (int i = 0; i < 11; i++) {   // all pages, including CUE, stay accessible from the phone
@@ -715,6 +730,104 @@ void SamplerUI::deck(Rect r) {
     }
     for (int i = 0; i < 4; i++) knob(x0 + 49 + i * 100, 220, app_.page(), i);
     timeline({M, 288, W_ - 2 * M, H_ - 288 - 8});
+}
+
+
+void SamplerUI::sequencerView() {
+    rrect({0, 0, W_, H_}, 0, BG);
+    // Deliberately use theme tokens, not hardcoded colours: this screen and
+    // every filled/empty step work in both Light and Dark modes.
+    rrect({0, 0, W_, 49}, 0, SURFACE);
+    line(0, 49, W_, 49, OUTLINE, 1);
+    button({10, 9, 65, 31}, "HOME", false,
+           [this] { app_.exitSequencer(); sheetOpen_ = false; tempoOpen_ = false; }, 10);
+    button({82, 9, 73, 31}, st_.playing ? "STOP" : "PLAY", st_.playing,
+           [this] { app_.transportPlay(); }, 10, true);
+    button({162, 9, 91, 31}, "LIBRARY", false,
+           [this] { openLibrary(); }, 10);
+    button({260, 9, 123, 31}, "TEMPO / PITCH", tempoOpen_,
+           [this] { tempoOpen_ = true; }, 9);
+    text(W_ - 16, 25, 16, st_.flexProcessing ? ACCENT : TEXT,
+         "SEQUENCER  " + num("%.0f BPM", st_.bpm) + (st_.flexProcessing ? "  FLEX..." : ""), 2, true);
+
+    const float x0 = 198.f, right = W_ - 14.f;
+    const float gridW = std::max(150.f, right - x0);
+    const float cw = gridW / 16.f;
+    const float firstY = 76.f, rowH = std::max(20.f, (H_ - 164.f) / 8.f);
+    const int firstStep = app_.sequencerPage() * 16;
+    const int limit = app_.sequencerBeats() * 4;
+    text(14, 63, 12, ACCENT, "8 EXTRA TRACKS", 0, true);
+    text(x0, 63, 10, DIM, "SELECT / BLACK KEYS: TRACK    K1: TIMELINE    WHITE KEYS: STEPS");
+    for (int t = 0; t < SamplerApp::kSeqTracks; ++t) {
+        const bool selected = t == app_.sequencerTrack();
+        const float y = firstY + rowH * t;
+        const Rect row{12, y, x0 - 20, rowH - 3};
+        rrect(row, R_CONTROL, selected ? RAISED : SURFACE);
+        if (selected) rrect({row.x, row.y, 3, row.h}, 0, ACCENT);
+        text(row.x + 10, y + row.h / 2, 10.5f, selected ? ACCENT : TEXT,
+             "T" + std::to_string(t + 1) + " " + fit(app_.sequencerSoundName(t), row.w - 36, 10.5f),
+             0, selected);
+        tap(row, [this, t] { app_.selectSequencerTrack(t); });
+        for (int col = 0; col < 16; ++col) {
+            const int step = firstStep + col;
+            const auto hit = app_.sequencerHit(t, step);
+            const Rect cell{x0 + col * cw + 1, y + 1, cw - 2, rowH - 5};
+            const bool valid = step < limit;
+            const bool on = valid && hit.velocity > 0;
+            const bool current = st_.playing && step == st_.seqStep;
+            rrect(cell, R_CONTROL, on ? ACCENT : valid ? SURFACE : BG);
+            if (current) stroke(cell, R_CONTROL, TEXT, 1.7f);
+            if (col % 4 == 0 && !on) stroke(cell, R_CONTROL, OUTLINE, 1);
+            if (on) text(cell.x + cell.w / 2, cell.y + cell.h / 2, 9, ON_ACCENT, "●", 1, true);
+            if (valid) tap(cell, [this, t, step] {
+                app_.selectSequencerTrack(t);
+                app_.sequencerToggleStep(step);
+            });
+        }
+    }
+    const float y = firstY + rowH * 8 + 5;
+    const int pages = std::max(1, (limit + 15) / 16);
+    button({14, y, 52, 27}, "◀", false, [this] {
+        app_.setSequencerPage(app_.sequencerPage() - 1); }, 13);
+    text(75, y + 14, 10, TEXT,
+         "PAGE " + std::to_string(app_.sequencerPage() + 1) + "/" + std::to_string(pages));
+    button({155, y, 52, 27}, "▶", false, [this] {
+        app_.setSequencerPage(app_.sequencerPage() + 1); }, 13);
+    button({226, y, 44, 27}, "−", false,
+           [this] { app_.setSequencerBeats(app_.sequencerBeats() - 1); }, 15);
+    text(279, y + 14, 11, TEXT, std::to_string(app_.sequencerBeats()) + "/4", 0, true);
+    button({324, y, 44, 27}, "+", false,
+           [this] { app_.setSequencerBeats(app_.sequencerBeats() + 1); }, 13);
+    const int selected = app_.sequencerEditStep();
+    const int midiNote = app_.sequencerHit(app_.sequencerTrack(), selected).note;
+    text(394, y + 14, 10, DIM,
+         "STEP " + std::to_string(selected + 1) + " NOTE " + std::to_string(midiNote));
+    button({565, y, 42, 27}, "−", false,
+           [this, selected, midiNote] { app_.sequencerSetStepNote(selected, midiNote - 1); }, 13);
+    button({614, y, 42, 27}, "+", false,
+           [this, selected, midiNote] { app_.sequencerSetStepNote(selected, midiNote + 1); }, 13);
+    text(W_ - 16, y + 14, 10, ACCENT, "1/16 STEPS", 2, true);
+}
+
+void SamplerUI::tempoPanel() {
+    rrect({0, 0, W_, H_}, 0, theme::withAlpha(BG, 218));
+    tap({0, 0, W_, H_}, [this] { tempoOpen_ = false; });
+    const Rect panel{W_ * .12f, 30.f, W_ * .76f, H_ - 60.f};
+    rrect(panel, R_CARD, SURFACE);
+    stroke(panel, R_CARD, ACCENT, 1);
+    tap(panel, [] {});
+    text(panel.x + 20, panel.y + 28, 17, TEXT, "GLOBAL TEMPO / PITCH", 0, true);
+    button({panel.x + panel.w - 80, panel.y + 9, 65, 29}, "CLOSE", false,
+           [this] { tempoOpen_ = false; }, 10);
+    line(panel.x + 20, panel.y + 48,
+         panel.x + panel.w - 20, panel.y + 48, OUTLINE, 1);
+    // Reuse the original FM1 rotary knob drawing, pointer, orange arc,
+    // drag handler and typography; no separate design for this screen.
+    const float x = panel.x + 100, dx = (panel.w - 200) / 3.f;
+    const float cy = panel.y + 139.f;
+    for (int i = 0; i < 4; ++i) knob(x + dx * i, cy, SamplerApp::P_TEMPO, i);
+    text(panel.x + panel.w / 2, panel.y + panel.h - 24, 11, DIM,
+         "FLEX BPM  •  PITCH (ST / CENTS)  •  PITCHED TEMPO", 1);
 }
 
 void SamplerUI::trackList(Rect r) {

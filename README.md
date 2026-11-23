@@ -2,14 +2,14 @@
 
 Sampler, editor de audio y **looper de 8 pistas** para Android. El teléfono ejecuta el motor de audio, la biblioteca y la interfaz; el **M-VAVE FM-1** puede actuar como superficie de control MIDI por **USB**, con botones, teclado y encoders. El motor y la interfaz se encuentran en `engine/`; Android integra ese motor mediante JNI.
 
-> **Estado de esta rama:** `feature/oneshot-packs-on-scenes`, versión **FM1 Sampler 0.38.12** en desarrollo. Incluye EXPORT SONG, 16 proyectos paginados y preparación de firma estable para actualizar sin pérdida de datos. **La release no se publica hasta configurar los secretos de firma permanente.** No confundir este proyecto con Workbench, Urban-1 o Blackhole Remote. La compilación Android no instala firmware en el FM-1 físico.
+> **Estado de esta rama:** `feature/eight-track-step-sequencer`, candidato **FM1 Sampler 0.39.0** (8 pistas nuevas + Tempo Flex). Incluye el secuenciador independiente, EXPORT SONG, 16 proyectos paginados y publicación protegida por firma permanente. **La release 0.39 no debe usarse para actualizar hasta superar las verificaciones de firma y publicarse explícitamente.** No confundir este proyecto con Workbench, Urban-1 o Blackhole Remote. La compilación Android no instala firmware en el FM-1 físico.
 
 ## Descargas y compilación
 
-- **Última APK publicada de forma verificable:** [FM1 Sampler 0.38.11 — GitHub Releases](../../releases/tag/v0.38-library-preview.12). **Próxima release: 0.38.12, pendiente de firma estable** [guía de actualización sin perder datos](docs/UPDATES_WITHOUT_DATA_LOSS.md).
+- **Última APK previa publicada:** [FM1 Sampler 0.38.15 — GitHub Releases](../../releases/tag/v0.38-library-preview.16). **Candidato 0.39.0:** la actualización firmada de SEQUENCER y TEMPO FLEX solo es válida cuando aparece en [Releases](../../releases) tras pasar la puerta de firma; consulta la [guía de actualización sin perder datos](docs/UPDATES_WITHOUT_DATA_LOSS.md).
 - **Código Android:** `android/`; **motor de audio/UI:** `engine/`; **protocolo de hardware:** `PROTOCOL.md`.
 - **Utilidad ADB para backups TAR y proyectos `.fm1p`:** [`tools/FM1_ADB_Recuperacion_0389.py`](tools/FM1_ADB_Recuperacion_0389.py) y [guía de uso](docs/ADB_RECUPERACION_0389.md).
-- **Documentación:** [biblioteca, importación, proyectos y backups](docs/SAMPLE_LIBRARY.md), [escenas y SONG](docs/SCENES_AND_SONG.md), [migración de versiones anteriores](docs/MIGRACION_SEGURA.md).
+- **Documentación:** [SEQUENCER + Tempo Flex v0.39](docs/FM1_SEQUENCER_039.md), [biblioteca, importación, proyectos y backups](docs/SAMPLE_LIBRARY.md), [escenas y SONG](docs/SCENES_AND_SONG.md), [migración de versiones anteriores](docs/MIGRACION_SEGURA.md).
 
 Las compilaciones debug de GitHub usan **`com.ferluht.fm1sampler.scenes`**; la variante original usa **`com.ferluht.fm1sampler`**. Son instalaciones con datos privados separados. Las firmas de debug de diferentes ejecuciones pueden no coincidir: **no desinstales una app con proyectos/loops sin haber exportado y verificado una copia de seguridad externa**.
 
@@ -19,6 +19,7 @@ Las compilaciones debug de GitHub usan **`com.ferluht.fm1sampler.scenes`**; la v
 
 - Interfaz horizontal de cassette con tema **claro/oscuro** y monitor de audio. El indicador de pista activo es **solo T1…T8 en naranja**, grande, sin recuadro, fondo, raya lateral ni texto «TRACK», inmediatamente a la izquierda del visor de muestras. Tocarlo cambia la pista.
 - **8 pistas** independientes con instrumento/sampler, parámetros, efectos, grabaciones y audio en el looper.
+- **SEQUENCER (0.39):** botón en HOME que abre **8 pistas adicionales**, con 16 pasos por página, patrones 1/4–64/4, samples independientes seleccionados desde LIBRARY, transporte sincronizado y pantalla Light/Dark. [Controles, tempo y firma](docs/FM1_SEQUENCER_039.md).
 - **PLAY, STOP, REC/OVERDUB y CLEAR** en HOME. PLAY y STOP controlan la cinta; durante la primera toma, el transporte puede finalizar la grabación antes de detener la reproducción. REC arma la primera toma y después permite overdub por pista.
 - **Visor de forma de onda** del sample, selección de modo, ventana START/END y voces; **timeline de los loops** con cabezal de reproducción y *scrub* táctil.
 - Barra de herramientas: **tema**, **micrófono**, **LIBRARY**, **PROJECT**. El micrófono permite grabar un sample a partir de un umbral de señal ajustable.
@@ -48,7 +49,7 @@ El **editor** permite seleccionar muestras, ajustar región START/END y sus par�
 | **ENV** | Envelope ADSR: attack, decay, sustain y release por pista. |
 | **LFO** | Rate, depth, destino (pitch/filter/volume/pan) y forma de onda. |
 | **ARP** | Rate (incluidas divisiones ternarias), patrón, octavas y duración. |
-| **SEQ / TAPE** | Velocidad global del loop, EXCITER, LO-FI y WOBBLE. |
+| **SEQ / SEQUENCER (0.39)** | Entra y sale del secuenciador independiente de 8 pistas. Los parámetros anteriores de TAPE permanecen en la interfaz de páginas del teléfono. |
 | **EDIT / MIXER** | Volumen de pista y compresión sidechain: origen, threshold y ratio. |
 | **GLO / KEY** | Escala, tónica, octava y modo KEY/CHORD. |
 | **SAVE / LOOP** | Entrada de grabación de micrófono o sonido, umbral y fuente. |

@@ -1,0 +1,174 @@
+name: Publish FM1 Sampler 0.39 Sequencer signed preview
+
+on:
+  push:
+    branches: [feature/eight-track-step-sequencer]
+    paths:
+      - 'android/app/build.gradle'
+      - 'android/app/src/main/java/**'
+      - 'android/app/src/test/java/**'
+      - 'engine/**'
+      - 'firmware/app/ctrl.c'
+      - 'firmware/hosttest/ctrl_host.c'
+      - '.github/workflows/publish-fm1-sequencer-preview.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fm1-sequencer-preview-publish
+  cancel-in-progress: true
+
+jobs:
+  publish-library-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Check sampler regression tests
+        run: |
+          make -C engine -j2 all
+          make -C engine "$GITHUB_WORKSPACE/engine/build/test_app"
+          mkdir -p "$HOME/fm1-sampler"
+          ln -s "$GITHUB_WORKSPACE/samples" "$HOME/fm1-sampler/samples"
+          ./engine/build/test_app
+      - name: Test ADB TAR and FMP2 recovery tool
+        run: |
+          python3 -m py_compile tools/FM1_ADB_Recuperacion_0389.py
+          python3 -m unittest discover -s tools -p 'test_adb_recovery.py' -v
+      - name: Verify USB MIDI controller octave chord
+        run: |
+          mkdir -p firmware/build/host
+          cc -std=c11 -O2 -DFM1_HOST_TEST -I firmware/sdk/include -I firmware/app -I firmware/app/synth \
+            firmware/hosttest/ctrl_host.c -lm -o firmware/build/host/ctrl_host
+          ./firmware/build/host/ctrl_host
+      - name: Install Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Verify FM1-SAMPLER whole-library backup and safe restore
+        run: |
+          mkdir -p /tmp/fm1-backup-java-test
+          javac -d /tmp/fm1-backup-java-test \
+            android/app/src/main/java/com/ferluht/fm1sampler/LibraryBackupArchive.java \
+            android/app/src/main/java/com/ferluht/fm1sampler/PackDeletion.java \
+            android/app/src/test/java/com/ferluht/fm1sampler/LibraryBackupArchiveHostTest.java \
+            android/app/src/test/java/com/ferluht/fm1sampler/PackDeletionHostTest.java
+          java -cp /tmp/fm1-backup-java-test com.ferluht.fm1sampler.LibraryBackupArchiveHostTest
+          java -cp /tmp/fm1-backup-java-test com.ferluht.fm1sampler.PackDeletionHostTest
+      - name: Install Android toolchain
+        run: |
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          for attempt in 1 2 3; do
+            if "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "platforms;android-34" "build-tools;34.0.0" "ndk;27.2.12479018" "cmake;3.22.1"; then
+              break
+            fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            sleep 8
+          done
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      # A random runner debug key would make the next preview impossible to
+      # update in place. Never publish if the owner has not installed a stable
+      # private keystore in Actions Secrets (see docs/UPDATES_WITHOUT_DATA_LOSS.md).
+      - name: Require permanent APK signing identity
+        env:
+          FM1_SIGNING_STORE_B64: ${{ secrets.FM1_SIGNING_STORE_B64 }}
+          FM1_SIGNING_STORE_PASSWORD: ${{ secrets.FM1_SIGNING_STORE_PASSWORD }}
+          FM1_SIGNING_KEY_ALIAS: ${{ secrets.FM1_SIGNING_KEY_ALIAS }}
+          FM1_SIGNING_KEY_PASSWORD: ${{ secrets.FM1_SIGNING_KEY_PASSWORD }}
+        run: |
+          if [ -z "$FM1_SIGNING_STORE_B64" ] || [ -z "$FM1_SIGNING_STORE_PASSWORD" ] || \
+             [ -z "$FM1_SIGNING_KEY_ALIAS" ] || [ -z "$FM1_SIGNING_KEY_PASSWORD" ]; then
+            echo "::error::Permanent signing secrets not configured. Refusing to publish incompatible APK. See docs/UPDATES_WITHOUT_DATA_LOSS.md"
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$FM1_SIGNING_STORE_B64" | base64 -d > "$RUNNER_TEMP/fm1-updates.jks"
+          test -s "$RUNNER_TEMP/fm1-updates.jks"
+      - name: Compile installable signed APK
+        working-directory: android
+        env:
+          FM1_SIGNING_STORE_FILE: ${{ runner.temp }}/fm1-updates.jks
+          FM1_SIGNING_STORE_PASSWORD: ${{ secrets.FM1_SIGNING_STORE_PASSWORD }}
+          FM1_SIGNING_KEY_ALIAS: ${{ secrets.FM1_SIGNING_KEY_ALIAS }}
+          FM1_SIGNING_KEY_PASSWORD: ${{ secrets.FM1_SIGNING_KEY_PASSWORD }}
+        run: gradle :app:assembleDebug --no-daemon --stacktrace
+      - name: Verify persistent signing certificate
+        env:
+          EXPECTED_CERT_SHA256: ${{ vars.FM1_SIGNING_CERT_SHA256 || secrets.FM1_SIGNING_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          if [ -z "$EXPECTED_CERT_SHA256" ]; then
+            echo "::error::Set FM1_SIGNING_CERT_SHA256 (Actions Variable or Secret) to the public signing-certificate SHA-256 before publishing"
+            exit 1
+          fi
+          apk=android/app/build/outputs/apk/debug/app-debug.apk
+          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify "$apk"
+          got=$("$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs "$apk" |
+                 sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1)
+          want=$(printf '%s' "$EXPECTED_CERT_SHA256" | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')
+          got=$(printf '%s' "$got" | tr -d ':[:space:]' | tr '[:upper:]' '[:lower:]')
+          if [ -z "$got" ] || [ "$got" != "$want" ]; then
+            echo "::error::Signing certificate changed. Prevented a data-risking APK release."
+            exit 1
+          fi
+          echo "Signing identity verified against pinned certificate SHA-256."
+
+      - name: Verify upgrade package identity and version
+        run: |
+          set -euo pipefail
+          apk=android/app/build/outputs/apk/debug/app-debug.apk
+          info=$("$ANDROID_HOME/build-tools/34.0.0/aapt" dump badging "$apk" | head -n 1)
+          echo "$info"
+          if [[ "$info" != *"name='com.ferluht.fm1sampler.scenes'"* ]] || \
+             [[ "$info" != *"versionCode='63'"* ]]; then
+            echo "::error::APK package or version changed; refusing to publish an incompatible upgrade"
+            exit 1
+          fi
+      - name: Stage and check APK
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-Sequencer-0.39-preview.apk
+          unzip -t dist/FM1-Sampler-Sequencer-0.39-preview.apk | tail -n 1
+          sha256sum dist/FM1-Sampler-Sequencer-0.39-preview.apk
+      - name: Publish on GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v0.39-sequencer-preview.1
+        run: |
+          cat > release-notes.md <<'EOF'
+          ## FM1 Sampler 0.39.0 — 8 independent sequencer tracks
+
+          Install the attached `FM1-Sampler-Sequencer-0.39-preview.apk` only when the existing app was installed with the SAME verified signing certificate. Keep a verified library/project backup; uninstalling erases app-private files.
+
+          ### New
+          - **SEQUENCER** from HOME: eight sample lanes on a separate 16-step-per-page grid, synchronized with the original eight looper tracks without reusing their samples, clips or lists.
+          - Starting sound assignments: kick, snare, rim, tom 1, tom 2, open hi-hat, closed hi-hat and crash. User WAVs import from the existing LIBRARY directly to the active sequencer lane.
+          - **Lengths from 1/4 to 64/4**, up to 256 sixteenth-note steps, with optional MIDI note per step for bass lines.
+          - Physical FM-1 MIDI: the first eight black piano keys select sequencer tracks, 16 white keys toggle the visible steps, SELECT changes track and K1 moves the timeline; the physical SEQ button toggles the mode.
+          - **TEMPO / PITCH** panel: shared BPM, semitones, cents, and separate Pitched Tempo. Tempo Flex uses non-destructive, pitch-preserving WSOLA for recorded clips. Pitched Tempo couples clock speed and pitch intentionally.
+          - Sequencer and Tempo/Pitch screens inherit the original minimal Light/Dark palette, typography and orange selection colour; the current BPM appears in the looper and sequencer.
+          - The `.fm1p` archive saves the eight extra lanes, 256 steps and notes per lane, sample WAV assets and tempo/pitch values. Existing v2/v3 project archives remain readable; originals are never overwritten during load.
+          - Updated scene/song head synchronization and WAV exports (processed looper stems and Song Mode output). Corrected scrubbing clicks with a short tape-style low-pass.
+          - Includes regression tests for USB MIDI keys, uncommon meters, project persistence, Light/Dark, original-loop preservation, 220 Hz Tempo Flex pitch, and long sequences crossing shorter loop boundaries.
+
+          ### Update safety
+          - Package ID stays `com.ferluht.fm1sampler.scenes`. VersionCode 63 is higher than 0.38.15's 62.
+          - This workflow refuses to publish without the owner's permanent signing keystore and the pinned SHA-256 certificate matching the previous signed APK.
+          - Physical FM-1 firmware must transmit the expected USB MIDI events. This APK does **not** flash or modify the physical device firmware.
+          - This is a preview built with automated checks; real-device timing, long-loop WSOLA CPU load and multi-hour Song Mode operation still require physical testing.
+
+          Source: https://github.com/Koolkatze/fm1-sampler/pull/5
+
+          EOF
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/FM1-Sampler-Sequencer-0.39-preview.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file release-notes.md --prerelease
+          else
+            gh release create "$TAG" dist/FM1-Sampler-Sequencer-0.39-preview.apk               --repo "$GITHUB_REPOSITORY"               --target "$GITHUB_SHA"               --title "FM1 Sampler 0.39.0 — 8-lane sequencer and Tempo Flex"               --notes-file release-notes.md               --prerelease
+          fi
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url,assets,isPrerelease             --jq '{url: .url, isPrerelease: .isPrerelease, files: [.assets[].name]}'
