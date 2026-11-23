@@ -41,6 +41,8 @@ private:
 
     void topBar(Rect r);
     void deck(Rect r);
+    void sequencerView();
+    void seqTempoView();
     void icon(int kind, float cx, float cy, uint32_t c);
     void setLight(bool on);
     void cassette(Rect r);
@@ -89,7 +91,8 @@ private:
     int projectConfirmSlot_ = -1;
     uint32_t projectConfirmUntil_ = 0;
     bool projectRight_ = false;  // narrow screens: show columns in separate tabs
-    bool shortcutHelpVisible_ = true; // informational only, saved with app preferences
+    bool shortcutHelpVisible_ = true;
+    bool seqTempoOpen_ = false; // informational only, saved with app preferences
     float dragY_ = 0, dragV_ = 0;
     static constexpr int kHist = 118;   // the mixer picture: the last four seconds of the active channel (its level, the sidechain source, the gain it is pulled down to)
     float hOwn_[kHist] = {}, hSrc_[kHist] = {}, hGain_[kHist] = {}; int hPos_ = 0, hTrack_ = -1; uint32_t hAt_ = 0;

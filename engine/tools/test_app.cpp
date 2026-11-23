@@ -39,6 +39,55 @@ int main() {
     run(2.5);
     CHECK(app.hasSample(0) && app.hasSample(1) && app.hasSample(2) && app.hasSample(3), "four default tracks load (%s, %s, %s, %s)", app.sampleLabel(0).c_str(), app.sampleLabel(1).c_str(), app.sampleLabel(2).c_str(), app.sampleLabel(3).c_str());
     CHECK(!app.hasSample(4), "track 5 is empty");
+    // Separate sequencer regression: all new operations must leave the
+    // original sampler/looper bank untouched and use both theme palettes.
+    {
+        const auto original = app.sampleLabel(0);
+        CHECK(app.seqSampleLabel(0) == "Kick" && app.seqSampleLabel(7) == "Crash",
+              "sequencer initialises eight independent named one-shots");
+        for (int k = 0; k < 80 && (s.status().seqLoadedMask & 1u) == 0u; ++k) run(0.03);
+        CHECK((s.status().seqLoadedMask & 1u) != 0u,
+              "sequencer Kick sample loaded from OFFICIAL library (mask %02x)",
+              s.status().seqLoadedMask);
+        app.setSequencerMode(true);
+        app.setSeqBeats(64);
+        for (int k = 0; k < 15; ++k) app.moveSeqBank(+1);
+        CHECK(app.seqBeats() == 64 && app.seqBank() == 15,
+              "sequencer supports 64/4 and the final 241-256 step bank");
+        app.toggleSeqStep(7, 255);
+        CHECK(app.seqStep(7, 255) && !app.seqStep(0, 255),
+              "step 256 belongs only to its assigned extra lane");
+        app.setSeqBeats(4);
+        CHECK(app.seqBank() == 0 && !app.seqStep(7, 255),
+              "time signature reduces visible range without overwriting the pattern");
+        app.selectSeqTrack(0);
+        uint8_t black[3] = {0x90, 56, 100}; // second physical black key
+        app.onMidi(black, 3);
+        CHECK(app.seqTrack() == 1, "second black piano key selects lane 2");
+        uint8_t white[3] = {0x90, 53, 100}; // first white step
+        const bool previous = app.seqStep(1, 0);
+        app.onMidi(white, 3);
+        CHECK(app.seqStep(1, 0) != previous &&
+              app.sampleLabel(0) == original,
+              "white key toggles step independently of looper sample");
+        app.selectSeqTrack(0);
+        app.toggleSeqStep(0, 0);
+        size_t beginSeq = all.size();
+        s.play(true);
+        run(0.35);
+        CHECK(rmsFrom(beginSeq) > 0.001, "new sequencer plays real audio at the transport BPM");
+        s.play(false); run(0.8);
+        app.toggleSeqStep(0, 0); app.toggleSeqStep(1, 0); // restore silent baseline
+        SamplerUI seqUi(app);
+        seqUi.setSize(860.f, 400.f, 0.f, 0.f);
+        theme::apply(false); seqUi.frame(now);
+        const bool darkBg = !seqUi.ops().empty() && seqUi.ops()[0].color == theme::BG;
+        theme::apply(true); seqUi.frame(now);
+        const bool lightBg = !seqUi.ops().empty() && seqUi.ops()[0].color == theme::BG;
+        CHECK(darkBg && lightBg, "sequencer follows both native Dark/Light palettes");
+        app.setSequencerMode(false);
+        CHECK(app.sampleLabel(0) == original, "leaving sequencer preserves looper instruments");
+    }
     // Empty SONG must not cause a file picker, or publish any audio at all.
     app.requestSongExport();
     CHECK(!app.wantSongExport() && app.toast() == "NO SCENES IN SONG",

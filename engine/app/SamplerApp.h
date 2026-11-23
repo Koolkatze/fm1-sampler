@@ -7,6 +7,7 @@
 //                      GLO key and scale | SAVE loop save (tap) / clear (hold) | PLAY | REC loop record / overdub
 #pragma once
 #include "../session/Session.h"
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
@@ -21,6 +22,7 @@ class SamplerApp {
 public:
     using Send = std::function<void(const uint8_t*, size_t)>;
     static constexpr int kTracks = 8;
+    static constexpr int kSeqMaxSteps = Session::kSeqMaxSteps;
     enum Button { OCT_DOWN, OCT_UP, FX, SEL, ENV, LFO, EDIT, GLO, HOME, SAVE, ARP, SEQ, PLAY, REC, STOP };  // STOP=14 is an optional external MIDI/software transport; native FM-1 has PLAY
     enum Page { P_HOME, P_FX, P_ENV, P_LFO, P_ARP, P_SEQ, P_MIX, P_KEY, P_SAVE, P_LEN, P_CUE, kPages };
     struct Knob {
@@ -45,6 +47,30 @@ public:
     Page page() const { return page_; }
     void gotoPage(Page p);
     static const char* pageName(Page p);
+    // Separate 8-lane SEQUENCER view (not the legacy TAPE parameter page).
+    bool sequencerMode() const { return seqMode_; }
+    void setSequencerMode(bool on);
+    int seqTrack() const { return seqTrack_; }
+    void selectSeqTrack(int t);
+    int seqBeats() const { return seqBeats_; }
+    void setSeqBeats(int n);
+    int seqBank() const { return seqBank_; }
+    int selectedSeqStep() const { return seqEditStep_; }
+    int selectedSeqNote() const { return seqNotes_[(size_t)seqTrack_][(size_t)seqEditStep_]; }
+    void moveSeqBank(int direction);
+    bool seqStep(int lane, int index) const;
+    int seqStepNote(int lane, int index) const;
+    void toggleSeqStep(int lane, int index);
+    int seqNote(int lane) const { return seqBaseNotes_[(size_t)std::clamp(lane, 0, 7)]; }
+    void adjustSeqNote(int delta);
+    std::string seqLabel(int lane) const;
+    std::string seqSampleLabel(int lane) const;
+    float projectTempo() const { return st_.bpm; }
+    void setProjectTempo(float bpm);           // pitch-preserving Tempo Flex
+    void setPitchedTempo(float bpm);           // tape-style tempo + pitch coupling
+    int seqPitchSemitones() const { return seqPitchSemitones_; }
+    int seqPitchCents() const { return seqPitchCents_; }
+    void setSeqPitch(int semitones, int cents);
     int track() const { return track_; }
     void selectTrack(int t);
     Knobs knobs();
@@ -215,6 +241,19 @@ private:
     Page page_ = P_HOME;
     int track_ = 0;
     std::array<TrackState, kTracks> ts_;
+    // Independent sequencer: 16 visible pads per bank, 1..64 quarter beats.
+    bool seqMode_ = false;
+    int seqTrack_ = 0, seqBeats_ = 4, seqBank_ = 0, seqEditStep_ = 0;
+    int seqPitchSemitones_ = 0, seqPitchCents_ = 0;
+    float pitchedTempoSemitones_ = 0.f;
+    std::array<std::array<uint8_t, kSeqMaxSteps>, kTracks> seqVel_{};
+    std::array<std::array<uint8_t, kSeqMaxSteps>, kTracks> seqNotes_{};
+    std::array<int, kTracks> seqBaseNotes_{{60, 60, 60, 60, 60, 60, 60, 60}};
+    std::array<std::string, kTracks> seqSamplePaths_{};
+    std::array<std::string, kTracks> seqSampleNames_{};
+    std::array<bool, kTracks> seqKit_{};
+    void applySeqPattern();
+    void initSeqDefaults();
     // global effects
     float reverbSize_ = 0.7f, reverbDw_ = 0.35f, delayTime_ = 0.4f, delayFb_ = 0.45f;
     int loopSrc_ = 1;
@@ -280,6 +319,7 @@ private:
     bool playModified_ = false;
     Page cueReturnPage_ = P_HOME;
     uint32_t held_ = 0;
+    uint32_t seqButtonDownAt_ = 0;
     ScaleState scale_;
     uint32_t touchedAt_ = 0; int touchedKnob_ = -1;
     std::vector<SurfaceCell> cells_;

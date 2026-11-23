@@ -17,6 +17,8 @@ public:
     static constexpr int kVoiceMax = 32;
     static constexpr int kLoopBins = 400;
     static constexpr int kScenes = 12;   // C1..B1
+    static constexpr int kSeqTracks = 8;
+    static constexpr int kSeqMaxSteps = 256;  // up to 64/4 at 1/16 resolution
 
     struct Status {
         bool playing;
@@ -24,6 +26,11 @@ public:
         double loopSamples;      // 0 = no loop yet
         float bpm;
         int loopBars;
+        int seqStep;           // audio-clocked playhead (0..beats*4-1)
+        int seqBeats;          // 1/4..64/4, independent of loop length
+        bool seqEnabled;
+        uint32_t seqLoadedMask;   // 8 independent sampler instruments loaded
+        bool projectTransformBusy;   // background WSOLA/pitch-render pending
         float master_peak;
         float track_peak[kTracks];
         bool track_has_clip[kTracks], track_clip_rec[kTracks];
@@ -64,6 +71,23 @@ public:
     void play(bool on);
     void noteOn(int track, int note, int vel);
     void noteOff(int track, int note);
+
+    // Independent eight-lane sequencer; these voices NEVER occupy looper tracks.
+    // All edits are queued for the next audio block; no disk work on the audio thread.
+    void setSeqBeats(int numerator);  // n/4, n = 1..64
+    void setSeqStep(int lane, int step, int note, int velocity); // velocity=0 clears
+    using SeqGrid = std::array<std::array<uint8_t, kSeqMaxSteps>, kSeqTracks>;
+    void replaceSeqPattern(const SeqGrid& notes, const SeqGrid& velocities);
+    void clearSeqSample(int lane);
+    void setSeqEnabled(bool on);
+    void loadSeqSamplePath(const std::string& path, bool kit, int lane, int triggerNote = 60);
+    void setSeqPitch(float semitones); // global tuning, clock unaffected
+    void setSeqTempo(float bpm);       // global transport clock, 30..300 BPM (empty sessions)
+    // Applies a new project BPM and/or pitch to existing audio clips, scenes
+    // and COMPOSE using the worker's pitch-preserving WSOLA. A "pitched tempo"
+    // change supplies a pitch target raised by 12*log2(newBpm/oldBpm).
+    bool transformProject(float targetBpm, float targetPitchSemitones);
+    void setLoadedPitchState(float semitones); // archive already contains rendered audio
 
     // ---- sampler (per track) ----
     void loadSamplePath(const std::string& path, bool kit, int track, const std::string& displayName = "");          // worker thread builds it, then it replaces the track's sampler
@@ -122,9 +146,11 @@ public:
         int slot = -1;
         std::vector<uint8_t> appState;
         std::array<std::string, kTracks> samplePaths;
+        std::array<std::string, kSeqTracks> seqSamplePaths;
     };
     bool saveProject(int slot, std::vector<uint8_t> appState,
-                     const std::array<std::string, kTracks>& samplePaths);
+                     const std::array<std::string, kTracks>& samplePaths,
+                     const std::array<std::string, kSeqTracks>& seqSamplePaths = {});
     bool loadProject(int slot);
     bool takeLoadedProject(LoadedProject& output);
     bool projectExists(int slot) const;

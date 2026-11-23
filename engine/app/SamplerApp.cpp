@@ -1,5 +1,6 @@
 #include "SamplerApp.h"
 #include "../ui/Theme.h"
+#include "../dsp/Wav.h"
 #include <Common.h>
 #include <algorithm>
 #include <cctype>
@@ -65,6 +66,7 @@ SamplerApp::SamplerApp(Session& s, Send send) : s_(s), send_(std::move(send)) {
     for (int& h : heldNote_) h = -1;
     for (int i = 0; i < kTracks; i++) { ts_[i].vol = 0.8f; }
     refreshLibrary();
+    initSeqDefaults();
     applyFx();
     s_.setRetLevel(1, 0.7f);
     s_.setLoopSource(loopSrc_);
@@ -289,6 +291,15 @@ std::string SamplerApp::takePackDeletePath() {
 void SamplerApp::loadEntry(int i) {
     if (i < 0 || i >= (int)lib_.size()) return;
     libCursor_ = i; auditionAt_ = 0;
+    if (seqMode_) {
+        const Entry& e = lib_[(size_t)i];
+        seqSamplePaths_[(size_t)seqTrack_] = e.path;
+        seqSampleNames_[(size_t)seqTrack_] = e.label;
+        seqKit_[(size_t)seqTrack_] = e.kit;
+        s_.loadSeqSamplePath(e.path, e.kit, seqTrack_, seqBaseNotes_[(size_t)seqTrack_]);
+        say("SEQUENCER TRACK " + std::to_string(seqTrack_ + 1) + ": " + e.label);
+        return;
+    }
     const Entry& e = lib_[(size_t)i];
     trackSourcePaths_[(size_t)track_] = e.path;
     trackSourceNames_[(size_t)track_] = e.label;
@@ -366,6 +377,150 @@ void SamplerApp::setScale(int scale, int root, int octave, int mode) {
     scale_ = {std::min(7, std::max(0, scale)), ((root % 12) + 12) % 12, std::min(3, std::max(-3, octave)), mode & 1};
     sysex(6, {7, (uint8_t)scale_.root, (uint8_t)(scale_.octave + 3), (uint8_t)scale_.mode}, true);
 }
+// ---- independent 8-lane step sequencer ----
+void SamplerApp::initSeqDefaults() {
+    // Eight original one-shots: compact assets generated in the user's
+    // OFFICIAL library. Unlike binding eight full drum kits this is light on
+    // RAM and every drum has its own envelope and sample file.
+    static const char* labels[] = {"Kick", "Snare", "Rim", "Tom 1", "Tom 2",
+                                   "HiHat Open", "HiHat Closed", "Crash"};
+    const auto root = std::filesystem::path(s_.sampleDir()) / "OFFICIAL" / "SEQUENCER";
+    std::error_code ec;
+    std::filesystem::create_directories(root, ec);
+    const int sampleRate = 48000;
+    for (int lane = 0; lane < kTracks; ++lane) {
+        const std::filesystem::path path = root / (std::string(labels[lane]) + ".wav");
+        if (!ec && !std::filesystem::is_regular_file(path, ec)) {
+            const double duration = lane == 5 ? 0.62 : lane == 7 ? 1.10 :
+                                    lane == 0 ? 0.48 : lane == 1 ? 0.30 :
+                                    lane == 6 ? 0.14 : 0.25;
+            const int frames = (int)(sampleRate * duration);
+            std::vector<float> audio((size_t)frames * 2);
+            uint32_t rng = 0xa58751u + (uint32_t)lane * 18201u;
+            double phase = 0.0, filtered = 0.0;
+            for (int i = 0; i < frames; ++i) {
+                const double t = (double)i / sampleRate;
+                rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+                const double noise = ((rng & 0xffff) / 32767.5) - 1.0;
+                const double high = noise - filtered;
+                filtered = filtered * .94 + noise * .06;
+                double f = lane == 0 ? 49.0 + 110.0 * std::exp(-t * 35.0) :
+                           lane == 3 ? 158.0 + 75.0 * std::exp(-t * 16.0) :
+                           lane == 4 ? 108.0 + 60.0 * std::exp(-t * 16.0) :
+                           lane == 2 ? 650.0 : 184.0;
+                phase += 6.283185307179586 * f / sampleRate;
+                const double tone = std::sin(phase);
+                double out = 0.0;
+                if (lane == 0) out = tone * std::exp(-t * 12.0);
+                else if (lane == 1) out = (0.82 * high + 0.28 * tone) * std::exp(-t * 21.0);
+                else if (lane == 2) out = (0.64 * tone + 0.48 * high) * std::exp(-t * 66.0);
+                else if (lane == 3 || lane == 4) out = (tone + 0.12 * high) * std::exp(-t * 15.0);
+                else if (lane == 5) out = high * std::exp(-t * 6.0);
+                else if (lane == 6) out = high * std::exp(-t * 44.0);
+                else out = (0.72 * high + 0.18 * std::sin(phase * 1.318)) * std::exp(-t * 3.4);
+                out = std::tanh(out * (lane == 0 ? 1.45 : 1.2)) * 0.62;
+                const float attack = std::min(1.0, t * 2600.0);
+                const float value = (float)(out * attack);
+                audio[(size_t)i * 2] = value;
+                audio[(size_t)i * 2 + 1] = value;
+            }
+            writeWav16(path.string(), audio, sampleRate);
+        }
+        seqSampleNames_[(size_t)lane] = labels[lane];
+        seqBaseNotes_[(size_t)lane] = 60;
+        seqKit_[(size_t)lane] = false;
+        seqSamplePaths_[(size_t)lane] = (!ec && std::filesystem::exists(path)) ?
+                                      path.string() : "";
+        for (int st = 0; st < kSeqMaxSteps; ++st)
+            seqNotes_[(size_t)lane][(size_t)st] = 60;
+        if (!seqSamplePaths_[(size_t)lane].empty())
+            s_.loadSeqSamplePath(seqSamplePaths_[(size_t)lane], false, lane, 60);
+    }
+    refreshLibrary(); // generated OFFICIAL one-shots appear in the shared browser
+    s_.setSeqBeats(seqBeats_);
+    s_.setSeqEnabled(true);
+}
+void SamplerApp::setSequencerMode(bool on) {
+    if (seqMode_ == on) return;
+    seqMode_ = on;
+    if (on) {
+        // The scene pads and sequence keys are mutually exclusive, but the
+        // actual scene/looper playback continues unchanged.
+        sceneKeys_ = false;
+    }
+    needClear_ = true;
+}
+void SamplerApp::selectSeqTrack(int t) { seqTrack_ = (t % kTracks + kTracks) % kTracks; }
+void SamplerApp::setSeqBeats(int n) {
+    seqBeats_ = std::clamp(n, 1, 64);
+    seqBank_ = std::min(seqBank_, (seqBeats_ * 4 - 1) / 16);
+    seqEditStep_ = std::min(seqEditStep_, seqBeats_ * 4 - 1);
+    s_.setSeqBeats(seqBeats_);
+}
+void SamplerApp::moveSeqBank(int d) {
+    seqBank_ = std::clamp(seqBank_ + (d > 0 ? 1 : -1), 0, (seqBeats_ * 4 - 1) / 16);
+}
+bool SamplerApp::seqStep(int lane, int index) const {
+    return lane >= 0 && lane < kTracks && index >= 0 && index < seqBeats_ * 4
+        && seqVel_[(size_t)lane][(size_t)index] != 0;
+}
+int SamplerApp::seqStepNote(int lane, int index) const {
+    return lane >= 0 && lane < kTracks && index >= 0 && index < kSeqMaxSteps
+        ? seqNotes_[(size_t)lane][(size_t)index] : 60;
+}
+void SamplerApp::toggleSeqStep(int lane, int index) {
+    if (lane < 0 || lane >= kTracks || index < 0 || index >= seqBeats_ * 4) return;
+    seqEditStep_ = index; // K3 edits this one note, not the other steps
+    auto& v = seqVel_[(size_t)lane][(size_t)index];
+    v = v ? 0 : 104;
+    s_.setSeqStep(lane, index, seqNotes_[(size_t)lane][(size_t)index], v);
+}
+void SamplerApp::adjustSeqNote(int delta) {
+    // Melodic bass lines can give each white-key step its own MIDI pitch.
+    // The base sample/root remains unchanged; K3 adjusts only this cell.
+    auto& note = seqNotes_[(size_t)seqTrack_][(size_t)seqEditStep_];
+    note = (uint8_t)std::clamp((int)note + (delta > 0 ? 1 : -1), 0, 127);
+    s_.setSeqStep(seqTrack_, seqEditStep_, note,
+                  seqVel_[(size_t)seqTrack_][(size_t)seqEditStep_]);
+}
+std::string SamplerApp::seqLabel(int lane) const {
+    static const char* labels[] = {"KICK", "SNARE", "RIM", "TOM 1", "TOM 2",
+                                   "OPEN HH", "CLOSED HH", "CRASH"};
+    return lane >= 0 && lane < kTracks ? labels[lane] : "";
+}
+std::string SamplerApp::seqSampleLabel(int lane) const {
+    if (lane < 0 || lane >= kTracks) return "";
+    return seqSampleNames_[(size_t)lane];
+}
+void SamplerApp::setProjectTempo(float bpm) {
+    if (!s_.transformProject(bpm, seqPitchSemitones_ + seqPitchCents_ * .01f +
+                            pitchedTempoSemitones_)) say("AUDIO RENDER BUSY");
+}
+void SamplerApp::setPitchedTempo(float bpm) {
+    const float from = std::max(30.f, st_.bpm);
+    const float to = std::clamp(bpm, 30.f, 300.f);
+    const float pitched = pitchedTempoSemitones_ + 12.f * std::log2(to / from);
+    if (s_.transformProject(to, seqPitchSemitones_ + seqPitchCents_ * .01f + pitched))
+        pitchedTempoSemitones_ = pitched;
+    else say("AUDIO RENDER BUSY");
+}
+void SamplerApp::setSeqPitch(int semitones, int cents) {
+    const int semi = std::clamp(semitones, -24, 24);
+    const int cent = std::clamp(cents, -100, 100);
+    const float total = semi + cent * .01f + pitchedTempoSemitones_;
+    if (s_.transformProject(st_.bpm, total)) {
+        seqPitchSemitones_ = semi; seqPitchCents_ = cent;
+    } else say("AUDIO RENDER BUSY");
+}
+void SamplerApp::applySeqPattern() {
+    s_.setSeqBeats(seqBeats_);
+    s_.replaceSeqPattern(seqNotes_, seqVel_);
+    // The archive already contains processed audio. Re-establish the absolute
+    // source pitch rather than shifting it a second time after restoration.
+    s_.setLoadedPitchState(seqPitchSemitones_ + seqPitchCents_ * .01f +
+                           pitchedTempoSemitones_);
+}
+
 void SamplerApp::selectTrack(int t) {
     t = std::min(kTracks - 1, std::max(0, t));
     if (t == track_) return;
@@ -639,6 +794,20 @@ struct FullProjectSettings {
     std::array<std::array<char, 96>, SamplerApp::kTracks> sampleNames{};
 };
 static_assert(std::is_trivially_copyable_v<FullProjectSettings>);
+// Existing APP2 v2/v3 metadata is a prefix of the new app state. Older
+// .fm1p files are still accepted; the new independent samples live in FMP2 v3.
+struct FullProjectSettingsV4 {
+    FullProjectSettings legacy{};
+    uint32_t seqBeats = 4, seqTrack = 0, seqBank = 0, seqEditStep = 0;
+    int32_t pitchSemitones = 0, pitchCents = 0;
+    float pitchedTempoSemitones = 0.f;
+    uint8_t seqMode = 0;
+    std::array<uint8_t, SamplerApp::kTracks> seqKits{};
+    std::array<int32_t, SamplerApp::kTracks> seqBaseNotes{};
+    Session::SeqGrid seqNotes{}, seqVelocities{};
+    std::array<std::array<char, 96>, SamplerApp::kTracks> seqSampleNames{};
+};
+static_assert(std::is_trivially_copyable_v<FullProjectSettingsV4>);
 }
 std::string SamplerApp::projectName(int slot) const {
     if (slot < 0 || slot >= Session::kProjectSlots) return "";
@@ -666,7 +835,27 @@ bool SamplerApp::fullProjectExists(int slot) const { return s_.projectExists(slo
 bool SamplerApp::saveFullProject(int slot) {
     if (recordingNow() || mic_ != 0) { say("FINISH RECORDING FIRST"); return false; }
     if (slot < 0 || slot >= Session::kProjectSlots) return false;
-    FullProjectSettings m{};
+    FullProjectSettingsV4 extended{};
+    FullProjectSettings& m = extended.legacy;
+    m.version = 4;
+    m.bytes = sizeof(extended);
+    extended.seqBeats = (uint32_t)seqBeats_;
+    extended.seqTrack = (uint32_t)seqTrack_;
+    extended.seqBank = (uint32_t)seqBank_;
+    extended.seqEditStep = (uint32_t)seqEditStep_;
+    extended.pitchSemitones = seqPitchSemitones_;
+    extended.pitchCents = seqPitchCents_;
+    extended.pitchedTempoSemitones = pitchedTempoSemitones_;
+    extended.seqMode = seqMode_ ? 1 : 0;
+    extended.seqNotes = seqNotes_;
+    extended.seqVelocities = seqVel_;
+    for (int i = 0; i < kTracks; ++i) {
+        extended.seqKits[(size_t)i] = seqKit_[(size_t)i] ? 1 : 0;
+        extended.seqBaseNotes[(size_t)i] = seqBaseNotes_[(size_t)i];
+        std::snprintf(extended.seqSampleNames[(size_t)i].data(),
+                      extended.seqSampleNames[(size_t)i].size(), "%s",
+                      seqSampleNames_[(size_t)i].c_str());
+    }
     m.tracks = ts_; m.scale = scale_;
     m.reverbSize = reverbSize_; m.reverbWet = reverbDw_;
     m.delayTime = delayTime_; m.delayFeedback = delayFb_;
@@ -693,9 +882,16 @@ bool SamplerApp::saveFullProject(int slot) {
             return false;
         }
     }
-    std::vector<uint8_t> bytes(sizeof(m));
-    std::memcpy(bytes.data(), &m, bytes.size());
-    if (!s_.saveProject(slot, std::move(bytes), sources)) {
+    // The archive embeds both banks of original WAVs, not paths into PACKS.
+    for (const auto& path : seqSamplePaths_) {
+        if (!path.empty() && !std::filesystem::is_regular_file(path)) {
+            say("SEQUENCER SAMPLE SOURCE MISSING");
+            return false;
+        }
+    }
+    std::vector<uint8_t> bytes(sizeof(extended));
+    std::memcpy(bytes.data(), &extended, bytes.size());
+    if (!s_.saveProject(slot, std::move(bytes), sources, seqSamplePaths_)) {
         say("PROJECT BUSY OR INVALID"); return false;
     }
     say("SAVING PROJECT " + std::to_string(slot + 1));
@@ -708,13 +904,20 @@ bool SamplerApp::loadFullProject(int slot) {
     return true;
 }
 void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
-    if (project.appState.size() != sizeof(FullProjectSettings)) {
+    const bool hasSequence = project.appState.size() == sizeof(FullProjectSettingsV4);
+    const bool legacySize = project.appState.size() == sizeof(FullProjectSettings);
+    if (!hasSequence && !legacySize) {
         say("PROJECT SETTINGS INCOMPATIBLE"); return;
     }
+    FullProjectSettingsV4 extended{};
     FullProjectSettings m{};
-    std::memcpy(&m, project.appState.data(), sizeof(m));
-    if (m.magic != 0x32505041 || (m.version != 2 && m.version != 3) ||
-        m.bytes != sizeof(m) || m.songSize > 64 ||
+    if (hasSequence) {
+        std::memcpy(&extended, project.appState.data(), sizeof(extended));
+        m = extended.legacy;
+    } else std::memcpy(&m, project.appState.data(), sizeof(m));
+    if (m.magic != 0x32505041 ||
+        (hasSequence ? m.version != 4 : (m.version != 2 && m.version != 3)) ||
+        m.bytes != project.appState.size() || m.songSize > 64 ||
         m.selectedTrack < 0 || m.selectedTrack >= kTracks ||
         m.page < 0 || m.page >= kPages || m.selectedScene < 0 ||
         m.selectedScene >= Session::kScenes || m.selectedSongStep < -1 ||
@@ -758,6 +961,48 @@ void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
         trackSourceNames_[(size_t)i] = title;
     }
     refreshLibrary();
+    if (hasSequence) {
+        if (extended.seqBeats < 1 || extended.seqBeats > 64 ||
+            extended.seqTrack >= kTracks || extended.seqBank > 15 ||
+            extended.seqEditStep >= kSeqMaxSteps ||
+            extended.seqMode > 1 || extended.pitchSemitones < -24 ||
+            extended.pitchSemitones > 24 || extended.pitchCents < -100 ||
+            extended.pitchCents > 100 ||
+            !std::isfinite(extended.pitchedTempoSemitones) ||
+            std::fabs(extended.pitchedTempoSemitones) > 36.f) {
+            say("SEQUENCER PROJECT SETTINGS CORRUPT"); return;
+        }
+        seqBeats_ = (int)extended.seqBeats;
+        seqTrack_ = (int)extended.seqTrack;
+        seqBank_ = std::min((int)extended.seqBank, (seqBeats_ * 4 - 1) / 16);
+        seqEditStep_ = std::min((int)extended.seqEditStep, seqBeats_ * 4 - 1);
+        seqMode_ = extended.seqMode != 0;
+        seqPitchSemitones_ = extended.pitchSemitones;
+        seqPitchCents_ = extended.pitchCents;
+        pitchedTempoSemitones_ = extended.pitchedTempoSemitones;
+        seqNotes_ = extended.seqNotes;
+        seqVel_ = extended.seqVelocities;
+        for (int i = 0; i < kTracks; ++i) {
+            seqBaseNotes_[(size_t)i] = std::clamp(extended.seqBaseNotes[(size_t)i], 0, 127);
+            seqKit_[(size_t)i] = extended.seqKits[(size_t)i] != 0;
+            seqSamplePaths_[(size_t)i] = project.seqSamplePaths[(size_t)i];
+            const auto& name = extended.seqSampleNames[(size_t)i];
+            seqSampleNames_[(size_t)i] = std::string(name.data(),
+                std::find(name.begin(), name.end(), char(0)));
+            if (!seqSamplePaths_[(size_t)i].empty())
+                s_.loadSeqSamplePath(seqSamplePaths_[(size_t)i], seqKit_[(size_t)i], i, seqBaseNotes_[(size_t)i]);
+            else s_.clearSeqSample(i);
+        }
+        applySeqPattern();
+    } else {
+        seqMode_ = false;
+        seqBeats_ = 4; seqTrack_ = seqBank_ = seqEditStep_ = 0;
+        seqPitchSemitones_ = seqPitchCents_ = 0;
+        pitchedTempoSemitones_ = 0.f;
+        seqVel_ = {}; seqNotes_ = {};
+        initSeqDefaults();
+        applySeqPattern();
+    }
     for (int i = 0; i < kTracks; ++i) {
         const auto& path = trackSourcePaths_[(size_t)i];
         if (path.empty()) s_.clearSample(i);
@@ -871,6 +1116,22 @@ std::string SamplerApp::loopText() const {
 }
 void SamplerApp::keyEvent(int raw, bool down) {   // MIDI scene bank in LOOP mode; ordinary keyboard elsewhere
     if (raw < 0 || raw > 127) return;
+    if (seqMode_) {
+        // The FM-1 has sixteen white step keys and ten black selection keys.
+        // Count by key colour, not an assumed chromatic starting octave.
+        int white = 0, black = 0;
+        for (int note = 53; note <= 79; ++note) {
+            const int pc = note % 12;
+            const bool isBlack = pc == 1 || pc == 3 || pc == 6 || pc == 8 || pc == 10;
+            if (note == raw && down) {
+                if (isBlack && black < kTracks) selectSeqTrack(black);
+                else if (!isBlack && white < 16)
+                    toggleSeqStep(seqTrack_, seqBank_ * 16 + white);
+            }
+            if (isBlack) ++black; else ++white;
+        }
+        return;
+    }
     if (sceneKeys_ && !songMode_) {
         // Ableton labels MIDI 36..47 as C1..B1. Also accept scientific C1
         // (24..35), while the physical FM-1 first 12 keys arrive as 53..64.
@@ -1046,18 +1307,23 @@ void SamplerApp::button(int b, bool down) {
         }
         return;
     }
+    if (b == SEQ) {
+        if (down) seqButtonDownAt_ = nowMs_;
+        else if (nowMs_ - seqButtonDownAt_ >= 600) setSequencerMode(!seqMode_);
+        else page_ = P_SEQ; // short SEQ still opens the original TAPE page
+        return;
+    }
     if (b == SAVE) {   // only the LOOP page: saving and clearing loops lives in the phone's PROJECT menu
         if (down) page_ = P_SAVE;
         return;
     }
     if (!down) return;
     switch (b) {
-    case HOME: exitPerformanceMode(); page_ = P_HOME; ++homeNavigationSerial_; break;
+    case HOME: setSequencerMode(false); exitPerformanceMode(); page_ = P_HOME; ++homeNavigationSerial_; break;
     case FX: page_ = P_FX; break;
     case ENV: page_ = P_ENV; break;
     case LFO: page_ = P_LFO; break;
     case ARP: page_ = P_ARP; break;
-    case SEQ: page_ = P_SEQ; break;
     case EDIT: page_ = P_MIX; break;
     case GLO: page_ = P_KEY; break;
     case SEL: page_ = P_LEN; break;
@@ -1067,6 +1333,14 @@ void SamplerApp::button(int b, bool down) {
 }
 void SamplerApp::encoder(int i, int delta) {
     if (!delta) return;
+    if (seqMode_ && !libraryBrowserActive_) {
+        const int direction = delta > 0 ? 1 : -1;
+        if (i == 0) { selectSeqTrack(seqTrack_ + direction); return; } // SELECT
+        if (i == 2) { moveSeqBank(direction); return; } // K1: timeline bank
+        if (i == 3) { setSeqBeats(seqBeats_ + direction); return; } // K2: meter 1..64/4
+        if (i == 4) { adjustSeqNote(direction); return; } // K3: pitch of selected lane
+        if (i == 5) { setProjectTempo(st_.bpm + direction); return; } // K4: Tempo Flex
+    }
     if (i == 0) { selectTrack(track_ + (delta > 0 ? 1 : -1)); return; }
     if (i == 6) { browse(delta); return; }
     // In the open LIBRARY browser K1 navigates directory levels. Other
@@ -1228,15 +1502,29 @@ void SamplerApp::leds() {
     uint64_t m = 0;
     const bool blinkFast = (nowMs_ / 250) & 1, blinkSlow = (nowMs_ / 500) & 1;
     static const int pageBtn[] = {HOME, FX, ENV, LFO, ARP, SEQ, EDIT, GLO, SAVE, SEL};
-    m |= 1ull << pageBtn[page_];
+    m |= 1ull << (seqMode_ ? SEQ : pageBtn[page_]);
     if (st_.playing) m |= 1ull << PLAY;
     if (st_.freeRecording || st_.track_clip_rec[track_] || mic_ == 2) { if (blinkFast) m |= 1ull << REC; }
     else if (st_.freeArmed || mic_ == 1) { if (blinkSlow) m |= 1ull << REC; }
     else if (loopAny_) m |= 1ull << REC;
     // keys follow the tonality: the keyboard stays chromatic, only the keys that belong to the scale light, the root of each octave blinks slowly;
     // with the scale OFF only the root keys light. A sounding key goes dark.
+    int white = 0, black = 0;
     for (int k = 0; k < 27; k++) {
         const int raw = 53 + k, note = raw + 12 * scale_.octave, pc = ((note - scale_.root) % 12 + 12) % 12;
+        const int pitchClass = raw % 12;
+        const bool blackKey = pitchClass == 1 || pitchClass == 3 || pitchClass == 6 ||
+                              pitchClass == 8 || pitchClass == 10;
+        if (seqMode_) {
+            const int step = seqBank_ * 16 + white;
+            const bool lit = blackKey
+                ? black < kTracks && black == seqTrack_
+                : white < 16 && seqStep(seqTrack_, step);
+            const bool head = !blackKey && step == st_.seqStep && st_.playing;
+            if ((head ? blinkFast : lit)) m |= 1ull << (14 + k);
+            if (blackKey) ++black; else ++white;
+            continue;
+        }
         bool on = ts_[track_].algo == 3 ? true : scale_.scale < 7 ? scaleIndex(pc, scale_.scale) >= 0 : pc == 0;   // KIT: every key is a pad
         if (on && pc == 0 && scale_.scale < 7 && ts_[track_].algo != 3) on = blinkSlow;
         if (keyCount_[raw]) on = false;
@@ -1259,6 +1547,32 @@ void SamplerApp::draw(uint32_t now) {
     if (heroKind != lastHero) { lastHero = heroKind; needClear_ = true; }
     if (needClear_) { fwDirty_ = true; clear(BLACK); std::fill(cells_.begin(), cells_.end(), SurfaceCell()); std::fill(rects_.begin(), rects_.end(), ~0ull); needResend_ = false; }
     else if (needResend_) { needResend_ = false; std::fill(cells_.begin(), cells_.end(), SurfaceCell()); std::fill(rects_.begin(), rects_.end(), ~0ull); }
+    if (seqMode_) {
+        // The physical LCD follows the same two-colour and orange theme as
+        // Android, with the active lane, 16 visible steps and BPM.
+        drawText(0, 8, 8, 2, ACCENT, BLACK, "SEQUENCER", 12);
+        drawText(1, 8, 31, 1, PAPER, BLACK,
+                 fmt("%.1f BPM", st_.bpm) + "   " +
+                 std::to_string(seqBeats_) + "/4", 38);
+        for (int lane = 0; lane < kTracks; ++lane) {
+            const int y = 49 + lane * 20;
+            rect(10 + lane, 7, y, 68, 17, lane == seqTrack_ ? BAR : BLACK);
+            drawText(20 + lane, 9, y + 3, 1,
+                     lane == seqTrack_ ? ACCENT : PAPER,
+                     lane == seqTrack_ ? BAR : BLACK, seqLabel(lane), 11);
+            for (int j = 0; j < 16; ++j) {
+                const int st = seqBank_ * 16 + j;
+                const bool active = seqStep(lane, st);
+                const bool cursor = st_.playing && st_.seqStep == st;
+                const uint16_t color = cursor ? PAPER : active ? ACCENT : (j % 4 ? BAR : DIM);
+                rect(40 + lane * 16 + j, 78 + j * 9, y + 4, 7, 9, color);
+            }
+        }
+        drawText(2, 8, 219, 1, DIM, BLACK,
+                 "K1 BANK " + std::to_string(seqBank_ + 1) + "   SEL TRACK", 38);
+        needClear_ = false;
+        return;
+    }
     char b[96];
     const Knobs k = knobs();
     // header: the track number and the sample name, the transport state as the same pictogram as on the phone

@@ -114,6 +114,21 @@ struct Session::Impl {
         explicit Track(int sr) : tape(sr) {}
     };
 
+    struct SeqLane {
+        std::unique_ptr<Sampler> sampler;  // never shared with the 8 looper instruments
+        float volume = 0.78f;
+    };
+    std::array<SeqLane, Session::kSeqTracks> seqLanes{};
+    // Stored in the transport thread. Velocities of zero mean empty steps.
+    std::array<std::array<uint8_t, Session::kSeqMaxSteps>, Session::kSeqTracks> seqVel{};
+    std::array<std::array<uint8_t, Session::kSeqMaxSteps>, Session::kSeqTracks> seqNote{};
+    int seqBeats = 4;
+    bool seqEnabled = true;
+    double seqQuarterPhase = 0.0;     // non-quantised beat phase from transport
+    float globalPitchSemis = 0.f;
+    float renderedClipPitch = 0.f; // relative to the original unshifted project
+    std::atomic<bool> transformBusy{false};
+
     struct Scene {
         bool filled = false;
         int32_t samples = 0;
@@ -160,6 +175,7 @@ struct Session::Impl {
         bool songPlaying = false;
         std::vector<uint8_t> appState;
         std::array<std::string, kTracks> samplePaths;
+        std::array<std::string, Session::kSeqTracks> seqSamplePaths;
     };
     // Only a few primitive settings and shared immutable clip references are
     // copied on the real-time thread. No DSP delay buffers or large WAVs.
@@ -240,6 +256,9 @@ struct Session::Impl {
     std::atomic<bool> a_playing{false}, a_free{false}, a_freeArmed{false}, a_pending{false};
     std::atomic<float> a_master{0.f}, a_freeSec{0.f}, a_sampleSec{0.f}, a_inPeak{0.f}, a_bpm{120.f};
     std::atomic<uint32_t> a_cpu{0}, a_clip_mask{0}, a_cliprec_mask{0};
+    std::atomic<uint32_t> a_seqLoadedMask{0};
+    std::atomic<int> a_seqStep{0}, a_seqBeats{4};
+    std::atomic<bool> a_seqEnabled{true};
     std::atomic<int> a_bars{4}, a_sampleState{0}, a_sampleTrack{0}, a_sampleVersion{0}, a_sampleFails{0};
     std::atomic<int32_t> a_loop{0};
     std::atomic<uint32_t> a_sceneMask{0};
@@ -364,6 +383,7 @@ struct Session::Impl {
         bpm = sc.tempo; a_bpm = bpm;
         activeScene = slot; pendingScene = -1; a_activeScene = slot; a_queuedScene = -1;
         pos = tapePos = 0.0;
+        seqQuarterPhase = 0.0; // start each scene with sequence beat one
         playing = true; stopping = false; rate = 1.0;
         scrubActive = scrubTail = false;
         cueActive = false; cueMix = 0.f;
@@ -371,10 +391,12 @@ struct Session::Impl {
     }
 
     ProjectSnapshot captureProject(std::vector<uint8_t> app,
-                                   std::array<std::string, kTracks> paths) {
+                                   std::array<std::string, kTracks> paths,
+                                   std::array<std::string, Session::kSeqTracks> seqPaths) {
         ProjectSnapshot s;
         s.appState = std::move(app);
         s.samplePaths = std::move(paths);
+        s.seqSamplePaths = std::move(seqPaths);
         s.savedScenes = scenes; s.arrangement = songOrder;
         s.active = activeScene; s.queued = pendingScene;
         s.songPlaying = songPlaying; s.songStep = songStep; s.pendingAt = pendingAt;
@@ -827,7 +849,7 @@ struct Session::Impl {
             if (t.arpOn) t.arp.run(n, bpm, sr, evs);
             std::stable_sort(evs.begin(), evs.end(), [](const Arp::Ev& a, const Arp::Ev& b) { return a.offset < b.offset; });
             if (t.sampler) {
-                t.sampler->setBend(bend);
+                t.sampler->setBend(bend + globalPitchSemis);
                 int cur = 0;
                 for (auto& e : evs) {
                     const int off = std::min(n, std::max(cur, e.offset));
@@ -927,6 +949,42 @@ struct Session::Impl {
             }
             t.peak.store(std::max(pk, t.peak.load() * 0.92f));
         }
+        // Separate sequencer bus. Its eight instruments do not participate in
+        // looper overdubs, looper track selection, or scene clip replacement.
+        // Events are positioned within the audio block, avoiding tick/UI jitter.
+        if (playing && !stopping && seqEnabled) {
+            const double framesPerQuarter = 60.0 * sr / std::max(30.f, bpm);
+            const double firstQuarter = seqQuarterPhase;
+            const double lastQuarter = firstQuarter + n / framesPerQuarter;
+            const int64_t firstTick = (int64_t)std::ceil(firstQuarter * 4.0 - 1e-9);
+            const int64_t lastTickExclusive = (int64_t)std::ceil(lastQuarter * 4.0 - 1e-9);
+            const int totalSteps = seqBeats * 4;
+            for (int ti = 0; ti < Session::kSeqTracks; ++ti) {
+                auto& lane = seqLanes[(size_t)ti];
+                if (!lane.sampler) continue;
+                std::fill(bus.begin(), bus.begin() + n * 2, 0.f);
+                lane.sampler->setBend(globalPitchSemis);
+                int cursor = 0;
+                for (int64_t tick = firstTick; tick < lastTickExclusive; ++tick) {
+                    const int step = (int)((tick % totalSteps + totalSteps) % totalSteps);
+                    const int at = std::clamp((int)std::lround(
+                        (tick * .25 - firstQuarter) * framesPerQuarter), cursor, n);
+                    if (at > cursor) lane.sampler->render(bus.data() + cursor * 2, at - cursor);
+                    cursor = at;
+                    const uint8_t vel = seqVel[(size_t)ti][(size_t)step];
+                    if (vel) lane.sampler->noteOn(seqNote[(size_t)ti][(size_t)step], vel);
+                }
+                if (cursor < n) lane.sampler->render(bus.data() + cursor * 2, n - cursor);
+                const float gain = lane.volume;
+                for (int i = 0; i < n * 2; ++i) out[i] += bus[(size_t)i] * gain;
+            }
+        }
+        if (playing && !stopping) {
+            seqQuarterPhase += (double)n * std::max(30.f, bpm) / (60.0 * sr);
+            if (seqQuarterPhase > 1048576.0) seqQuarterPhase -=
+                std::floor(seqQuarterPhase / (seqBeats * 1.0)) * seqBeats;
+        }
+        a_seqStep.store((int)std::floor(seqQuarterPhase * 4.0) % (seqBeats * 4));
         (void)anyEvents;
         if (freeRec && freeBuf.size() >= freeBase + (size_t)n * 2) {
             const int bin = std::max(1, sr / 100);
@@ -1016,12 +1074,185 @@ void Session::play(bool on) {
             if (d->playing) d->stopping = true;   // the tape slows down to standstill (block() ends it: playing = false, notes released)
         } else {
             d->stopping = false;
-            if (!d->playing) { d->playing = true; d->rate = d->loopSamples > 0 ? 0.0 : 1.0; }   // the tape runs up from standstill
+            if (!d->playing) { d->playing = true; d->seqQuarterPhase = 0.0; d->rate = d->loopSamples > 0 ? 0.0 : 1.0; }   // the tape runs up from standstill
         }
     });
 }
 void Session::noteOn(int t, int note, int vel) { if (t >= 0 && t < kTracks) d->post([=] { d->liveNote(t, note, std::max(1, vel)); }); }
 void Session::noteOff(int t, int note) { if (t >= 0 && t < kTracks) d->post([=] { d->liveNote(t, note, 0); }); }
+
+void Session::setSeqBeats(int beats) {
+    beats = std::clamp(beats, 1, 64);
+    d->post([this, beats] {
+        d->seqBeats = beats; d->a_seqBeats = beats;
+    });
+}
+void Session::setSeqStep(int lane, int step, int note, int velocity) {
+    if (lane < 0 || lane >= kSeqTracks || step < 0 || step >= kSeqMaxSteps) return;
+    note = std::clamp(note, 0, 127); velocity = std::clamp(velocity, 0, 127);
+    d->post([this, lane, step, note, velocity] {
+        d->seqVel[(size_t)lane][(size_t)step] = (uint8_t)velocity;
+        d->seqNote[(size_t)lane][(size_t)step] = (uint8_t)note;
+    });
+}
+void Session::replaceSeqPattern(const SeqGrid& notes, const SeqGrid& velocities) {
+    d->post([this, notes, velocities] {
+        d->seqNote = notes;
+        d->seqVel = velocities;
+    });
+}
+void Session::clearSeqSample(int lane) {
+    if (lane < 0 || lane >= kSeqTracks) return;
+    d->post([this, lane] {
+        auto& instrument = d->seqLanes[(size_t)lane].sampler;
+        d->bury(std::move(instrument));
+        d->a_seqLoadedMask.fetch_and(~(1u << lane));
+    });
+}
+void Session::setSeqEnabled(bool on) {
+    d->post([this, on] { d->seqEnabled = on; d->a_seqEnabled = on; });
+}
+void Session::setSeqPitch(float semitones) {
+    if (!std::isfinite(semitones)) return;
+    d->post([this, semitones] { d->globalPitchSemis = std::clamp(semitones, -36.f, 36.f); });
+}
+void Session::setLoadedPitchState(float semitones) {
+    if (!std::isfinite(semitones)) return;
+    d->post([this, semitones] {
+        d->renderedClipPitch = semitones;
+        d->globalPitchSemis = semitones;
+    });
+}
+bool Session::transformProject(float targetBpm, float targetPitchSemitones) {
+    if (!std::isfinite(targetBpm) || !std::isfinite(targetPitchSemitones))
+        return false;
+    targetBpm = std::clamp(targetBpm, 30.f, 300.f);
+    targetPitchSemitones = std::clamp(targetPitchSemitones, -36.f, 36.f);
+    if (d->transformBusy.exchange(true)) return false;
+    d->post([this, targetBpm, targetPitchSemitones] {
+        if (d->freeRec || d->freeArmed || d->sampling || d->armedWait ||
+            std::any_of(d->tracks.begin(), d->tracks.end(),
+                [](const auto& t) { return t->clipRec; })) {
+            d->transformBusy = false; return;
+        }
+        const float deltaPitch = targetPitchSemitones - d->renderedClipPitch;
+        if (std::fabs(targetBpm - d->bpm) < 0.005f &&
+            std::fabs(deltaPitch) < 0.005f) {
+            d->globalPitchSemis = targetPitchSemitones;
+            d->transformBusy = false; return;
+        }
+        // Existing project snapshots are COW and make the input audio stable
+        // during the work. Never render the WSOLA in the audio callback.
+        auto snap = d->captureProject({}, {}, {});
+        const int rate = d->sr;
+        d->job([this, targetBpm, targetPitchSemitones, deltaPitch,
+                rate, snap = std::move(snap)]() mutable {
+            auto transformTimeline = [&](Impl::ProjectTimeline& tl) {
+                const int fromFrames = tl.samples;
+                if (fromFrames <= 0) { tl.tempo = targetBpm; return true; }
+                const double speed = (double)targetBpm / std::max(30.f, tl.tempo);
+                const int toFrames = (int)std::lround(fromFrames / speed);
+                if (toFrames <= 0 || toFrames > rate * 180 ||
+                    speed < 0.25 || speed > 4.0) return false;
+                for (int lane = 0; lane < kTracks; ++lane) {
+                    if (!tl.has[(size_t)lane]) continue;
+                    const auto src = tl.clips[(size_t)lane];
+                    if (!src || src->size() != (size_t)fromFrames * 2) return false;
+                    auto audio = stretchPitch(*src, rate, speed, deltaPitch);
+                    audio.resize((size_t)toFrames * 2, 0.f);
+                    tl.clips[(size_t)lane] = std::make_shared<std::vector<float>>(std::move(audio));
+                }
+                const double factor = (double)toFrames / fromFrames;
+                tl.pos = std::clamp(tl.pos * factor, 0.0, (double)toFrames);
+                tl.tapePos = std::clamp(tl.tapePos * factor, 0.0, (double)toFrames);
+                tl.samples = toFrames; tl.tempo = targetBpm;
+                return true;
+            };
+            bool okay = transformTimeline(snap.current);
+            if (okay && snap.hasCompose) okay = transformTimeline(snap.compose);
+            for (auto& scene : snap.savedScenes) {
+                if (!okay) break;
+                if (!scene.filled) continue;
+                Impl::ProjectTimeline tl{};
+                tl.samples = scene.samples; tl.tempo = scene.tempo;
+                tl.has = scene.has; tl.clips = scene.clips;
+                okay = transformTimeline(tl);
+                if (!okay) break;
+                scene.samples = tl.samples; scene.tempo = tl.tempo;
+                scene.clips = std::move(tl.clips);
+            }
+            if (!okay) { d->transformBusy = false; return; }
+            auto ready = std::make_shared<Impl::ProjectSnapshot>(std::move(snap));
+            d->post([this, ready, targetBpm, targetPitchSemitones] {
+                if (d->freeRec || d->freeArmed ||
+                    std::any_of(d->tracks.begin(), d->tracks.end(),
+                        [](const auto& t) { return t->clipRec; })) {
+                    d->transformBusy = false; return;
+                }
+                auto oldAudio = std::make_shared<std::vector<std::shared_ptr<std::vector<float>>>>();
+                oldAudio->reserve(kTracks * 2 + kTracks * kScenes);
+                const int previousSamples = d->loopSamples;
+                for (int i = 0; i < kTracks; ++i) {
+                    auto& tr = *d->tracks[(size_t)i];
+                    oldAudio->push_back(std::move(tr.clip));
+                    tr.clip = ready->current.clips[(size_t)i] ?
+                        ready->current.clips[(size_t)i] : std::make_shared<std::vector<float>>();
+                    tr.clipHas = ready->current.has[(size_t)i];
+                    tr.recPrevOk = false;
+                }
+                if (previousSamples > 0 && ready->current.samples > 0) {
+                    const double ratio = (double)ready->current.samples / previousSamples;
+                    d->pos = std::fmod(d->pos * ratio, (double)ready->current.samples);
+                    d->tapePos = std::fmod(d->tapePos * ratio, (double)ready->current.samples);
+                }
+                d->loopSamples = ready->current.samples;
+                d->bpm = targetBpm;
+                d->a_bpm = d->bpm; d->a_loop = d->loopSamples;
+                for (auto& scene : d->scenes)
+                    for (auto& source : scene.clips) oldAudio->push_back(std::move(source));
+                d->scenes = std::move(ready->savedScenes);
+                d->updateSceneMask();
+                if (d->composition.valid && ready->hasCompose) {
+                    for (auto& source : d->composition.clips) oldAudio->push_back(std::move(source));
+                    d->composition.clips = std::move(ready->compose.clips);
+                    d->composition.samples = ready->compose.samples;
+                    d->composition.tempo = targetBpm;
+                    d->composition.pos = ready->compose.pos;
+                    d->composition.tapePos = ready->compose.tapePos;
+                    d->a_compositionSamples = ready->compose.samples;
+                }
+                d->renderedClipPitch = targetPitchSemitones;
+                d->globalPitchSemis = targetPitchSemitones;
+                d->sceneFadeFrames = std::max(1, d->sr / 180);
+                d->transformBusy = false;
+                d->job([oldAudio] {}); // dispose replaced recordings off the audio callback
+            });
+        });
+    });
+    return true;
+}
+void Session::setSeqTempo(float tempo) {
+    if (!std::isfinite(tempo)) return;
+    d->post([this, tempo] {
+        d->bpm = std::clamp(tempo, 30.f, 300.f);
+        d->a_bpm = d->bpm;
+    });
+}
+void Session::loadSeqSamplePath(const std::string& path, bool kit, int lane, int triggerNote) {
+    if (lane < 0 || lane >= kSeqTracks || !std::filesystem::is_regular_file(path)) return;
+    d->job([this, path, kit, lane, triggerNote] {
+        auto sample = std::make_unique<Sampler>(d->sr);
+        if (!sample->load(path)) { d->a_sampleFails++; return; }
+        sample->setMode(kit ? Sampler::KIT : Sampler::ONESHOT);
+        sample->setRoot((float)std::clamp(triggerNote, 0, 127));
+        auto holder = std::make_shared<std::unique_ptr<Sampler>>(std::move(sample));
+        d->post([this, lane, holder] {
+            std::swap(d->seqLanes[(size_t)lane].sampler, *holder);
+            d->a_seqLoadedMask.fetch_or(1u << lane);
+            d->bury(std::move(*holder));
+        });
+    });
+}
 
 // ---- sampler ----
 void Session::loadSamplePath(const std::string& path, bool kit, int track,
@@ -1571,7 +1802,7 @@ int Session::loopPeaks(int track, float* out, int maxBins) const {
 // Snapshots are captured at one audio callback and written asynchronously.
 namespace {
 constexpr uint32_t kProjectMagic = 0x32504d46;  // FMP2
-constexpr uint32_t kProjectVersion = 2;
+constexpr uint32_t kProjectVersion = 3; // v2 legacy archives remain readable
 constexpr uint64_t kProjectMaxBytes = 536870912ULL; // 512 MiB decompressed
 constexpr uint32_t kSampleMax = 67108864U; // 64 MiB per WAV
 std::string projectPath(const std::string& dir, int slot) {
@@ -1679,6 +1910,27 @@ bool writeProjectFile(const std::string& dir, int slot, const Session::Impl::Pro
             left -= (uint32_t)n;
         }
     }
+    // FMP2 v3 adds eight dedicated sequence instrument WAVs. Legacy v2
+    // archives had only the looper's eight samples and remain readable.
+    for (int i = 0; i < Session::kSeqTracks && ok; ++i) {
+        const auto& src = s.seqSamplePaths[(size_t)i];
+        uint32_t size = 0;
+        if (!src.empty()) {
+            const auto n = fs::file_size(src, ec);
+            if (ec || n == 0 || n > kSampleMax) { ok = false; break; }
+            size = (uint32_t)n;
+        }
+        ok = w.value(size);
+        if (!ok || !size) continue;
+        std::ifstream input(src, std::ios::binary);
+        if (!input) { ok = false; break; }
+        for (uint32_t left = size; left && ok;) {
+            const auto n = (size_t)std::min<uint32_t>(left, (uint32_t)chunk.size());
+            input.read((char*)chunk.data(), (std::streamsize)n);
+            ok = !!input && w.put(chunk.data(), n);
+            left -= (uint32_t)n;
+        }
+    }
     ok = ok && validTimeline(s.current.samples, s.current.bars, s.current.tempo,
                              s.current.pos, s.current.tapePos, s.current.rate, sr)
           && writeTimeline(w, s.current);
@@ -1731,11 +1983,12 @@ bool writeProjectFile(const std::string& dir, int slot, const Session::Impl::Pro
     return true;
 }
 bool readProjectFile(const std::string& file, Session::Impl::ProjectSnapshot& snap,
-                     std::array<std::vector<uint8_t>, Session::kTracks>& assets, int sr) {
+                     std::array<std::vector<uint8_t>, Session::kTracks>& assets,
+                     std::array<std::vector<uint8_t>, Session::kSeqTracks>& seqAssets, int sr) {
     ProjectRead r(file);
     uint32_t magic = 0, ver = 0, rate = 0, metaLen = 0;
     if (!r.value(magic) || !r.value(ver) || !r.value(rate) || !r.value(metaLen) ||
-        magic != kProjectMagic || ver != kProjectVersion ||
+        magic != kProjectMagic || (ver != 2 && ver != kProjectVersion) ||
         rate != (uint32_t)sr || metaLen == 0 || metaLen > 65536) return false;
     snap.appState.resize(metaLen);
     if (!r.get(snap.appState.data(), metaLen)) return false;
@@ -1744,6 +1997,14 @@ bool readProjectFile(const std::string& file, Session::Impl::ProjectSnapshot& sn
         if (!r.value(len) || len > kSampleMax) return false;
         asset.resize(len);
         if (len && !r.get(asset.data(), len)) return false;
+    }
+    if (ver >= 3) {
+        for (auto& asset : seqAssets) {
+            uint32_t len = 0;
+            if (!r.value(len) || len > kSampleMax) return false;
+            asset.resize(len);
+            if (len && !r.get(asset.data(), len)) return false;
+        }
     }
     if (!readTimeline(r, snap.current, sr)) return false;
     uint8_t compose = 0;
@@ -1801,7 +2062,8 @@ bool Session::projectExists(int slot) const {
 }
 int Session::projectOperation() const { return d->projectOp.load(); }
 bool Session::saveProject(int slot, std::vector<uint8_t> meta,
-                          const std::array<std::string, kTracks>& paths) {
+                          const std::array<std::string, kTracks>& paths,
+                          const std::array<std::string, kSeqTracks>& seqPaths) {
     if (slot < 0 || slot >= kProjectSlots || d->dataDir.empty() ||
         meta.empty() || meta.size() > 65536) return false;
     int state = d->projectOp.load();
@@ -1809,12 +2071,12 @@ bool Session::saveProject(int slot, std::vector<uint8_t> meta,
         if (d->projectOp.compare_exchange_weak(state, 1)) break;
     }
     if (d->projectOp.load() != 1 || state == 1 || state == 3) return false;
-    d->post([this, slot, meta = std::move(meta), paths]() mutable {
+    d->post([this, slot, meta = std::move(meta), paths, seqPaths]() mutable {
         if (d->freeRec || d->freeArmed || d->sampling || d->armedWait) {
             d->projectOp = -1; return;
         }
         for (const auto& t : d->tracks) if (t->clipRec) { d->projectOp = -1; return; }
-        auto snapshot = d->captureProject(std::move(meta), paths);
+        auto snapshot = d->captureProject(std::move(meta), paths, seqPaths);
         const auto folder = d->dataDir;
         const int rate = d->sr;
         d->job([this, slot, folder, rate, snapshot = std::move(snapshot)]() mutable {
@@ -1834,7 +2096,8 @@ bool Session::loadProject(int slot) {
     d->job([this, slot, folder] {
         Impl::ProjectSnapshot snap;
         std::array<std::vector<uint8_t>, kTracks> assets;
-        const bool valid = readProjectFile(projectPath(folder, slot), snap, assets, d->sr);
+        std::array<std::vector<uint8_t>, kSeqTracks> seqAssets;
+        const bool valid = readProjectFile(projectPath(folder, slot), snap, assets, seqAssets, d->sr);
         if (!valid) { d->projectOp = -2; return; }
         namespace fs = std::filesystem;
         std::error_code ec;
@@ -1863,9 +2126,30 @@ bool Session::loadProject(int slot) {
             if (ec) { d->projectOp = -2; return; }
             paths[(size_t)t] = asset;
         }
+        std::array<std::string, kSeqTracks> seqPaths{};
+        for (int t = 0; t < kSeqTracks; ++t) {
+            const auto& raw = seqAssets[(size_t)t];
+            if (raw.empty()) continue;
+            const auto asset = target + "/seq_track_" + std::to_string(t + 1) + ".wav";
+            const auto temp = asset + ".tmp";
+            std::ofstream out(temp, std::ios::binary | std::ios::trunc);
+            if (!out) { d->projectOp = -2; return; }
+            out.write((const char*)raw.data(), (std::streamsize)raw.size());
+            out.flush();
+            const bool good = !!out; out.close();
+            if (!good) { d->projectOp = -2; return; }
+            fs::rename(temp, asset, ec);
+            if (ec) {
+                fs::remove(asset, ec); ec.clear();
+                fs::rename(temp, asset, ec);
+            }
+            if (ec) { d->projectOp = -2; return; }
+            seqPaths[(size_t)t] = asset;
+        }
         auto result = std::make_shared<LoadedProject>();
         result->slot = slot; result->appState = std::move(snap.appState);
         result->samplePaths = std::move(paths);
+        result->seqSamplePaths = std::move(seqPaths);
         d->post([this, snap = std::move(snap), result]() mutable {
             d->installProject(std::move(snap));
             { std::lock_guard<std::mutex> lock(d->projectMtx); d->projectReady = result; }
@@ -1974,7 +2258,10 @@ int Session::sampleRate() const { return d->sr; }
 Session::Status Session::status() const {
     Status s{};
     s.playing = d->a_playing; s.pos = d->a_pos; s.loopSamples = d->a_loop;
-    s.bpm = d->a_bpm; s.loopBars = d->a_bars; s.master_peak = d->a_master; s.cpu_permille = d->a_cpu;
+    s.bpm = d->a_bpm; s.loopBars = d->a_bars;
+    s.seqStep = d->a_seqStep; s.seqBeats = d->a_seqBeats; s.seqEnabled = d->a_seqEnabled;
+    s.projectTransformBusy = d->transformBusy;
+    s.seqLoadedMask = d->a_seqLoadedMask; s.master_peak = d->a_master; s.cpu_permille = d->a_cpu;
     const uint32_t cm = d->a_clip_mask, rm = d->a_cliprec_mask;
     for (int i = 0; i < kTracks; i++) {
         s.track_peak[i] = d->tracks[(size_t)i]->peak;
