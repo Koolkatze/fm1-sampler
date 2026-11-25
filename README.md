@@ -2,7 +2,7 @@
 
 Sampler, editor de audio y **looper de 16 pistas** para Android. El teléfono ejecuta el motor de audio, la biblioteca y la interfaz; el **M-VAVE FM-1** puede actuar como superficie de control MIDI por **USB**, con botones, teclado y encoders. El motor y la interfaz se encuentran en `engine/`; Android integra ese motor mediante JNI.
 
-> **Versión 0.42.8 (en validación):** ocho faders independientes de 0 a 150 % en SEQUENCER; se guardan en el proyecto y afectan a SONG export.
+> **Versión 0.42.8 (en validación):** ocho knobs independientes de 0 a 150 % en SEQUENCER; se guardan en el proyecto y afectan a SONG export.
 
 > **Versión 0.42.7 ([release estable](https://github.com/Koolkatze/fm1-sampler/releases/tag/v0.42.7)):** polifonía ampliada por sampler: Melodic, One Shot y Looped 64 voces; Kit 32; Granular 16; Paulstretch 8. Conserva el método de sustituir la voz más antigua cuando se llena el límite.
 
@@ -40,9 +40,9 @@ Las compilaciones debug de GitHub usan **`com.ferluht.fm1sampler.scenes`**; la v
 
 ## Volumen del secuenciador (0.42.8)
 
-- En SEQUENCER, desliza el control situado junto a cada nombre de pista: 0 % silencia, 100 % conserva el volumen original y 150 % aumenta la ganancia. El valor se muestra a la derecha del deslizador.
+- En SEQUENCER, arrastra verticalmente el pequeño knob situado junto a cada nombre de pista: 0 % silencia, 100 % conserva el volumen original y 150 % aumenta la ganancia. El valor se muestra a la derecha del knob.
 - Los ocho niveles son independientes de las 16 pistas COMPOSE y de las velocidades de cada paso. Se aplican a las escenas y pads del mismo proyecto, incluida la exportación SONG. Los cambios se escuchan en directo sin reiniciar las notas.
-- SAVE PROJECT y recuperación automática conservan los niveles; NEW PROJECT y archivos anteriores a 0.42.8 usan 100 %. Se mantienen las asignaciones físicas K1–K4.
+- SAVE PROJECT y recuperación automática conservan los niveles; NEW PROJECT y archivos anteriores a 0.42.8 usan 100 %. **FM-1 físico:** gira SELECT para elegir T1–T8 y ALGORITHM para subir o bajar su volumen (1 % por paso del encoder). K1–K4 mantienen sus funciones originales; ALGORITHM sigue seleccionando el modo de instrumento fuera de SEQUENCER.
 
 ## Polifonía (0.42.7)
 
