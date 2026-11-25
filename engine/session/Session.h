@@ -85,6 +85,7 @@ public:
     void replaceSequencerScene(int slot, int beats, const SeqPattern& grid); // project restoration, one queued update
     void setSequencerBeats(int beats);           // numerator 1..64, denominator 4
     void setSequencerStep(int track, int step, int velocity, int note = 60); // velocity 0..127, note 0..127
+    void setSequencerVolume(int track, float gain); // 0..1.5; 1 = original sequencer level
     void loadSequencerSamplePath(const std::string& path, int track);
     void clearSequencerSample(int track);
     void setMasterBpm(float bpm);

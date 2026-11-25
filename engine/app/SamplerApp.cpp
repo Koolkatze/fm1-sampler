@@ -136,6 +136,13 @@ void SamplerApp::selectSequencerTrack(int t) {
     seqTrack_ = std::max(0, std::min(kSeqTracks - 1, t));
     lastLed_ = ~0ull;
 }
+void SamplerApp::setSequencerVolume(int track, float gain) {
+    if (track < 0 || track >= kSeqTracks || !std::isfinite(gain)) return;
+    gain = std::round(cl(gain, 0.f, 1.5f) * 100.f) / 100.f;
+    if (seqVolume_[(size_t)track] == gain) return;
+    seqVolume_[(size_t)track] = gain;
+    s_.setSequencerVolume(track, gain);
+}
 void SamplerApp::setSequencerPage(int page) {
     seqPage_ = std::max(0, std::min((seqBeats_ * 4 - 1) / 16, page));
     lastLed_ = ~0ull;
@@ -935,7 +942,7 @@ namespace {
 struct FullProjectSettings {
     uint32_t magic = 0x32505041;  // APP2
     // v4 adds independent sequencer and tempo fields without changing the v2/v3 prefix.
-    uint32_t version = 8, bytes = sizeof(FullProjectSettings);
+    uint32_t version = 10, bytes = sizeof(FullProjectSettings);
     std::array<SamplerApp::TrackState, 8> tracks{};
     SamplerApp::ScaleState scale{};
     float reverbSize = .7f, reverbWet = .35f, delayTime = .4f, delayFeedback = .45f;
@@ -975,6 +982,8 @@ struct FullProjectSettings {
     int32_t recoveryPadSlot = -1, recoveryView = 0;
     uint16_t recoveryPadWritable = 0;
     uint8_t recoveryPadCompose = 0, recoveryReserved = 0;
+    // v10: project-wide lane gain, for manual saves and recovery alike.
+    std::array<float, SamplerApp::kSeqTracks> seqVolume{1,1,1,1,1,1,1,1};
 };
 static_assert(std::is_trivially_copyable_v<FullProjectSettings>);
 }
@@ -1009,8 +1018,8 @@ bool SamplerApp::saveProjectSnapshot(int slot, bool force) {
     const bool recovery = slot == Session::kRecoverySlot;
     if (recordingNow() || mic_ != 0) { if (!recovery) say("FINISH RECORDING FIRST"); return false; }
     FullProjectSettings m{};
-    if (recovery) { m.version = 9; m.recoveryPadSlot = padEditSlot_; m.recoveryPadCompose = padCompose_; m.recoveryPadWritable = padWritable_; m.recoveryView = recoveryView_; }
-    else m.bytes = offsetof(FullProjectSettings, recoveryPadSlot);
+    if (recovery) { m.recoveryPadSlot = padEditSlot_; m.recoveryPadCompose = padCompose_; m.recoveryPadWritable = padWritable_; m.recoveryView = recoveryView_; }
+    m.seqVolume = seqVolume_;
     std::copy_n(ts_.begin(), 8, m.tracks.begin());
     std::copy_n(ts_.begin() + 8, 8, m.extraTracks.begin());
     m.metronomeSelected = metroSelected_;
@@ -1133,7 +1142,8 @@ void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
     const bool oldProject = project.appState.size() == legacySize;
     const bool v4Project = project.appState.size() == offsetof(FullProjectSettings, seqScenesVelocity);
     const bool v5Project = project.appState.size() == offsetof(FullProjectSettings, extraTracks);
-    const bool v9Project = project.appState.size() == sizeof(FullProjectSettings);
+    const bool v10Project = project.appState.size() == sizeof(FullProjectSettings);
+    const bool v9Project = v10Project || project.appState.size() == offsetof(FullProjectSettings, seqVolume);
     const bool v8Project = v9Project || project.appState.size() == offsetof(FullProjectSettings, recoveryPadSlot);
     const bool v7Project = v8Project || project.appState.size() == offsetof(FullProjectSettings, padVelocity);
     const bool v6Project = v7Project || project.appState.size() == offsetof(FullProjectSettings, tempoCorrection);
@@ -1143,7 +1153,7 @@ void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
     FullProjectSettings m{};
     std::memcpy(&m, project.appState.data(), project.appState.size());
     if (m.magic != 0x32505041 ||
-        (oldProject ? (m.version != 2 && m.version != 3) : v4Project ? m.version != 4 : v5Project ? m.version != 5 : v9Project ? m.version != 9 : v8Project ? m.version != 8 : v7Project ? m.version != 7 : m.version != 6) ||
+        (oldProject ? (m.version != 2 && m.version != 3) : v4Project ? m.version != 4 : v5Project ? m.version != 5 : v10Project ? m.version != 10 : v9Project ? m.version != 9 : v8Project ? m.version != 8 : v7Project ? m.version != 7 : m.version != 6) ||
         m.bytes != project.appState.size() || m.songSize > 64 ||
         m.selectedTrack < 0 || m.selectedTrack >= kTracks ||
         m.page < 0 || m.page >= kPages || m.selectedScene < 0 ||
@@ -1158,6 +1168,11 @@ void SamplerApp::applyLoadedProject(const Session::LoadedProject& project) {
     std::copy_n(m.tracks.begin(), 8, ts_.begin());
     if (v6Project) std::copy_n(m.extraTracks.begin(), 8, ts_.begin() + 8);
     else for (int i = 8; i < kTracks; ++i) { ts_[(size_t)i] = TrackState{}; ts_[(size_t)i].vol = .8f; }
+    for (int t = 0; t < kSeqTracks; ++t) {
+        const float gain = v10Project && std::isfinite(m.seqVolume[(size_t)t]) ? cl(m.seqVolume[(size_t)t], 0.f, 1.5f) : 1.f;
+        seqVolume_[(size_t)t] = gain;
+        s_.setSequencerVolume(t, gain);
+    }
     padEditSlot_ = -1; padCompose_ = false; padWritable_ = 0;
     metroSelected_ = v6Project && m.metronomeSelected != 0;
     metroBeats_ = v6Project ? std::clamp((int)m.metronomeBeats, 1, 64) : 4;
@@ -1334,7 +1349,7 @@ bool SamplerApp::newFullProject() {
         say("FINISH RECORDING OR EXPORT FIRST"); return false;
     }
     FullProjectSettings m{};
-    m.version = 9; m.recoveryView = 0;
+    m.version = 10; m.recoveryView = 0;
     m.sceneTrackMask16 = 0xffff; m.metronomeMode = 2;
     m.seqScenesBeats.fill(4); m.padBeats.fill(4);
     for (auto& row : m.seqNote) row.fill(60);

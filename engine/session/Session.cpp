@@ -235,6 +235,8 @@ struct Session::Impl {
         a_seqScene = seqAudible ? slot : -1;
     }
     std::array<std::unique_ptr<Sampler>, Session::kSeqTracks> seqSampler{};
+    std::array<float, Session::kSeqTracks> seqVolume{1,1,1,1,1,1,1,1};
+    std::array<float, Session::kSeqTracks> seqVolumeSmooth{1,1,1,1,1,1,1,1};
     std::array<std::string, Session::kSeqTracks> seqSourcePaths{};
     int seqBeats = 4, seqLastStep = -1;
     bool seqEnabled = true;
@@ -412,7 +414,17 @@ struct Session::Impl {
                 cursor = offset;
             }
             if (cursor < n) voice->render(tmp.data() + 2 * cursor, n - cursor);
-            for (int i = 0; i < 2 * n; ++i) out[i] += tmp[(size_t)i] * .78f;
+            // Gain follows the lane, including already sounding sample tails.
+            // Smooth in one audio block, not by retriggering/changing velocity.
+            auto& gain = seqVolumeSmooth[(size_t)t];
+            const float target = seqVolume[(size_t)t];
+            const float delta = (target - gain) / std::max(1, n);
+            for (int i = 0; i < n; ++i) {
+                gain += delta;
+                const float g = .78f * gain;
+                out[2*i] += tmp[2*i] * g; out[2*i+1] += tmp[2*i+1] * g;
+            }
+            gain = target;
         }
     }
 
@@ -1479,6 +1491,11 @@ void Session::setSequencerStep(int track, int step, int velocity, int note) {
             d->seqGrid[(size_t)track][(size_t)step] = hit;
     });
 }
+void Session::setSequencerVolume(int track, float gain) {
+    if (track < 0 || track >= kSeqTracks || !std::isfinite(gain)) return;
+    gain = clampf(gain, 0.f, 1.5f);
+    d->post([this, track, gain] { d->seqVolume[(size_t)track] = gain; });
+}
 void Session::loadSequencerSamplePath(const std::string& path, int track) {
     if (track < 0 || track >= kSeqTracks ||
         !std::filesystem::is_regular_file(path)) return;
@@ -2095,6 +2112,7 @@ bool Session::exportSong(const std::string& directory) {
         const auto scenes = d->scenes; // shared_ptr copy; no audio-data copy
         const auto seqBanks = d->seqBanks;
         const auto seqSourcePaths = d->seqSourcePaths;
+        const auto seqVolume = d->seqVolume;
         const bool seqEnabled = d->seqEnabled;
         const float seqTapePitch = 12.f * std::log2(std::max(.25f, d->pitchedTempo));
         const auto order = d->songOrder;
@@ -2162,7 +2180,7 @@ bool Session::exportSong(const std::string& directory) {
             d->loopExportOp = -2; return; // WAV 32-bit RIFF size limit
         }
 
-        d->job([this, directory, scenes, seqBanks, seqSourcePaths, seqEnabled,
+        d->job([this, directory, scenes, seqBanks, seqSourcePaths, seqVolume, seqEnabled,
                 seqTapePitch, order, sceneFrames, flexible,
                 fx, songFrames, tail]() {
             namespace fs = std::filesystem;
@@ -2175,6 +2193,7 @@ bool Session::exportSong(const std::string& directory) {
             Impl bounce(fx.sampleRate, true);
             bounce.scenes = scenes;
             bounce.seqBanks = seqBanks;
+            bounce.seqVolume = bounce.seqVolumeSmooth = seqVolume;
             bounce.seqEnabled = seqEnabled;
             bounce.seqPitchSemis = fx.globalPitch + seqTapePitch;
             for (int t = 0; t < Session::kSeqTracks; ++t) {

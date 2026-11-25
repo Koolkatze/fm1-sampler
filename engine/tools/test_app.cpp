@@ -1000,6 +1000,7 @@ int main() {
         app.enterSequencer();
         app.selectSequencerScene(0); // write bass note to scene 1, keep scene 2's drums
         app.selectSequencerTrack(5);
+        app.setSequencerVolume(5, .37f); app.setSequencerVolume(2, 1.24f);
         app.setSequencerBeats(11);
         app.setSequencerPage(2);
         app.sequencerSetStepNote(39, 47); // bass-compatible per-step pitch
@@ -1020,6 +1021,7 @@ int main() {
               std::filesystem::file_size("/tmp/fm1sampler_t2/project_1.fm1p") > 100000,
               "project slot 1 contains a real self-contained archive with audio");
         // Mutate all sequencer state, then load; restored data must win.
+        app.setSequencerVolume(5, 0.f); app.setSequencerVolume(2, .5f);
         app.enterSequencer();
         app.selectSequencerTrack(5);
         app.sequencerToggleStep(39);
@@ -1046,6 +1048,8 @@ int main() {
               std::fabs(app.pitchedTempo() - 1.10f) < .001f &&
               std::fabs(app.tempoFlexBpm() - 134.f) < .1f,
               "v5 project restores sequencer meter, steps, bass notes, source and tempo/pitch");
+        CHECK(std::fabs(app.sequencerVolume(5) - .37f) < .001f && std::fabs(app.sequencerVolume(2) - 1.24f) < .001f,
+              "manual project restores independent sequencer lane gains");
         CHECK(std::fabs(app.correctedTempoBpm() - 147.83f) < .001f,
               "full-project save/load preserves hundredth-BPM correction");
         CHECK(app.status().sceneSequencers[2] == 2,
@@ -1714,6 +1718,7 @@ int main() {
             CHECK(a.status().track_has_clip[0], "recovery test has a recorded loop");
             session.play(false); pump(session, a, ms, 180);
             a.enterSequencer(); a.selectSequencerTrack(2); a.sequencerToggleStep(3);
+            a.setSequencerVolume(2, .43f); a.setSequencerVolume(7, 0.f);
             a.exitSequencer(); a.selectTrack(3); a.setCorrectTempoBpm(147.83f);
             session.captureScene(0, 1, 0); pump(session, a, ms, 10);
             a.setSongMode(true); a.selectScene(0); a.songAdd(); pump(session, a, ms, 20);
@@ -1737,7 +1742,8 @@ int main() {
             CHECK(!a.recoveryTransition() && a.status().track_has_clip[0] && a.status().sceneMask == 1 &&
                   a.songOrder().size() == 1 && a.songOrder()[0] == 0 &&
                   a.sequencerHit(2, 3).velocity > 0 && a.track() == 3 && a.restoredView() == 2 &&
-                  std::fabs(a.correctedTempoBpm() - 147.83f) < .02f,
+                  std::fabs(a.correctedTempoBpm() - 147.83f) < .02f &&
+                  std::fabs(a.sequencerVolume(2) - .43f) < .001f && a.sequencerVolume(7) == 0.f,
                   "cold start restores loop, pad, SONG, sequencer, track, tempo and screen");
             SamplerUI u(a); u.setSize(860, 400, 0, 0);
             u.frame(ms); u.openProject(true); u.frame(ms);
@@ -1749,7 +1755,8 @@ int main() {
             pump(session, a, ms, 20);
             CHECK(!a.recoveryTransition() && a.status().sceneMask == 0 && a.songOrder().empty() &&
                   !a.status().track_has_clip[0] && !a.sequencerHit(2, 3).velocity &&
-                  a.fullProjectExists(0), "NEW PROJECT clears only current session, not saved slots");
+                  a.fullProjectExists(0) && a.sequencerVolume(2) == 1.f && a.sequencerVolume(7) == 1.f,
+                  "NEW PROJECT clears only current session and resets lane gains, not saved slots");
         }
         {
             Session session(sr); session.setDataDir(dir); session.setSampleDir(samples);
@@ -1795,6 +1802,45 @@ int main() {
         bool finite = true;
         for (float x : pcm) finite &= std::isfinite(x);
         CHECK(finite, "64-voice melodic render produces finite PCM");
+    }
+    { // Per-lane volume affects sounding tails, without changing steps or the looper.
+        Session session(sr);
+        SamplerApp mixer(session, [](const uint8_t*, size_t) {});
+        mixer.enterSequencer();
+        SamplerUI u(mixer); u.setSize(860, 400, 0, 0);
+        for (bool light : {true, false}) {
+            theme::apply(light);
+            mixer.setSequencerVolume(0, 1.f); mixer.setSequencerVolume(1, 1.f);
+            u.frame(100);
+            u.touch(0, 126, 88, 101); u.touch(2, 126, 88, 101);
+            u.frame(102);
+            u.touch(0, 194, 117, 103); u.touch(2, 194, 117, 103);
+            CHECK(mixer.sequencerVolume(0) == 0.f && mixer.sequencerVolume(1) == 1.5f &&
+                  mixer.sequencerVolume(2) == 1.f && !mixer.sequencerHit(0, 0).velocity,
+                  "%s independent lane faders do not toggle steps", light ? "LIGHT" : "DARK");
+        }
+        theme::apply(true);
+        const std::string path = "/tmp/fm1sampler_t2/polyphony.wav";
+        session.setMetronome(4, 0.f, 0.f, 5);
+        session.loadSequencerSamplePath(path, 0);
+        session.setSequencerVolume(0, 1.f);
+        session.setSequencerStep(0, 0, 100);
+        std::array<float, 512> pcm{};
+        auto pump = [&](int blocks) {
+            double energy = 0.;
+            for (int i = 0; i < blocks; ++i) {
+                session.process(pcm.data(), nullptr, 256);
+                for (float x : pcm) energy += x * x;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            return energy;
+        };
+        pump(250); session.play(true);
+        CHECK(pump(15) > .01, "sequencer at unity gain is audible");
+        session.setSequencerVolume(0, 0.f); pump(2);
+        CHECK(pump(15) < .000001, "muting lane silences an already playing voice");
+        session.setSequencerVolume(0, .5f); pump(2);
+        CHECK(pump(15) > .001, "raising lane gain restores the same voice without retriggering");
     }
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL OK", fails);
     return fails ? 1 : 0;

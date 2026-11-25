@@ -1,4 +1,4 @@
-name: Build FM1 Sampler 0.42.7 expanded sampler polyphony signed APK
+name: Build FM1 Sampler 0.42.8 sequencer lane volumes signed APK
 
 on:
   push:
@@ -126,19 +126,19 @@ jobs:
           info=$("$ANDROID_HOME/build-tools/34.0.0/aapt" dump badging "$apk" | head -n 1)
           echo "$info"
           if [[ "$info" != *"name='com.ferluht.fm1sampler.scenes'"* ]] || \
-             [[ "$info" != *"versionCode='73'"* ]]; then
+             [[ "$info" != *"versionCode='74'"* ]]; then
             echo "::error::APK package or version changed; refusing to publish an incompatible upgrade"
             exit 1
           fi
       - name: Stage and check APK
         run: |
           mkdir -p dist
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-PadEdit-0.42.7-signed.apk
-          unzip -t dist/FM1-Sampler-PadEdit-0.42.7-signed.apk | tail -n 1
-          sha256sum dist/FM1-Sampler-PadEdit-0.42.7-signed.apk
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/FM1-Sampler-PadEdit-0.42.8-signed.apk
+          unzip -t dist/FM1-Sampler-PadEdit-0.42.8-signed.apk | tail -n 1
+          sha256sum dist/FM1-Sampler-PadEdit-0.42.8-signed.apk
       - name: Upload pinned-certificate APK as test-only artifact
         uses: actions/upload-artifact@v4
         with:
-          name: FM1-Sampler-0.42.7-PadEdit-Signed
-          path: dist/FM1-Sampler-PadEdit-0.42.7-signed.apk
+          name: FM1-Sampler-0.42.8-PadEdit-Signed
+          path: dist/FM1-Sampler-PadEdit-0.42.8-signed.apk
           if-no-files-found: error

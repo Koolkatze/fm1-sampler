@@ -126,7 +126,7 @@ jobs:
           info=$("$ANDROID_HOME/build-tools/34.0.0/aapt" dump badging "$apk" | head -n 1)
           echo "$info"
           if [[ "$info" != *"name='com.ferluht.fm1sampler.scenes'"* ]] || \
-             [[ "$info" != *"versionCode='73'"* ]]; then
+             [[ "$info" != *"versionCode='74'"* ]]; then
             echo "::error::APK package or version changed; refusing to publish an incompatible upgrade"
             exit 1
           fi

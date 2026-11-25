@@ -55,6 +55,8 @@ public:
     int sequencerScene() const { return seqScene_; }
     void selectSequencerScene(int slot);
     void selectSequencerTrack(int track);
+    void setSequencerVolume(int track, float gain);
+    float sequencerVolume(int track) const { return seqVolume_[(size_t)std::clamp(track, 0, kSeqTracks - 1)]; }
     int sequencerPage() const { return seqPage_; }
     int sequencerBeats() const { return seqBeats_; }
     int sequencerEditStep() const { return seqEditStep_; }
@@ -301,6 +303,7 @@ private:
     int seqScene_ = 0;
     std::array<std::string, kSeqTracks> seqSourcePaths_{};
     std::array<std::string, kSeqTracks> seqSourceNames_{};
+    std::array<float, kSeqTracks> seqVolume_{1,1,1,1,1,1,1,1};
     float tempoFlexBpm_ = 120.f, pitchedTempo_ = 1.f;
     double observedLoopSamples_ = 0.;
     int observedScene_ = -1;
