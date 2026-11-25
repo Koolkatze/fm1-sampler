@@ -20,9 +20,9 @@ struct SurfaceCell { std::string text; uint16_t fg = 0, bg = 0; bool known = fal
 class SamplerApp {
 public:
     using Send = std::function<void(const uint8_t*, size_t)>;
-    static constexpr int kTracks = 8;
+    static constexpr int kTracks = Session::kTracks;
     enum Button { OCT_DOWN, OCT_UP, FX, SEL, ENV, LFO, EDIT, GLO, HOME, SAVE, ARP, SEQ, PLAY, REC, STOP };  // STOP=14 is an optional external MIDI/software transport; native FM-1 has PLAY
-    enum Page { P_HOME, P_FX, P_ENV, P_LFO, P_ARP, P_SEQ, P_MIX, P_KEY, P_SAVE, P_LEN, P_CUE, P_STEP, P_TEMPO, kPages };
+    enum Page { P_HOME, P_FX, P_ENV, P_LFO, P_ARP, P_SEQ, P_MIX, P_KEY, P_SAVE, P_LEN, P_CUE, P_STEP, P_TEMPO, P_METRO_TEMPO, P_METRO_SETTINGS, P_METRO_CORRECT, kPages };
     struct Knob {
         std::string name, value;
         float norm = 0;
@@ -55,6 +55,8 @@ public:
     int sequencerScene() const { return seqScene_; }
     void selectSequencerScene(int slot);
     void selectSequencerTrack(int track);
+    void setSequencerVolume(int track, float gain);
+    float sequencerVolume(int track) const { return seqVolume_[(size_t)std::max(0, std::min(kSeqTracks - 1, track))]; }
     int sequencerPage() const { return seqPage_; }
     int sequencerBeats() const { return seqBeats_; }
     int sequencerEditStep() const { return seqEditStep_; }
@@ -74,12 +76,17 @@ public:
     int pitchCents() const { return pitchCents_; }
     float pitchedTempo() const { return pitchedTempo_; }
     void setTempoFlexBpm(float bpm);
+    float correctedTempoBpm() const { return tempoFlexBpm_ * pitchedTempo_ * tempoCorrection_; }
+    void setCorrectTempoBpm(float bpm);
+    void tapTempo(uint32_t nowMs);
     void setPitchSemitones(int semis);
     void setPitchCents(int cents);
     void setPitchedTempo(float ratio);
 
     static const char* pageName(Page p);
     int track() const { return track_; }
+    bool metronomeSelected() const { return metroSelected_; }
+    void selectMetronome();
     void selectTrack(int t);
     Knobs knobs();
     Knobs knobs(Page p);
@@ -120,10 +127,14 @@ public:
     void requestLoopExport() { wantLoopExport_ = true; }
     bool wantLoopExport() { bool result = wantLoopExport_; wantLoopExport_ = false; return result; }
     void requestSongExport() {
+        if (songExportState_ == 1) return; // no duplicate requests during render or publication
         if (songOrder_.empty()) { say("NO SCENES IN SONG"); return; }
+        songExportState_ = 1;
         wantSongExport_ = true;
     }
     bool wantSongExport() { const bool requested = wantSongExport_; wantSongExport_ = false; return requested; }
+    int songExportState() const { return songExportState_; } // idle, exporting, published, failed
+    void finishSongExport(bool success) { if (songExportState_ == 1) songExportState_ = success ? 2 : -1; }
     void requestName(int kind) { dialogRequest_ = kind; } // 1 named loop, 2 named project slot
     void requestSaveProjectName(int slot) { pendingProjectSlot_ = slot; dialogRequest_ = 2; }
     int takeDialogRequest() { int request = dialogRequest_; dialogRequest_ = 0; return request; }
@@ -163,9 +174,16 @@ public:
     bool performanceActive() const { return sceneKeys_; }
     void setSongMode(bool song);
     void exitPerformanceMode();
+    bool enterPadEditor(bool sequencer);
+    void leavePadEditor();
+    void goHome();
+    bool padEditing() const { return padEditSlot_ >= 0; }
+    bool padSequencerEditing() const { return padEditing() && !padCompose_; }
+    bool padTrackWritable(int t) const { return !padEditing() || (padCompose_ && t >= 0 && t < kTracks && (padWritable_ & (1u << t))); }
+    int padEditSlot() const { return padEditSlot_; }
     int selectedScene() const { return selectedScene_; }
     void selectScene(int slot, bool trigger = false);
-    uint8_t sceneTracks() const { return sceneTracks_; }
+    uint16_t sceneTracks() const { return sceneTracks_; }
     int loopSequencerScene() const { return loopSeqScene_; } // -1 OFF, 0..7 whole sequencer scene
     void selectLoopSequencerScene(int slot);
     void toggleSceneTrack(int t);
@@ -183,6 +201,14 @@ public:
     // Complete project slots: source WAV, current performance clips, COMPOSE,
     // all scenes, SONG order/position, track settings, and transport.
     bool saveFullProject(int slot);
+    void enableRecovery();
+    void requestCheckpoint(bool finishRecording = false);
+    bool checkpointPending() const;
+    bool newFullProject();
+    bool recoveryTransition() const { return recoveryRestoring_; }
+    void setRecoveryView(int view) { recoveryView_ = view; }
+    int restoredView() const { return restoredView_; }
+    uint32_t recoveryNavigationSerial() const { return recoveryNavigationSerial_; }
     bool loadFullProject(int slot);
     bool fullProjectExists(int slot) const;
     int fullProjectOperation() const { return s_.projectOperation(); }
@@ -242,6 +268,8 @@ private:
     void applyAlgo(int t); void applyEnv(int t); void applyLfo(int t); void applyHome(int t, bool commit = false); void applyArp(int t); void applyRoot(int t); void applySeq(int t); void applyMix(int t);
     void applyFx();
     void applyLoadedProject(const Session::LoadedProject& project);
+    bool saveProjectSnapshot(int slot, bool force = false);
+    void tickRecovery(uint32_t now);
     void queueCommit(int t);
     Knob cont(const char* name, float* v, std::function<std::string(float)> fmt, std::function<void()> apply, float stepSize = 0.02f, bool commit = false);
     Knob choice(const char* name, int* v, std::vector<std::string> opts, std::function<void()> apply);
@@ -250,6 +278,15 @@ private:
     Send send_;
     Page page_ = P_HOME;
     int track_ = 0;
+    bool metroSelected_ = false;
+    int metroBeats_ = 4, metroMode_ = 2; // OFF until user enables click
+    float metroSwing_ = 0.f, metroVolume_ = 0.7f;
+    float tempoCorrection_ = 1.f;
+    uint32_t lastTempoTap_ = 0;
+    bool haveTempoTap_ = false;
+    std::deque<uint32_t> tempoTapIntervals_;
+    void applyCorrectTempo(float bpm);
+    void applyMetronome() { s_.setMetronome(metroBeats_, metroSwing_, metroVolume_, metroMode_); }
     std::array<TrackState, kTracks> ts_;
     bool sequencerMode_ = false;
     int seqTrack_ = 0, seqPage_ = 0, seqBeats_ = 4, seqEditStep_ = 0;
@@ -258,10 +295,15 @@ private:
         std::array<std::array<SequencerHit, kSeqSteps>, kSeqTracks> grid{};
         int beats = 4;
     };
-    std::array<SequencerScene, kSeqScenes> seqScenes_{};
+    std::array<SequencerScene, Session::kSeqBanks> seqScenes_{};
+    int padEditSlot_ = -1, globalSeqScene_ = 0;
+    bool padCompose_ = false;
+    uint16_t padWritable_ = 0;
+    void switchSequencerBank(int slot);
     int seqScene_ = 0;
     std::array<std::string, kSeqTracks> seqSourcePaths_{};
     std::array<std::string, kSeqTracks> seqSourceNames_{};
+    std::array<float, kSeqTracks> seqVolume_{1,1,1,1,1,1,1,1};
     float tempoFlexBpm_ = 120.f, pitchedTempo_ = 1.f;
     double observedLoopSamples_ = 0.;
     int observedScene_ = -1;
@@ -294,6 +336,7 @@ private:
     uint32_t auditionAt_ = 0, previewOffAt_ = 0; int previewNote_ = -1, previewTrack_ = -1;
     bool wantFile_ = false, wantPack_ = false, wantLoopExport_ = false,
          wantSongExport_ = false, previewAfterLoad_ = false;
+    int songExportState_ = 0;
     int dialogRequest_ = 0, pendingProjectSlot_ = -1;
     int pendingProjectLabelSlot_ = -1;
     std::string pendingProjectLabel_;
@@ -302,11 +345,16 @@ private:
     bool loopAny_ = false;
     bool songMode_ = false, scenesLoaded_ = false, sceneKeys_ = false;
     int selectedScene_ = 0, songSelected_ = -1;
-    uint8_t sceneTracks_ = 0xff;   // which loop tracks to capture in the selected pad
+    uint16_t sceneTracks_ = 0xffff;   // which loop tracks to capture in the selected pad
     int loopSeqScene_ = -1; // optional complete sequencer scene chosen for LOOP pad
     std::vector<int> songOrder_;
     int mic_ = 0, micTrack_ = 0;
     int lastProjectOperation_ = 0;
+    bool recoveryEnabled_ = false, recoveryRestoring_ = false, recoveryNew_ = false;
+    bool recoveryRequested_ = false, recoveryFinishing_ = false, recoveryWriting_ = false, recoveryBlocked_ = false;
+    uint32_t recoveryLastAttempt_ = 0, recoveryLastWrite_ = 0, recoveryNavigationSerial_ = 0;
+    uint64_t recoveryFingerprint_ = 0, recoveryPendingFingerprint_ = 0;
+    int recoveryView_ = 0, restoredView_ = 0;
     int lastSampleVersion_ = 0, lastSampleFails_ = 0;
     uint32_t commitAt_ = 0; int commitTrack_ = -1;
     std::string toast_; uint32_t toastUntil_ = 0;
@@ -314,6 +362,7 @@ private:
     // FM-1 link
     struct Frame { int key; std::vector<uint8_t> bytes; };
     std::deque<Frame> pending_; size_t pendingBytes_ = 0;
+    uint32_t lastMetroAt_ = 0;
     uint32_t gap_ = 16, lastSend_ = 0, lastPing_ = 0, lastLoss_ = 0, lastRaise_ = 0, dropped_ = 0, healAt_ = 0, lastDraw_ = 0, nowMs_ = 0;
     bool haveDropBase_ = false, needClear_ = true, needResend_ = false, linkSeen_ = false;
     int pingId_ = 0, healCursor_ = 0;

@@ -5,18 +5,22 @@ public final class Native {
     static { System.loadLibrary("fm1sampler"); }
     public static native long create(String dataDir, String sampleDir);
     public static native void destroy(long h);
-    public static native int startAudio(long h, int deviceId);
+    public static native int startAudio(long h, int deviceId, boolean strictPhoneOutput);
     public static native int startInput(long h, int deviceId);
     public static native void stopAudio(long h);
     public static native boolean audioDead(long h);
     public static native int xruns(long h);
+    public static native boolean metronomeMonitor(long h);
     public static native void midiIn(long h, byte[] data, int off, int n);
     public static native void midiDisconnected(long h);
     public static native byte[] tick(long h, long nowMs);
+    public static native void requestCheckpoint(long h, boolean finishRecording);
+    public static native boolean checkpointPending(long h);
     public static native boolean wantFile(long h);
     public static native boolean wantPack(long h);
     public static native boolean wantLoopExport(long h);
     public static native boolean wantSongExport(long h);
+    public static native void finishSongExport(long h, boolean success);
     public static native boolean exportLoops(long h, String temporaryDirectory);
     public static native boolean exportSong(long h, String temporaryDirectory);
     public static native int loopExportStatus(long h);

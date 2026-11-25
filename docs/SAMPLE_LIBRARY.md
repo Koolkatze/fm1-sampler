@@ -14,9 +14,9 @@ FM1-SAMPLER/
   PROYECTOS/
     project_1.fm1p
     project_1.name
-    fm1_scenes.dat
     project_assets/
-    ... (up to eight complete FMP2 project slots)
+    ... (up to sixteen complete FMP2 project slots)
+    # A legacy fm1_scenes.dat may remain from <= v0.40, but is not auto-loaded
   OFFICIAL/
     Bass/
     Drums/
@@ -32,6 +32,9 @@ FM1-SAMPLER/
     Vaporwave/
       ... complete original ZIP folder hierarchy ...
 ```
+
+
+**Desde Android v0.41:** los pads LOOP y el arreglo SONG solo se conservan entre aperturas mediante **SAVE PROJECT / LOAD PROJECT**. Al iniciar sin cargar ningún proyecto aparecen vacíos. El antiguo `fm1_scenes.dat` se conserva si existía, pero **no se carga ni reescribe automáticamente**; los proyectos `.fm1p` completos siguen incluyendo sus escenas y canciones. Guarda un proyecto y haz SAVE BACKUP con la versión anterior **antes de actualizar** si dependes de escenas antiguas.
 
 All four top-level folders are visible **even while empty**. Existing
 `FM1-SAMPLER` content is not cleared on an app update. Folders are created

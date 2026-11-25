@@ -33,10 +33,15 @@ All values 7-bit. n14 = 2 bytes (hi,lo). color = 3 bytes, RGB565 split 2/7/7 bit
 | 04 TEXT | x n14, y n14, scale (1..4), fg color, bg color, ASCII text (opaque cell 6*scale x 8*scale) |
 | 05 PING | id n14 -> PONG |
 | 06 SCALE | scale root octave+3 mode |
+| 07 METRONOME | bpm×10 n14, numerator (1..64), swing percentage (0..100), volume percentage (0..100), mode (0..5), beat index (0..N−1), fractional beat n14 (0..16383), recording boolean (0/1) |
 | 08 PALETTE | 16 x color: the palette of BLIT |
 | 09 BLIT | x n14, y n14, w n14, h n14 (w*h <= 768), tokens: colour(4)<<3 \| (run-1); run field 7 = next byte adds 8.. |
 | 0A BATCH | repeated { length n14, cmd, payload }: many small commands in one frame (the FM-1 queue counts frames, not bytes) |
 | 7E NOP | ignored, counted (throughput test) |
 
 ## Audio
-Phone -> FM-1 USB audio (44.1 kHz, stereo) is mixed to the jack by stock app/audio_output.c. The stock engine stays silent (no notes reach it).
+The looper uses **16 audio tracks**, plus eight independent sequencer sample lanes, plus one **control-only metronome track** (no looper clip or sample source).
+
+Metronome mode values (K4, second click page): 0 = PLAY/REC (click to phone main mix), 1 = REC (click to phone mix only while recording/overdubbing), 2 = OFF, 3 = PLAY/REC MON, 4 = REC MON, 5 = OFF MON.
+
+In MON modes the Android main mix is requested on the phone's built-in audio output; FM-1 firmware mutes all other signals going to its DAC and synthesizes the click exclusively onto the FM-1 physical 3.5 mm headphone output. The click is inserted **after** `fm1_usb_audio_write` and never enters FM-1 USB capture. In non-MON modes legacy phone-to-FM-1 USB audio routing is preserved. The firmware and phone both use 44.1 kHz; the FM-1 receives periodic beat phase updates from the phone audio clock and slew-corrects limited drift. **Without real-device loopback measurements, USB transfer latency and the two independent DAC clocks prevent claiming demonstrated sample-accurate inter-device alignment.** Do not publish a flashable package as verified until firmware packaging and a physical sync / no-leak test pass.

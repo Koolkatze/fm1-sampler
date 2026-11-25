@@ -14,9 +14,10 @@ public:
     void setSize(float w, float h, float topInset, float bottomInset) { W_ = w; H_ = h; top_ = topInset; bottom_ = bottomInset; }
     void setLink(bool midi, bool usbAudio) { linkMidi_ = midi; linkAudio_ = usbAudio; }
     void frame(uint32_t nowMs);
+    int recoveryView() const { return sheetOpen_ ? 4 : editor_ ? 3 : performanceOpen_ ? 2 : projectOpen_ ? 1 : 0; }
     void pipFrame(uint32_t nowMs);
     void refreshBrowserAfterImport() { if (sheetOpen_) buildBrowserRows(); }
-    void openProject(bool on) { projectOpen_ = on; }
+    void openProject(bool on) { projectOpen_ = on; if (on) performanceOpen_ = false; }
     void setEditor(bool on) { editor_ = on; }   // false: the cassette deck, true: sample / page editor
     const std::vector<UiOp>& ops() const { return ops_; }
     void touch(int action /*0 down 1 move 2 up*/, float x, float y, uint32_t nowMs);
@@ -48,7 +49,7 @@ private:
     void cassette(Rect r);
     void sampleView(Rect r);
     void pageView(Rect r);   // the schematic of the active page in the place of the sample
-    void knob(float cx, float cy, SamplerApp::Page page, int idx, bool unused = false);
+    void knob(float cx, float cy, SamplerApp::Page page, int idx, bool compact = false);
     void timeline(Rect r);
     void key(Rect r, const std::string& label, int icon, bool on, std::function<void()> f, bool hot);
     float loopPos() const;
@@ -67,6 +68,7 @@ private:
         bool directory = false;
     };
     void projectSheet();
+    void performanceSheet();
     void projectSlotsSheet();
 
     SamplerApp& app_;
@@ -76,9 +78,10 @@ private:
     Hit active_{};
     bool haveActive_ = false;
     uint32_t now_ = 0;
-    uint32_t seenHomeNavigation_ = 0;
+    uint32_t seenHomeNavigation_ = 0, seenRecoveryNavigation_ = 0, newProjectConfirmUntil_ = 0;
     Session::Status st_{};
-    bool linkMidi_ = false, linkAudio_ = false, sheetOpen_ = false, editor_ = false, projectOpen_ = false, tempoOpen_ = false;
+    bool linkMidi_ = false, linkAudio_ = false, sheetOpen_ = false, editor_ = false,
+         projectOpen_ = false, performanceOpen_ = false, tempoOpen_ = false;
     float sheetScroll_ = 0, sheetLastY_ = 0, sheetMoved_ = 0;
     std::string browseDir_;   // path relative to FM1-SAMPLER, empty means root
     std::vector<BrowserRow> browseRows_;

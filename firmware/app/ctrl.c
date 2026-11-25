@@ -5,9 +5,10 @@
 #include <string.h>
 #include "fm1.h"
 #include "instrument.h"
+#include "audio_output.h"
 
 enum { SYSEX_MAX = 300, SYSEX_Q = 4, KEYS = 27, BUTTONS = 14, ENC = 7, KEY_BASE = 53 };
-enum { CMD_LED = 1, CMD_CLEAR = 2, CMD_RECT = 3, CMD_TEXT = 4, CMD_PING = 5, CMD_SCALE = 6, CMD_PAL = 8, CMD_BLIT = 9, CMD_BATCH = 10, CMD_NOP = 0x7e };   /* numbers are the wire format (PROTOCOL.md): keep them explicit */
+enum { CMD_LED = 1, CMD_CLEAR = 2, CMD_RECT = 3, CMD_TEXT = 4, CMD_PING = 5, CMD_SCALE = 6, CMD_METRO = 7, CMD_PAL = 8, CMD_BLIT = 9, CMD_BATCH = 10, CMD_NOP = 0x7e };   /* numbers are the wire format (PROTOCOL.md): keep them explicit */
 enum { EV_SCALE = 0x41, EV_REDRAW = 0x42 };
 enum { BTN_OCT_DOWN = 0, BTN_OCT_UP = 1, BTN_SCL = 3, BTN_PLAY = 12 };
 
@@ -281,6 +282,12 @@ static void screen_cmd(unsigned cmd, const uint8_t *p, unsigned len)
         }
         break;
     case CMD_BATCH: screen_batch(p, len); break;
+    case CMD_METRO: /* bpm*10(14), N/4, swing%, volume%, mode, beat, frac(14), recording */
+        if (len >= 10) {
+            fm1_metro_control(n14(p), p[2], p[3], p[4], p[5],
+                              p[6], n14(p + 7), p[9]);
+        }
+        break;
     case CMD_SCALE:  /* scale root octave+3 mode */
         if (len >= 4) scale_set(p[0], p[1], (int)p[2] - 3, p[3]);
         break;

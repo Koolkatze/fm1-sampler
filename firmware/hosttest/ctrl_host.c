@@ -12,6 +12,15 @@ static uint16_t fb[240 * 240];
 static unsigned char midi_log[4096][3]; static unsigned midi_port_log[4096];
 static int midi_n; static int midi_full;
 static unsigned ready_ports = 1U << FM1_MIDI_USB; /* USB only */
+static unsigned captured_metro[8], metro_commands;
+void fm1_metro_control(unsigned bpm10, unsigned beats, unsigned swing,
+                       unsigned volume, unsigned mode, unsigned beat,
+                       unsigned fraction14, unsigned recording)
+{
+    const unsigned values[] = {bpm10, beats, swing, volume, mode, beat, fraction14, recording};
+    memcpy(captured_metro, values, sizeof values);
+    ++metro_commands;
+}
 unsigned fm1_midi_ready_ports(void) { return ready_ports; }
 static unsigned char sx_log[64][40]; static int sx_len[64]; static int sx_n;
 int groove_master_update(unsigned adc) { (void)adc; return 0; }
@@ -50,6 +59,20 @@ static void ppm(const char *p) {
 
 int main(void) {
     groove_screen_init();
+    {  /* USB SysEx 07 must control headphone cue synthesis without stealing UI. */
+        const uint8_t metro[] = {0xf0, 0x7d, 'D', 'A', 'W', 1, 7,
+                                 9, 48, 7, 25, 80, 4, 3, 32, 0, 1, 0xf7};
+        CHECK(ctrl_sysex(metro, sizeof metro) == 1,
+              "metronome clock command is accepted by FM1 USB-MIDI");
+        tick();
+        CHECK(metro_commands == 1 && captured_metro[0] == 1200 &&
+              captured_metro[1] == 7 && captured_metro[2] == 25 &&
+              captured_metro[3] == 80 && captured_metro[4] == 4 &&
+              captured_metro[5] == 3 && captured_metro[6] == 4096 &&
+              captured_metro[7] == 1,
+              "metronome N/4, swing, gain, mode and beat phase decoded correctly");
+    }
+
     /* default scale: MIN, root C, octave 0: key 0 = C4 (60), key 2 = Eb, key 7 = C5 */
     press_key(0, 1); CHECK(last_on() == 60, "key 0 -> %d (C)", last_on()); press_key(0, 0);
     press_key(2, 1); CHECK(last_on() == 63, "key 2 -> %d (Eb, minor third)", last_on()); press_key(2, 0);

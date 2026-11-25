@@ -62,6 +62,7 @@ std::string SamplerUI::fit(const std::string& s, float width, float size) const 
 }
 void SamplerUI::touch(int action, float x, float y, uint32_t now) {
     now_ = now;
+    if (app_.recoveryTransition()) { haveActive_ = false; return; }
     if (action == 0) {
         haveActive_ = false;
         for (size_t i = hits_.size(); i-- > 0;) if (hits_[i].r.has(x, y)) { active_ = hits_[i]; haveActive_ = true; if (active_.down) active_.down(x, y); break; }
@@ -88,17 +89,31 @@ void SamplerUI::frame(uint32_t now) {
         seenHomeNavigation_ = app_.homeNavigationSerial();
         sheetOpen_ = false;
         projectOpen_ = false;
+        performanceOpen_ = false;
         projectSlotsMode_ = 0;
         projectConfirmSlot_ = -1;
         projectConfirmUntil_ = 0;
         editor_ = false;
         tempoOpen_ = false;
     }
+    if (seenRecoveryNavigation_ != app_.recoveryNavigationSerial()) {
+        seenRecoveryNavigation_ = app_.recoveryNavigationSerial();
+        const int view = app_.restoredView();
+        sheetOpen_ = view == 4; editor_ = view == 3; performanceOpen_ = view == 2;
+        projectOpen_ = view == 1; tempoOpen_ = false; projectSlotsMode_ = 0;
+        projectConfirmSlot_ = -1; newProjectConfirmUntil_ = 0; haveActive_ = false;
+        if (sheetOpen_) { app_.refreshLibrary(); buildBrowserRows(); }
+    }
+    app_.setRecoveryView(recoveryView());
     app_.setLibraryBrowserActive(sheetOpen_);
     st_ = app_.status();
     syncColors();
     ops_.clear(); hits_.clear();
     rrect({0, 0, W_, H_}, 0, BG);
+    if (app_.recoveryTransition()) {
+        text(W_ / 2, H_ / 2, 17, ACCENT, "OPENING PROJECT...", 1, true);
+        return;
+    }
     const float tb = 44, left = 176, right = 252;
     if (app_.sequencerMode()) {
         sequencerView();
@@ -109,10 +124,9 @@ void SamplerUI::frame(uint32_t now) {
     if (!editor_) {   // the cassette deck fills the screen; the old sample / page editor stays one tap away (EDIT)
         deck({0, 0, W_, H_});
         if (sheetOpen_) librarySheet();
-        if (projectOpen_) {
-            projectSheet();
-            if (projectSlotsMode_) projectSlotsSheet();
-        }
+        if (projectOpen_) projectSheet();
+        if (performanceOpen_) performanceSheet();
+        if (projectSlotsMode_) projectSlotsSheet();
         if (tempoOpen_) tempoPanel();
         return;
     }
@@ -340,7 +354,7 @@ void SamplerUI::pageView(Rect r) {
         break; }
     case P::P_LEN: {   // the loop as bars: one block per bar with its beats, the orange playhead
         const int bars = std::max(1, st_.loopBars), shown = std::min(bars, 16);
-        head = bars > 0 && st_.loopSamples > 0 ? std::to_string(bars) + (bars == 1 ? " BAR  " : " BARS  ") + num("%.0f BPM", st_.bpm) : "NO LOOP";
+        head = bars > 0 && st_.loopSamples > 0 ? std::to_string(bars) + (bars == 1 ? " BAR  " : " BARS  ") + num("%.0f BPM", app_.correctedTempoBpm()) : "NO LOOP";
         const float gap = 4, bw = (w.w - gap * (shown - 1)) / shown, bh = 44;
         for (int b = 0; b < shown; b++) {
             const float x = w.x + b * (bw + gap);
@@ -426,11 +440,12 @@ void SamplerUI::sampleView(Rect r) {
 }
 
 // A knob of the app (drag up / down to turn): a ring, an orange arc for the value, a pointer, the value under it and its name.
-void SamplerUI::knob(float cx, float cy, SamplerApp::Page page, int idx, bool) {
+void SamplerUI::knob(float cx, float cy, SamplerApp::Page page, int idx, bool compact) {
     auto k = app_.knobs(page);
     const auto& p = k[(size_t)idx];
     if (!p.valid) return;
-    const float R = 25, n = clamp01(p.norm);
+    const float scale = compact ? .60f : 1.f;
+    const float R = 25 * scale, n = clamp01(p.norm);
     auto pt = [&](float rad, float u, float& x, float& y) { const float a = (-135.f + u * 270.f) * kPi / 180; x = cx + std::sin(a) * rad; y = cy - std::cos(a) * rad; };
     auto arc = [&](float u1, uint32_t c, float w) {
         const int N = std::max(1, (int)std::ceil(u1 * 28)); float x0, y0; pt(R, 0, x0, y0); circle(x0, y0, w / 2, c);
@@ -440,9 +455,9 @@ void SamplerUI::knob(float cx, float cy, SamplerApp::Page page, int idx, bool) {
     if (n > 0.004f) arc(n, kOrange, 4.f);
     float x, y; pt(R - 8, n, x, y);
     line(cx, cy, x, y, kPaper, 3.3f); circle(x, y, 1.65f, kPaper); circle(cx, cy, 1.65f, kPaper);
-    text(cx, cy + 39, 13.5f, kPaper, p.value, 1, true);
-    text(cx, cy + 58, 9, kDim, fit(p.name, 100, 9), 1, true);
-    Rect hr{cx - 46, cy - R - 8, 92, 2 * R + 80};
+    text(cx, cy + 39 * scale, compact ? 10.f : 13.5f, kPaper, p.value, 1, true);
+    text(cx, cy + 58 * scale, compact ? 8.f : 9.f, kDim, fit(p.name, 100 * scale, compact ? 8.f : 9.f), 1, true);
+    Rect hr{cx - 46 * scale, cy - R - 8 * scale, 92 * scale, 2 * R + 80 * scale};
     hit(hr, [this, n](float, float y) { dragY_ = y; dragV_ = n; },
         [this, page, idx](float, float y) { app_.knobs(page)[(size_t)idx].set(clamp01(dragV_ + (dragY_ - y) / 110.f)); });
 }
@@ -612,6 +627,24 @@ void SamplerUI::icon(int kind, float cx, float cy, uint32_t c) {
             rrect({cx - 11 + i * 2.7f, cy - heights[i] / 2.f, 2, heights[i]}, 0, c);
         break;
     }
+    case 11: { // sequencer: a compact two-row step grid, same flat icon system
+        for (int i = 0; i < 8; ++i) {
+            const float sx = cx - 10.5f + (i % 4) * 5.7f;
+            const float sy = cy - 10.f + (i / 4) * 11.f;
+            rrect({sx, sy, 4.2f, 4.2f}, R_CONTROL, i == 0 || i == 3 || i == 5 ? kOrange : c);
+        }
+        line(cx - 10.5f, cy + 13.f, cx + 10.5f, cy + 13.f, c, 1.5f);
+        break;
+    }
+    case 12: { // MET: mechanical metronome silhouette and pendulum
+        line(cx - 5.5f, cy - 10.f, cx - 11.f, cy + 10.f, c, 2.f);
+        line(cx + 5.5f, cy - 10.f, cx + 11.f, cy + 10.f, c, 2.f);
+        line(cx - 5.5f, cy - 10.f, cx + 5.5f, cy - 10.f, c, 2.f);
+        line(cx - 11.f, cy + 10.f, cx + 11.f, cy + 10.f, c, 2.f);
+        line(cx, cy + 6.f, cx + 7.f, cy - 12.f, c, 2.f);
+        circle(cx + 4.8f, cy - 6.3f, 2.8f, c);
+        break;
+    }
 
     }
 }
@@ -622,8 +655,11 @@ void SamplerUI::deck(Rect r) {
     const bool recOn = st_.freeRecording || st_.track_clip_rec[t], armed = st_.freeArmed, hasLoop = app_.loopExists() && st_.loopSamples > 0;
     const int mic = app_.micState();
     // One grid: margin M, three zones (tape and transport on the left, tools in the middle, sample and knobs on the right, timeline below).
-    // Every icon sits on a 64 px pitch; the bottom icon of the tools column stands on the transport row.
+    // Six central tools use one evenly spaced vertical grid ending at the transport row.
     const float M = 24, zr = W_ - M, x0 = 440, w0 = zr - x0, mx = 351;
+    const float knobY = 220.f, controlBottom = knobY + 60.f, timelineY = 288.f;
+    const float ty = controlBottom - 12.f; // glyph bottoms align with knob name row
+    const float toolTop = 28.f, toolPitch = (ty - toolTop) / 5.f;
     // Inline browser: NO Android file picker or modal directory window.
     // PRESETS selects within this folder and a selected WAV loads right away;
     // ENTER enters folders only, BACK returns one level.
@@ -642,14 +678,17 @@ void SamplerUI::deck(Rect r) {
         const std::string route = directory.empty() ? "FM1-SAMPLER /" :
                                   "FM1-SAMPLER / " + directory;
         text(M, 61, 9.2f, kDim, fit(route, mx - M - 55, 9.2f), 0, false);
-        // Only the large orange T1..T8 is drawn left of the waveform.
+        // The selected T1..T16 or MET is drawn left of the waveform.
         // No background, outline, decorative stripe or "TRACK" caption.
         // The transparent touch target still cycles through tracks.
         const Rect trackTap{mx + 38, 35, x0 - (mx + 38) - 5, 97};
         text(trackTap.x + trackTap.w / 2, trackTap.y + trackTap.h / 2,
-             26, kOrange, "T" + std::to_string(t + 1), 1, true);
+             26, kOrange, app_.metronomeSelected() ? "MET" : "T" + std::to_string(t + 1), 1, true);
         tap(trackTap, [this, t] {
-            app_.selectTrack((t + 1) % SamplerApp::kTracks);
+            if (app_.padEditing()) { for (int n = 1; n <= SamplerApp::kTracks; ++n) { int next = (t + n) % SamplerApp::kTracks; if (app_.padTrackWritable(next)) { app_.selectTrack(next); break; } } }
+            else if (app_.metronomeSelected()) app_.selectTrack(0);
+            else if (t + 1 == SamplerApp::kTracks) app_.selectMetronome();
+            else app_.selectTrack(t + 1);
         });
     }
     // Compact two-line legend for the FM-1 physical buttons. It is NOT a
@@ -688,48 +727,98 @@ void SamplerUI::deck(Rect r) {
         text(show.x + show.w / 2, show.y + show.h / 2, 8, kPaper, "INFO", 1, true);
         tap(show, [this] { setShortcutHelpVisible(true); });
     }
+    // Show the active project BPM on the lower-left of the tape illustration
+    // in BOTH info states. The reels end above it; do not put BPM beside the
+    // sample knobs or over the bottom waveform/timeline.
+    text(M, 222, 11, kOrange, num("%.0f BPM", app_.correctedTempoBpm()), 0, true);
     // transport: play, stop, record / overdub, clear the loop of this track; the active one is orange and underlined
-    const float ty = 248;
     for (int i = 0; i < 4; i++) {
         const float cx = M + 20 + i * 64;
         const bool on = i == 0 ? st_.playing : i == 2 ? recOn : false;
         icon(i, cx, ty, i == 2 ? kOrange : on ? kOrange : kPaper);
-        if (on) rrect({cx - 12, ty + 17, 24, 2.7f}, 0, kOrange);
-        if (i == 2 && armed && (now_ / 400) % 2 == 0) rrect({cx - 12, ty + 17, 24, 2.7f}, 0, kOrange);
-        tap({cx - 32, ty - 28, 64, 58}, [this, i] {
+        if (on) rrect({cx - 12, ty + 14, 24, 2.7f}, 0, kOrange);
+        if (i == 2 && armed && (now_ / 400) % 2 == 0) rrect({cx - 12, ty + 14, 24, 2.7f}, 0, kOrange);
+        tap({cx - 32, ty - 30, 64, timelineY - 3 - (ty - 30)}, [this, i] {
             if (i == 0) app_.transportSet(true);
             else if (i == 1) app_.transportSet(false);
             else if (i == 2) app_.loopRecord();
             else app_.loopClearTrack();
         });
     }
-    // tools in the middle: theme, microphone, file from disk, project
+    // Uniform 48-unit pitch; the last glyph shares the transport row.
+    // Separate touch zones end before the timeline, including the last tool.
     const uint32_t micCol = mic == 1 || mic == 2 ? kOrange : kPaper;
-    icon(4, mx, 56, kPaper);  tap({mx - 32, 28, 64, 56}, [this] { setLight(!theme::light); });
-    icon(5, mx, 120, micCol); tap({mx - 32, 92, 64, 56}, [this] { app_.micSample(); });
-    // HOME folder icon restores the familiar library page with IMPORT ZIP,
-    // while the physical PRESETS knob continues using the same directory cursor.
-    icon(6, mx, 184, kPaper);
-    text(mx, 211, 8.5f, kDim, "LIBRARY", 1, true);
-    tap({mx - 32, 156, 64, 56}, [this] { openLibrary(); });
-    icon(7, mx, 248, projectOpen_ ? kOrange : kPaper); tap({mx - 32, 220, 64, 56}, [this] { projectOpen_ = true; });
+    auto tool = [&](int index, int glyph, uint32_t color, std::function<void()> action) {
+        const float cy = toolTop + index * toolPitch;
+        icon(glyph, mx, cy, color);
+        const float top = cy - toolPitch * .5f + 1.f;
+        const float bottom = std::min(cy + toolPitch * .5f - 1.f, timelineY - 3.f);
+        tap({mx - 32, top, 64, bottom - top}, std::move(action));
+    };
+    tool(0, 4, kPaper, [this] { setLight(!theme::light); });
+    tool(1, 5, micCol, [this] { app_.micSample(); });
+    tool(2, 11, kPaper, [this] {
+        app_.enterSequencer(); sheetOpen_ = false; tempoOpen_ = false;
+    });
+    tool(3, 6, kPaper, [this] { openLibrary(); });
+    tool(4, 12, app_.metronomeSelected() ? kOrange : kPaper, [this] {
+        app_.selectMetronome(); // respects existing pad-compose protection
+    });
+    tool(5, 7, projectOpen_ ? kOrange : kPaper, [this] {
+        projectOpen_ = true; performanceOpen_ = false;
+    });
     // the sample of this track, its page and the four knobs of the page
-    sampleView({x0, 14, w0, 118});
-    // New modes sit on the same HOME screen, without replacing its tape/editor.
-    button({x0 + 6, 260, 121, 27}, "SEQUENCER", false,
-           [this] { app_.enterSequencer(); sheetOpen_ = false; }, 10, true);
-    button({x0 + 135, 260, 99, 27}, "TEMPO / PITCH", tempoOpen_,
-           [this] { tempoOpen_ = true; }, 9);
-    text(zr - 5, 274, 10, kOrange, num("%.0f BPM", st_.bpm), 2, true);
+    if (app_.metronomeSelected()) {
+        rrect({x0, 14, w0, 118}, R_CARD, SURFACE);
+        stroke({x0, 14, w0, 118}, R_CARD, OUTLINE, 1);
+        text(x0 + 14, 46, 19, ACCENT, "METRONOME", 0, true);
+        text(x0 + 14, 73, 12, TEXT,
+             "TIME SIGNATURE  " + std::to_string(st_.metroBeats) + "/4", 0, true);
+        text(x0 + 14, 99, 10, DIM,
+             st_.metroMode >= 3 ? "FM-1 JACK MONITOR - PHONE MAIN MIX" :
+             st_.metroMode == 2 ? "CLICK OFF" : "CLICK TO MAIN MIX", 0);
+    } else {
+        sampleView({x0, 14, w0, 118});
+        // SEQUENCER now lives in the central icon column. Tempo/pitch
+        // controls are accessible only after selecting the MET track.
+    }
     const float py = 163;
     text(x0, py, 15, kOrange, SamplerApp::pageName(app_.page()), 0, true);
-    for (int i = 0; i < 11; i++) {   // all pages, including CUE, stay accessible from the phone
-        Rect nr{zr - (11 - i) * 19.f, py - 14, 19, 28};
-        rrect({nr.x + 2, py - 2, 15, 4}, 0, kTabs[i] == app_.page() ? kOrange : kLine);
-        tap(nr, [this, i] { app_.gotoPage(kTabs[i]); });
+    if (app_.padEditing()) {
+        button({x0 + 105, 138, 132, 23}, "BACK TO PADS", false, [this] { app_.leavePadEditor(); performanceOpen_ = true; projectOpen_ = false; }, 9);
+        button({x0 + 243, 138, 68, 23}, "HOME", false, [this] { app_.goHome(); }, 9);
     }
-    for (int i = 0; i < 4; i++) knob(x0 + 49 + i * 100, 220, app_.page(), i);
-    timeline({M, 288, W_ - 2 * M, H_ - 288 - 8});
+    if (app_.metronomeSelected()) {
+        // Use precisely the same 19x28 touch targets and 15x4 page markers
+        // as ordinary sample tracks, in the same right-aligned position.
+        const SamplerApp::Page metroTabs[] = {
+            SamplerApp::P_METRO_TEMPO, SamplerApp::P_METRO_SETTINGS, SamplerApp::P_METRO_CORRECT
+        };
+        for (int i = 0; i < 3; ++i) {
+            Rect nr{zr - (3 - i) * 19.f, py - 14, 19, 28};
+            rrect({nr.x + 2, py - 2, 15, 4}, 0,
+                  metroTabs[i] == app_.page() ? kOrange : kLine);
+            tap(nr, [this, i] {
+                app_.gotoPage(i == 0 ? SamplerApp::P_METRO_TEMPO : i == 1 ? SamplerApp::P_METRO_SETTINGS : SamplerApp::P_METRO_CORRECT);
+            });
+        }
+    } else {
+        for (int i = 0; i < 11; ++i) { // all original sample pages still accessible
+            Rect nr{zr - (11 - i) * 19.f, py - 14, 19, 28};
+            rrect({nr.x + 2, py - 2, 15, 4}, 0, kTabs[i] == app_.page() ? kOrange : kLine);
+            tap(nr, [this, i] { app_.gotoPage(kTabs[i]); });
+        }
+    }
+    if (app_.metronomeSelected() && app_.page() == SamplerApp::P_METRO_CORRECT) {
+        const float cell = w0 / 4.f;
+        knob(x0 + cell * .5f, knobY, app_.page(), 0);
+        button({x0 + cell + 4, 189, cell * 2.f - 8, 85}, "TAP TEMPO", false,
+               [this] { app_.tapTempo(now_); }, 18, true);
+        knob(x0 + cell * 3.5f, knobY, app_.page(), 3);
+    } else {
+        for (int i = 0; i < 4; i++) knob(x0 + 49 + i * 100, knobY, app_.page(), i);
+    }
+    timeline({M, timelineY, W_ - 2 * M, H_ - timelineY - 8});
 }
 
 
@@ -740,23 +829,25 @@ void SamplerUI::sequencerView() {
     rrect({0, 0, W_, 49}, 0, SURFACE);
     line(0, 49, W_, 49, OUTLINE, 1);
     button({10, 9, 65, 31}, "HOME", false,
-           [this] { app_.exitSequencer(); sheetOpen_ = false; tempoOpen_ = false; }, 10);
+           [this] { app_.goHome(); sheetOpen_ = false; tempoOpen_ = false; }, 10);
     button({82, 9, 73, 31}, st_.playing ? "STOP" : "PLAY", st_.playing,
            [this] { app_.transportPlay(); }, 10, true);
     button({162, 9, 91, 31}, "LIBRARY", false,
            [this] { openLibrary(); }, 10);
-    button({260, 9, 123, 31}, "TEMPO / PITCH", tempoOpen_,
-           [this] { tempoOpen_ = true; }, 9);
-    if (W_ >= 760) {
-        button({393, 9, 34, 31}, "<", false,
+    // Tempo/pitch is now exclusively under MET; keep scene switching here.
+    if (app_.padSequencerEditing()) {
+        button({260, 9, 122, 31}, "BACK TO PADS", false, [this] { app_.leavePadEditor(); performanceOpen_ = true; projectOpen_ = false; sheetOpen_ = false; }, 10);
+        text(395, 25, 11, ACCENT, "PAD " + SamplerApp::sceneLabel(app_.padEditSlot()), 0, true);
+    } else if (W_ >= 760) {
+        button({260, 9, 34, 31}, "<", false,
                [this] { app_.selectSequencerScene(app_.sequencerScene() - 1); }, 12);
-        text(475, 25, 11, ACCENT,
+        text(355, 25, 11, ACCENT,
              "SCENE " + std::to_string(app_.sequencerScene() + 1) + "/8", 1, true);
-        button({524, 9, 34, 31}, ">", false,
+        button({416, 9, 34, 31}, ">", false,
                [this] { app_.selectSequencerScene(app_.sequencerScene() + 1); }, 12);
     }
     text(W_ - 16, 25, 16, st_.flexProcessing ? ACCENT : TEXT,
-         "SEQUENCER  " + num("%.0f BPM", st_.bpm) + (st_.flexProcessing ? "  FLEX..." : ""), 2, true);
+         "SEQUENCER  " + num("%.0f BPM", app_.correctedTempoBpm()) + (st_.flexProcessing ? "  FLEX..." : ""), 2, true);
 
     const float x0 = 198.f, right = W_ - 14.f;
     const float gridW = std::max(150.f, right - x0);
@@ -764,18 +855,48 @@ void SamplerUI::sequencerView() {
     const float firstY = 76.f, rowH = std::max(20.f, (H_ - 164.f) / 8.f);
     const int firstStep = app_.sequencerPage() * 16;
     const int limit = app_.sequencerBeats() * 4;
-    text(14, 63, 12, ACCENT, "8 EXTRA TRACKS · SCENE " + std::to_string(app_.sequencerScene() + 1) + "/8", 0, true);
-    text(x0, 63, 10, DIM, "SELECT / BLACK KEYS: TRACK    K1: TIMELINE    K4: SCENE    WHITE: STEPS");
+    text(14, 63, 12, ACCENT, app_.padSequencerEditing() ? "PAD PATTERN · AUTO SAVE" : "8 EXTRA TRACKS · SCENE " + std::to_string(app_.sequencerScene() + 1) + "/8", 0, true);
+    text(x0, 63, 10, DIM, "SELECT / BLACK: TRACK   ALGORITHM: VOL   K1: PAGE   K4: SCENE   WHITE: STEPS");
     for (int t = 0; t < SamplerApp::kSeqTracks; ++t) {
         const bool selected = t == app_.sequencerTrack();
         const float y = firstY + rowH * t;
         const Rect row{12, y, x0 - 20, rowH - 3};
         rrect(row, R_CONTROL, selected ? RAISED : SURFACE);
         if (selected) rrect({row.x, row.y, 3, row.h}, 0, ACCENT);
-        text(row.x + 10, y + row.h / 2, 10.5f, selected ? ACCENT : TEXT,
-             "T" + std::to_string(t + 1) + " " + fit(app_.sequencerSoundName(t), row.w - 36, 10.5f),
+        // Compact rotary control fits inside the original 178-unit lane header.
+        const float cx = 145.f, mid = y + row.h / 2, R = std::min(9.f, row.h * .37f);
+        text(row.x + 10, mid, 10.5f, selected ? ACCENT : TEXT,
+             fit("T" + std::to_string(t + 1) + " " + app_.sequencerSoundName(t), cx - R - row.x - 15.f, 10.5f),
              0, selected);
-        tap(row, [this, t] { app_.selectSequencerTrack(t); });
+        tap({row.x, row.y, cx - R - row.x - 4.f, row.h}, [this, t] { app_.selectSequencerTrack(t); });
+        const float volume = app_.sequencerVolume(t), norm = volume / 1.5f;
+        auto pt = [&](float radius, float u, float& px, float& py) {
+            const float angle = (-150.f + u * 300.f) * kPi / 180.f;
+            px = cx + std::sin(angle) * radius; py = mid - std::cos(angle) * radius;
+        };
+        auto arc = [&](float end, uint32_t color, float width) {
+            const int n = std::max(1, (int)std::ceil(end * 20.f));
+            float ax, ay; pt(R, 0.f, ax, ay);
+            for (int i = 1; i <= n; ++i) {
+                float bx, by; pt(R, end * i / n, bx, by);
+                line(ax, ay, bx, by, color, width); ax = bx; ay = by;
+            }
+        };
+        arc(1.f, OUTLINE, 1.8f);
+        if (norm > 0.f) arc(norm, ACCENT, 2.f);
+        float px, py; pt(R * .66f, norm, px, py);
+        line(cx, mid, px, py, TEXT, 1.8f);
+        text(186.f, mid, 9.f, volume == 0.f ? DIM : TEXT,
+             std::to_string((int)std::lround(volume * 100.f)) + "%", 2, true);
+        // Select on touch; vertical drag uses a captured lane, not whatever
+        // is selected by external MIDI during the gesture.
+        hit({cx - 13.f, y, 58.f, row.h},
+            [this, t, norm](float, float py) {
+                app_.selectSequencerTrack(t); dragY_ = py; dragV_ = norm;
+            },
+            [this, t](float, float py) {
+                app_.setSequencerVolume(t, 1.5f * clamp01(dragV_ + (dragY_ - py) / 110.f));
+            });
         for (int col = 0; col < 16; ++col) {
             const int step = firstStep + col;
             const auto hit = app_.sequencerHit(t, step);
@@ -839,21 +960,24 @@ void SamplerUI::tempoPanel() {
 }
 
 void SamplerUI::trackList(Rect r) {
+    // Two columns of eight are legible on the landscape phone and retain
+    // full touch targets rather than squeezing sixteen rows vertically.
+    const float gap = 5.f, cw = (r.w - gap) / 2.f;
     const float rh = (r.h - 7 * 4) / 8;
     for (int i = 0; i < SamplerApp::kTracks; i++) {
-        Rect row{r.x, r.y + i * (rh + 4), r.w, rh};
+        Rect row{r.x + (i / 8) * (cw + gap), r.y + (i % 8) * (rh + 4), cw, rh};
         const bool sel = i == app_.track();
         rrect(row, R_CARD, sel ? RAISED : SURFACE);
         stroke(row, R_CARD, sel ? ACCENT : OUTLINE, sel ? 2 : 1);
         text(row.x + 14, row.y + rh / 2, T_TITLE, sel ? ACCENT : TEXT, std::to_string(i + 1), 1, true);
-        const std::string lab = app_.sampleLabel(i);
-        text(row.x + 30, row.y + rh / 2 - 6, 11, lab.empty() ? DIM : TEXT, fit(lab.empty() ? "EMPTY" : lab, r.w - 40, 11), 0, true);
+        const std::string lab = app_.padTrackWritable(i) ? app_.sampleLabel(i) : "IN USE - LOCKED";
+        text(row.x + 30, row.y + rh / 2 - 6, 11, lab.empty() ? DIM : TEXT, fit(lab.empty() ? "EMPTY" : lab, cw - 40, 11), 0, true);
         // level and loop mark
         const float lv = std::min(1.f, st_.track_peak[i] * 1.5f);
-        rrect({row.x + 30, row.y + rh - 12, r.w - 44, 3}, 0, OUTLINE);
-        rrect({row.x + 30, row.y + rh - 12, (r.w - 44) * lv, 3}, 0, TEXT);
-        if (st_.track_clip_rec[i]) circle(row.x + r.w - 10, row.y + 10, 4, ACCENT);
-        else if (st_.track_has_clip[i]) circle(row.x + r.w - 10, row.y + 10, 3.5f, TEXT);
+        rrect({row.x + 30, row.y + rh - 12, cw - 44, 3}, 0, OUTLINE);
+        rrect({row.x + 30, row.y + rh - 12, (cw - 44) * lv, 3}, 0, TEXT);
+        if (st_.track_clip_rec[i]) circle(row.x + cw - 10, row.y + 10, 4, ACCENT);
+        else if (st_.track_has_clip[i]) circle(row.x + cw - 10, row.y + 10, 3.5f, TEXT);
         tap(row, [this, i] { app_.selectTrack(i); });
     }
 }
@@ -965,9 +1089,33 @@ void SamplerUI::sampleArea(Rect r) {
 
 void SamplerUI::pagePanel(Rect r) {
     const float tw = (r.w - 4 * 4) / 5;
-    for (int i = 0; i < 11; i++) {
-        Rect c{r.x + (i % 5) * (tw + 4), r.y + (i / 5) * 32, tw, 28};
-        button(c, kTabName[i], app_.page() == kTabs[i], [this, i] { app_.gotoPage(kTabs[i]); }, 9.5f);
+    if (app_.metronomeSelected()) {
+        // The editor uses the same compact controls as every other track,
+        // but only the two pages belonging to MET are available.
+        const SamplerApp::Page metroTabs[] = {
+            SamplerApp::P_METRO_TEMPO, SamplerApp::P_METRO_SETTINGS, SamplerApp::P_METRO_CORRECT
+        };
+        const char* metroNames[] = {"TEMPO", "CLICK", "CORRECT TEMPO"};
+        for (int i = 0; i < 3; ++i) {
+            Rect c{r.x + i * (tw + 4), r.y, tw, 28};
+            button(c, metroNames[i], app_.page() == metroTabs[i],
+                   [this, i] {
+                       app_.gotoPage(i == 0 ? SamplerApp::P_METRO_TEMPO : i == 1 ? SamplerApp::P_METRO_SETTINGS : SamplerApp::P_METRO_CORRECT);
+                   }, 9.5f);
+        }
+    } else {
+        for (int i = 0; i < 11; i++) {
+            Rect c{r.x + (i % 5) * (tw + 4), r.y + (i / 5) * 32, tw, 28};
+            button(c, kTabName[i], app_.page() == kTabs[i], [this, i] { app_.gotoPage(kTabs[i]); }, 9.5f);
+        }
+    }
+    if (app_.metronomeSelected() && app_.page() == SamplerApp::P_METRO_CORRECT) {
+        const float cy = r.y + 80, cell = r.w / 4.f;
+        knob(r.x + cell * .5f, cy, app_.page(), 0, true);
+        button({r.x + cell + 3, cy - 30, cell * 2.f - 6, 75}, "TAP TEMPO", false,
+               [this] { app_.tapTempo(now_); }, 12, true);
+        knob(r.x + cell * 3.5f, cy, app_.page(), 3, true);
+        return;
     }
     auto k = app_.knobs();
     const float top = r.y + 104, rh = (r.h - 104) / 4;
@@ -1112,234 +1260,235 @@ void SamplerUI::librarySheet() {
 // PROJECT: original loop actions on the left; scene / song sequencer on the
 // right. Same paper/ink/orange design in either light or dark mode.
 void SamplerUI::projectSheet() {
-    rrect({0, 0, W_, H_}, 0, theme::withAlpha(kBg, 235));
-    tap({0, 0, W_, H_}, [this] { projectOpen_ = false; });
+    // PROJECT is a full-screen menu. The performance editor is NOT rendered
+    // underneath, so it cannot compete for touch targets or space.
+    rrect({0, 0, W_, H_}, 0, BG);
+    const float margin = 14.f, gap = 8.f, width = W_ - 2.f * margin;
+    const float cw = (width - 3.f * gap) / 4.f;
+    text(margin + 2, 31, 19, ACCENT, "PROJECT", 0, true);
+    button({W_ - margin - 90, 10, 90, 32}, "HOME", false, [this] {
+        app_.goHome();
+        projectOpen_ = false; performanceOpen_ = false; editor_ = false;
+    }, 11);
 
-    const float outer = std::max(10.f, std::min(16.f, W_ * 0.02f));
-    const float gap = 10.f;
-    const bool twoColumns = W_ >= 720.f;
-    const float width = twoColumns ? (W_ - 2 * outer - gap) / 2 : W_ - 2 * outer;
-    const Rect left{outer, 12, width, H_ - 24};
-    const Rect right{twoColumns ? outer + width + gap : outer, 12, width, H_ - 24};
-    const bool showLeft = twoColumns || !projectRight_;
-    const bool showRight = twoColumns || projectRight_;
+    button({margin, 51, cw, 52}, "SAVE PROJECT", false,
+           [this] { projectSlotsMode_ = 1; projectPage_ = 0; projectConfirmSlot_ = -1; }, 11);
+    button({margin + cw + gap, 51, cw, 52}, "LOAD PROJECT", false,
+           [this] { projectSlotsMode_ = 2; projectPage_ = 0; projectConfirmSlot_ = -1; }, 11);
+    button({margin + 2 * (cw + gap), 51, cw, 52}, "EXPORT ALL LOOPS", false,
+           [this] { app_.requestLoopExport(); }, 10);
+    button({margin + 3 * (cw + gap), 51, cw, 52}, "LOOP / SONG MODE", false,
+           [this] {
+               app_.leavePadEditor();
+               projectOpen_ = false; performanceOpen_ = true;
+               sceneSaveAt_ = sceneDeleteAt_ = 0;
+           }, 10, true);
 
-    if (showLeft) {
-        rrect(left, R_CARD, SURFACE); stroke(left, R_CARD, OUTLINE, 1);
-        tap(left, [] {});
-    }
-    if (showRight) {
-        rrect(right, R_CARD, SURFACE); stroke(right, R_CARD, OUTLINE, 1);
-        tap(right, [] {});
-    }
-    // A narrow landscape layout switches between the two columns instead of
-    // making buttons overlap or shrinking the text until it is illegible.
-    if (!twoColumns) {
-        button({W_ - outer - 279, 20, 75, 28},
-               projectRight_ ? "PROJECT" : "SCENES", false,
-               [this] { projectRight_ = !projectRight_; }, 10);
-    }
-    button({W_ - outer - 194, 20, 108, 28}, "EXPORT SONG", false,
-           [this] { app_.requestSongExport(); }, 9, true);
-    button({W_ - outer - 79, 20, 71, 28}, "CLOSE", false,
-           [this] { projectOpen_ = false; }, 10);
-
-    if (showLeft) {
-        const int t = app_.track();
-        const bool hasClip = st_.track_has_clip[t];
-        const bool any = app_.loopExists();
-        text(left.x + 14, left.y + 23, 16, ACCENT, "PROJECT", 0, true);
-        // Complete project save/load is separate from SAVE LOOP and SAVE SCENE.
-        // Files contain COMPOSE, live loops, 12 scenes, SONG, samples and FX.
-        const float buttonW = (left.w - 40.f) / 3.f;
-        button({left.x + 10, left.y + 43, buttonW, 24}, "SAVE PROJECT", false,
-               [this] { projectSlotsMode_ = 1; projectPage_ = 0; projectConfirmSlot_ = -1; }, 8.8f);
-        button({left.x + 20 + buttonW, left.y + 43, buttonW, 24}, "LOAD PROJECT", false,
-               [this] { projectSlotsMode_ = 2; projectPage_ = 0; projectConfirmSlot_ = -1; }, 8.8f);
-        button({left.x + 30 + 2 * buttonW, left.y + 43, buttonW, 24},
-               "EXPORT ALL LOOPS", false, [this] { app_.requestLoopExport(); }, 8.8f, true);
-        const std::string note = app_.toast().empty() ? app_.loopText() : app_.toast();
-        text(left.x + 14, left.y + 76, 10, DIM, fit(note, left.w - 26, 10), 0, true);
-        const float rh = std::min(38.f, (left.h - 100.f) / 7.f - 3.f);
-        const float step = (left.h - 100.f) / 7.f;
-        float y = left.y + 86;
-        auto row = [&](const std::string& label, const std::string& hint,
-                       bool enabled, bool highlighted, std::function<void()> onTap) {
-            Rect rr{left.x + 12, y, left.w - 24, rh};
-            rrect(rr, R_CONTROL, highlighted ? RAISED : SURFACE);
-            stroke(rr, R_CONTROL, highlighted ? ACCENT : OUTLINE, highlighted ? 1.7f : 1.f);
-            text(rr.x + 11, rr.y + rh * 0.35f, 11, enabled ? (highlighted ? ACCENT : TEXT) : DIM,
-                 fit(label, rr.w - 22, 11), 0, true);
-            text(rr.x + 11, rr.y + rh * 0.73f, 8.5f, DIM,
-                 fit(hint, rr.w - 22, 8.5f), 0, false);
-            if (enabled) tap(rr, std::move(onTap));
-            y += step;
-        };
-        const std::string tn = "TRACK " + std::to_string(t + 1);
-        row("SAVE LOOP OF " + tn, "choose a name / SAVED / Loops", hasClip, false,
-            [this] { app_.requestName(1); });
-        row("CLEAR LOOP OF " + tn, "the other tracks keep theirs", hasClip, false,
-            [this] { app_.loopClearTrack(); });
-        const bool armed = clearArmed_ && now_ < clearArmed_;
-        row(armed ? "TAP AGAIN: CLEAR ALL LOOPS" : "CLEAR ALL LOOPS",
-            "clears live tracks, NOT saved scenes", any, armed, [this, armed] {
-                if (armed) { app_.loopClear(); clearArmed_ = 0; }
-                else clearArmed_ = now_ + 3000;
-            });
-        row("OPEN THE EDITOR", "sample editor, FX and track controls", true, false,
-            [this] { editor_ = true; projectOpen_ = false; });
-        row("LOOP LENGTH x2", "double the loop, repeat content", any, false,
-            [this] { app_.lenAction(true); });
-        row("LOOP LENGTH /2", "halve loop length", any, false,
-            [this] { app_.lenAction(false); });
-        row("LOOP SOURCE: " + app_.knobs(SamplerApp::P_SAVE)[1].value,
-            "record from track sound or microphone", true, false,
-            [this] { auto k = app_.knobs(SamplerApp::P_SAVE);
-                     k[1].step(k[1].norm > 0.5f ? -1 : 1); });
-    }
-
-    if (!showRight) return;
-
-    const float x = right.x + 12, w = right.w - 24;
-    const float top = right.y + 43;
-    const float scale = std::min(1.f, (right.h - 47.f) / 316.f);
-    const auto Y = [&](float d) { return top + d * scale; };
-    const auto H = [&](float d) { return d * scale; };
-    text(x, right.y + 22, 15, ACCENT, "LOOP / SONG", 0, true);
-
-    // Performance mode selector. Selecting LOOP enables the physical C1..B1
-    // scene bank, while SONG keeps the keyboard available for playing notes.
-    const float third = (w - 10) / 3;
-    button({x, Y(1), third, H(29)}, "COMPOSE", !app_.performanceActive(),
-           [this] { app_.exitPerformanceMode(); projectOpen_ = false; editor_ = false; }, 10);
-    button({x + third + 5, Y(1), third, H(29)}, "LOOP MODE",
-           app_.performanceActive() && !app_.songMode(),
-           [this] { app_.setSongMode(false); }, 10);
-    button({x + 2 * (third + 5), Y(1), third, H(29)}, "SONG MODE",
-           app_.performanceActive() && app_.songMode(),
-           [this] { app_.setSongMode(true); }, 10);
-    text(x, Y(42), 10, DIM,
-         !app_.performanceActive() ? "COMPOSITION: KEYS PLAY NOTES" :
-         app_.songMode() ? "SELECT A PAD TO BUILD THE SONG" : "C1..B1  /  LIVE SCENE LAUNCH", 0, true);
-
-    // Twelve pitched launch pads. Grey is empty; accent is active, outlined
-    // accent is selected or queued. Each pad represents up to eight clips.
-    const float pgap = 4, padW = (w - 5 * pgap) / 6;
-    for (int slot = 0; slot < Session::kScenes; ++slot) {
-        const int row = slot / 6, col = slot % 6;
-        Rect pad{x + col * (padW + pgap), Y(50 + row * 33), padW, H(30)};
-        const bool saved = app_.sceneSaved(slot);
-        const bool selected = app_.selectedScene() == slot;
-        const bool active = st_.activeScene == slot;
-        const bool queued = st_.queuedScene == slot;
-        const uint32_t edge = queued || active ? ACCENT : selected ? TEXT : OUTLINE;
-        rrect(pad, R_CONTROL, active ? RAISED : SURFACE);
-        stroke(pad, R_CONTROL, edge, active || queued || selected ? 2.f : 1.f);
-        text(pad.x + pad.w / 2, pad.y + H(10), 11, saved ? (active ? ACCENT : TEXT) : DIM,
-             SamplerApp::sceneLabel(slot), 1, true);
-        const uint8_t mask = st_.sceneTracks[slot];
-        int count = 0; for (int t = 0; t < SamplerApp::kTracks; ++t) count += (mask >> t) & 1;
-        text(pad.x + pad.w / 2, pad.y + H(23), 8, DIM,
-             queued ? "NEXT" : saved ?
-             (st_.sceneSequencers[slot]
-                ? std::to_string(count) + "L+S" + std::to_string(st_.sceneSequencers[slot])
-                : std::to_string(count) + " LOOPS") : "EMPTY", 1, false);
-        // Selecting a pad for editing must not swap the COMPOSE loops with the
-        // old scene. The separate LAUNCH button (and physical MIDI pads) play it.
-        tap(pad, [this, slot] { app_.selectScene(slot, false); });
-    }
-
-    text(x, Y(122), 10, DIM, "LOOPER TRACKS · " + SamplerApp::sceneLabel(app_.selectedScene()), 0, true);
-    // A LOOP part selects zero or ONE complete sequencer scene; never its lanes.
-    button({x + w - 176, Y(110), 28, H(21)}, "<", false,
-           [this] { app_.selectLoopSequencerScene(app_.loopSequencerScene() - 1); }, 10);
-    text(x + w - 143, Y(122), 10, ACCENT,
-         app_.loopSequencerScene() < 0 ? "SEQ OFF" :
-         "SEQ SCENE " + std::to_string(app_.loopSequencerScene() + 1), 0, true);
-    button({x + w - 30, Y(110), 28, H(21)}, ">", false,
-           [this] { app_.selectLoopSequencerScene(app_.loopSequencerScene() + 1); }, 10);
-    const float trackGap = 4.f, trackW = (w - 7 * trackGap) / 8;
-    for (int t = 0; t < SamplerApp::kTracks; ++t) {
-        const bool on = !!(app_.sceneTracks() & (1u << t));
-        Rect tr{x + t * (trackW + trackGap), Y(131), trackW, H(24)};
-        rrect(tr, R_CONTROL, on ? RAISED : SURFACE);
-        stroke(tr, R_CONTROL, on ? ACCENT : OUTLINE, on ? 2.f : 1.f);
-        text(tr.x + tr.w / 2, tr.y + tr.h / 2, 10, on ? ACCENT : DIM,
-             std::to_string(t + 1), 1, true);
-        tap(tr, [this, t] { app_.toggleSceneTrack(t); });
-    }
-
-    // Scene creation is non-destructive; overwriting/deleting needs a second
-    // confirmation tap so a live performer cannot erase a set by accident.
-    const int slot = app_.selectedScene();
-    const bool saved = app_.sceneSaved(slot);
-    const bool saveArmed = saved && sceneArmedSlot_ == slot && now_ < sceneSaveAt_;
-    const bool delArmed = saved && deleteArmedSlot_ == slot && now_ < sceneDeleteAt_;
-    const float aw = (w - 12) / 4;
-    button({x, Y(163), aw, H(29)},
-           saveArmed ? "CONFIRM SAVE" : saved ? "REPLACE" : "SAVE SCENE",
-           saveArmed, [this, saved, saveArmed, slot] {
-               if (saved && !saveArmed) {
-                   sceneArmedSlot_ = slot; sceneSaveAt_ = now_ + 3000;
-                   app_.say("TAP REPLACE AGAIN");
-               } else {
-                   app_.saveScene(); sceneSaveAt_ = 0;
-               }
-           }, 10);
-    button({x + aw + 4, Y(163), aw, H(29)}, "LAUNCH", false,
-           [this, slot] { app_.setSongMode(false); app_.selectScene(slot, true); }, 10);
-    button({x + 2 * (aw + 4), Y(163), aw, H(29)}, "EXIT", false,
-           [this] { app_.exitPerformanceMode(); projectOpen_ = false; editor_ = false; }, 10);
-    button({x + 3 * (aw + 4), Y(163), aw, H(29)},
-           delArmed ? "CONFIRM DEL" : "DELETE", delArmed,
-           [this, saved, delArmed, slot] {
-               if (!saved) return;
-               if (!delArmed) {
-                   deleteArmedSlot_ = slot; sceneDeleteAt_ = now_ + 3000;
-                   app_.say("TAP DELETE AGAIN");
-               } else {
-                   app_.deleteScene(); sceneDeleteAt_ = 0;
-               }
-           }, 10);
-
-    line(x, Y(202), x + w, Y(202), OUTLINE, 1);
-    const auto& order = app_.songOrder();
-    text(x, Y(215), 10, DIM, "SONG ORDER   " + std::to_string(order.size()) + " SCENES", 0, true);
-    const int show = std::min(6, (int)order.size());
-    const int at = app_.selectedSongStep();
-    const int offset = std::max(0, std::min(std::max(0, (int)order.size() - show), at - 4));
-    if (show == 0) {
-        text(x + w / 2, Y(235), 10, DIM, "CHOOSE A PAD AND TAP ADD", 1, false);
-    } else {
-        const float sg = 4, cellW = (w - 5 * sg) / 6;
-        for (int i = 0; i < show; ++i) {
-            const int seq = offset + i;
-            Rect b{x + i * (cellW + sg), Y(225), cellW, H(27)};
-            const bool playing = st_.songPlaying && st_.songStep == seq;
-            const bool selected = at == seq;
-            rrect(b, R_CONTROL, playing ? RAISED : SURFACE);
-            stroke(b, R_CONTROL, playing ? ACCENT : selected ? TEXT : OUTLINE,
-                   playing || selected ? 2.f : 1.f);
-            text(b.x + b.w / 2, b.y + H(10), 10, playing ? ACCENT : TEXT,
-                 SamplerApp::sceneLabel(order[(size_t)seq]), 1, true);
-            text(b.x + b.w / 2, b.y + H(22), 8, DIM, std::to_string(seq + 1), 1, false);
-            tap(b, [this, seq] { app_.selectSongStep(seq); });
-        }
-    }
-
-    const float ew = (w - 12) / 4;
-    button({x, Y(261), ew, H(27)}, "+ ADD", false, [this] { app_.songAdd(); }, 10);
-    button({x + ew + 4, Y(261), ew, H(27)}, "REMOVE", false, [this] { app_.songRemove(); }, 9);
-    button({x + 2 * (ew + 4), Y(261), ew, H(27)}, "MOVE <", false, [this] { app_.songMove(-1); }, 9);
-    button({x + 3 * (ew + 4), Y(261), ew, H(27)}, "MOVE >", false, [this] { app_.songMove(+1); }, 9);
-
-    const float half = (w - 5) / 2;
-    button({x, Y(298), half, H(30)}, "PLAY SONG", st_.songPlaying,
-           [this] { app_.setSongMode(true); app_.playSong(); }, 11);
-    button({x + half + 5, Y(298), half, H(30)}, "STOP", false,
-           [this] { app_.stopSong(); }, 11);
+    const std::string note = app_.toast().empty() ? app_.loopText() : app_.toast();
+    text(margin + 2, 125, 11, DIM, fit(note, width - 4, 11), 0, true);
+    const int t = app_.track();
+    const bool hasClip = st_.track_has_clip[t], any = app_.loopExists();
+    const bool armed = clearArmed_ && now_ < clearArmed_;
+    const std::string trackName = "TRACK " + std::to_string(t + 1);
+    // Eight roomy menu actions, on a separate grid below project management.
+    // Cards use the original theme tokens and never overlap their neighbors.
+    auto action = [&](int i, const std::string& heading, const std::string& hint,
+                      bool enabled, bool attention, std::function<void()> onClick) {
+        const float y = 143.f + (i / 4) * 94.f;
+        Rect r{margin + (i % 4) * (cw + gap), y, cw, 79.f};
+        rrect(r, R_CONTROL, attention ? RAISED : SURFACE);
+        stroke(r, R_CONTROL, attention ? ACCENT : OUTLINE, attention ? 2.f : 1.f);
+        text(r.x + 9, r.y + 24, 10.5f,
+             enabled ? (attention ? ACCENT : TEXT) : DIM,
+             fit(heading, r.w - 18, 10.5f), 0, true);
+        text(r.x + 9, r.y + 53, 9.f, DIM, fit(hint, r.w - 18, 9.f), 0);
+        if (enabled) tap(r, std::move(onClick));
+    };
+    action(0, "SAVE LOOP " + trackName, "Named WAV / SAVED/LOOPS",
+           hasClip, false, [this] { app_.requestName(1); });
+    action(1, "CLEAR " + trackName, "Only this audio loop",
+           hasClip, false, [this] { app_.loopClearTrack(); });
+    action(2, armed ? "CONFIRM CLEAR ALL" : "CLEAR ALL LOOPS", "Does not erase saved pads",
+           any, armed, [this, armed] {
+               if (armed) { app_.loopClear(); clearArmed_ = 0; }
+               else clearArmed_ = now_ + 3000;
+           });
+    action(3, "SAMPLE EDITOR", "Samples, FX and settings",
+           true, false, [this] { editor_ = true; projectOpen_ = false; });
+    action(4, "LOOP LENGTH x2", "Double loop duration",
+           any, false, [this] { app_.lenAction(true); });
+    action(5, "LOOP LENGTH /2", "Half loop duration",
+           any, false, [this] { app_.lenAction(false); });
+    action(6, "LOOP SOURCE", app_.knobs(SamplerApp::P_SAVE)[1].value,
+           true, false, [this] {
+               auto knobs = app_.knobs(SamplerApp::P_SAVE);
+               knobs[1].step(knobs[1].norm > .5f ? -1 : 1);
+           });
+    const bool newArmed = newProjectConfirmUntil_ && now_ < newProjectConfirmUntil_;
+    action(7, newArmed ? "CONFIRM NEW PROJECT" : "NEW PROJECT", newArmed ? "Discard current unsaved session" : "Start empty / saved projects kept",
+           true, newArmed, [this, newArmed] {
+               if (newArmed) {
+                   if (app_.newFullProject()) { newProjectConfirmUntil_ = 0; projectOpen_ = false; }
+               } else newProjectConfirmUntil_ = now_ + 5000;
+           });
+    text(margin + 4, H_ - 20, 10, DIM,
+         "Current session auto-saves / SAVE PROJECT keeps a separate named copy", 0);
 }
 
+void SamplerUI::performanceSheet() {
+    // Entire screen is dedicated to performance. LOOP and SONG have separate
+    // content layouts; both preserve the existing capture/launch/song engine.
+    rrect({0, 0, W_, H_}, 0, BG);
+    const float x = 14.f, w = W_ - 28.f, gap = 7.f;
+    const float scale = std::max(.7f, H_ / 400.f);
+    const auto Y = [scale](float y) { return y * scale; };
+    const auto H = [scale](float h) { return h * scale; };
+    const float third = std::min(130.f, (w - 200.f) / 4.f);
+    button({x, Y(8), 93, H(38)}, "PROJECT", false, [this] {
+        performanceOpen_ = false; projectOpen_ = true;
+    }, 11);
+    button({x + 101, Y(8), third, H(38)}, "COMPOSE",
+           app_.padEditing(), [this] { if (app_.enterPadEditor(false)) { performanceOpen_ = false; projectOpen_ = false; editor_ = false; } }, 11);
+    button({x + 107 + third, Y(8), third, H(38)}, "LOOP MODE",
+           app_.performanceActive() && !app_.songMode(),
+           [this] { app_.setSongMode(false); }, 11);
+    button({x + 113 + 2 * third, Y(8), third, H(38)}, "SONG MODE",
+           app_.performanceActive() && app_.songMode(),
+           [this] { app_.setSongMode(true); }, 11);
+    button({x + 119 + 3 * third, Y(8), third, H(38)}, "SEQUENCER", false, [this] { if (app_.enterPadEditor(true)) { performanceOpen_ = false; projectOpen_ = false; editor_ = false; } }, 10);
+    button({x + w - 80, Y(8), 80, H(38)}, "HOME", false, [this] {
+        app_.goHome();
+        performanceOpen_ = false; projectOpen_ = false; editor_ = false;
+    }, 11);
+    text(x + 4, Y(62), 11, DIM,
+         app_.songMode() ? "SONG  /  SELECT PAD TO ADD TO THE ARRANGEMENT" :
+         "LOOP  /  SELECT PAD TO EDIT · LAUNCH TO PLAY", 0, true);
+
+    // 12 generously sized pads across two rows, all mutually exclusive.
+    const float padGap = 7.f, padW = (w - 5.f * padGap) / 6.f;
+    for (int slot = 0; slot < Session::kScenes; ++slot) {
+        const bool saved = app_.sceneSaved(slot);
+        const bool selected = app_.selectedScene() == slot;
+        const bool active = st_.activeScene == slot, queued = st_.queuedScene == slot;
+        const int row = slot / 6, col = slot % 6;
+        Rect r{x + col * (padW + padGap), Y(72 + row * 52), padW, H(46)};
+        rrect(r, R_CONTROL, active ? RAISED : SURFACE);
+        stroke(r, R_CONTROL, (queued || active) ? ACCENT : selected ? TEXT : OUTLINE,
+               queued || active || selected ? 2.f : 1.f);
+        text(r.x + r.w / 2.f, r.y + H(16), 13,
+             saved ? (active ? ACCENT : TEXT) : DIM, SamplerApp::sceneLabel(slot), 1, true);
+        int count = 0; const uint16_t mask = st_.sceneTracks[slot];
+        for (int t = 0; t < SamplerApp::kTracks; ++t) count += (mask >> t) & 1;
+        const int seq = st_.sceneSequencers[slot];
+        text(r.x + r.w / 2.f, r.y + H(34), 9.5f, DIM,
+             queued ? "NEXT" : !saved ? "EMPTY" :
+             (seq ? std::to_string(count) + (seq > SamplerApp::kSeqScenes ? "L + PAD SEQ" : "L + SC" + std::to_string(seq))
+                  : std::to_string(count) + " LOOPS"), 1);
+        tap(r, [this, slot] { app_.selectScene(slot, false); });
+    }
+
+    if (!app_.songMode()) {
+        text(x + 4, Y(187), 12, ACCENT,
+             "LOOPER TRACKS  /  PAD " + SamplerApp::sceneLabel(app_.selectedScene()), 0, true);
+        const float trGap = 7.f, trW = (w - 7.f * trGap) / 8.f;
+        for (int t = 0; t < SamplerApp::kTracks; ++t) {
+            const bool selected = (app_.sceneTracks() & (1u << t)) != 0;
+            Rect r{x + (t % 8) * (trW + trGap), Y(200 + (t / 8) * 36),
+                   trW, H(31)};
+            rrect(r, R_CONTROL, selected ? RAISED : SURFACE);
+            stroke(r, R_CONTROL, selected ? ACCENT : OUTLINE, selected ? 2.f : 1.f);
+            text(r.x + r.w / 2, r.y + r.h / 2, 11.5f,
+                 selected ? ACCENT : DIM, "T" + std::to_string(t + 1), 1, true);
+            tap(r, [this, t] { app_.toggleSceneTrack(t); });
+        }
+        text(x + 4, Y(285), 12, ACCENT, app_.loopSequencerScene() >= SamplerApp::kSeqScenes ? "PRIVATE PAD SEQUENCE (AUTO SAVED)" : "SEQUENCER SCENE  /  ONE PATTERN PER PAD", 0, true);
+        const float scGap = 6.f, scW = (w - 8.f * scGap) / 9.f;
+        for (int i = 0; i < 9; ++i) {
+            const int seq = i - 1; // OFF followed by the eight complete SEQ scenes
+            const bool selected = app_.loopSequencerScene() == seq;
+            Rect r{x + i * (scW + scGap), Y(296), scW, H(34)};
+            button(r, seq < 0 ? "OFF" : "SC " + std::to_string(seq + 1),
+                   selected, [this, seq] { app_.selectLoopSequencerScene(seq); },
+                   10.5f, selected);
+        }
+        const int slot = app_.selectedScene();
+        const bool saved = app_.sceneSaved(slot);
+        const bool saveArmed = saved && sceneArmedSlot_ == slot && now_ < sceneSaveAt_;
+        const bool delArmed = saved && deleteArmedSlot_ == slot && now_ < sceneDeleteAt_;
+        const float aw = (w - 3.f * gap) / 4.f;
+        button({x, Y(345), aw, H(40)},
+               saveArmed ? "CONFIRM REPLACE" : saved ? "REPLACE PAD" : "SAVE PAD",
+               saveArmed, [this, slot, saved, saveArmed] {
+                   if (saved && !saveArmed) {
+                       sceneArmedSlot_ = slot; sceneSaveAt_ = now_ + 3000;
+                       app_.say("TAP REPLACE AGAIN");
+                   } else { app_.saveScene(); sceneSaveAt_ = 0; }
+               }, 11, true);
+        button({x + aw + gap, Y(345), aw, H(40)}, "LAUNCH",
+               false, [this, slot] {
+                   app_.setSongMode(false); app_.selectScene(slot, true);
+               }, 11);
+        button({x + 2.f * (aw + gap), Y(345), aw, H(40)}, "EXIT LOOP",
+               false, [this] { app_.exitPerformanceMode(); }, 11);
+        button({x + 3.f * (aw + gap), Y(345), aw, H(40)},
+               delArmed ? "CONFIRM DELETE" : "DELETE PAD",
+               delArmed, [this, slot, saved, delArmed] {
+                   if (!saved) return;
+                   if (!delArmed) {
+                       deleteArmedSlot_ = slot; sceneDeleteAt_ = now_ + 3000;
+                       app_.say("TAP DELETE AGAIN");
+                   } else { app_.deleteScene(); sceneDeleteAt_ = 0; }
+               }, 11);
+    } else {
+        const auto& order = app_.songOrder();
+        const int at = app_.selectedSongStep();
+        text(x + 4, Y(190), 12, ACCENT,
+             "SONG ORDER  /  " + std::to_string(order.size()) + " PADS", 0, true);
+        const int show = std::min(8, (int)order.size());
+        const int offset = std::max(0, std::min(std::max(0, (int)order.size() - show), at - 6));
+        if (show == 0) {
+            text(x + w / 2.f, Y(237), 12, DIM, "SELECT A SAVED PAD, THEN TAP + ADD",
+                 1, true);
+        } else {
+            const float sg = 7.f, sw = (w - 7.f * sg) / 8.f;
+            for (int i = 0; i < show; ++i) {
+                const int index = offset + i;
+                Rect r{x + i * (sw + sg), Y(210), sw, H(58)};
+                const bool selected = at == index;
+                const bool active = st_.songPlaying && st_.songStep == index;
+                rrect(r, R_CONTROL, active ? RAISED : SURFACE);
+                stroke(r, R_CONTROL, active ? ACCENT : selected ? TEXT : OUTLINE,
+                       active || selected ? 2.f : 1.f);
+                text(r.x + r.w / 2, r.y + H(20), 12, active ? ACCENT : TEXT,
+                     SamplerApp::sceneLabel(order[(size_t)index]), 1, true);
+                text(r.x + r.w / 2, r.y + H(42), 10, DIM,
+                     std::to_string(index + 1), 1);
+                tap(r, [this, index] { app_.selectSongStep(index); });
+            }
+        }
+        const float aw = (w - 3.f * gap) / 4.f;
+        button({x, Y(288), aw, H(40)}, "+ ADD PAD", false,
+               [this] { app_.songAdd(); }, 11, true);
+        button({x + aw + gap, Y(288), aw, H(40)}, "REMOVE",
+               false, [this] { app_.songRemove(); }, 11);
+        button({x + 2.f * (aw + gap), Y(288), aw, H(40)}, "MOVE LEFT",
+               false, [this] { app_.songMove(-1); }, 11);
+        button({x + 3.f * (aw + gap), Y(288), aw, H(40)}, "MOVE RIGHT",
+               false, [this] { app_.songMove(+1); }, 11);
+        button({x, Y(345), aw * 2 + gap, H(40)}, "PLAY SONG",
+               st_.songPlaying, [this] { app_.playSong(); }, 11, true);
+        button({x + 2.f * (aw + gap), Y(345), aw, H(40)}, "STOP SONG",
+               false, [this] { app_.stopSong(); }, 11);
+        const int exporting = app_.songExportState();
+        const char* exportLabel = exporting == 1 ? "EXPORTING" :
+            exporting == 2 ? "SONG EXPORTED" : exporting < 0 ? "EXPORT FAILED" : "EXPORT SONG";
+        button({x + 3.f * (aw + gap), Y(345), aw, H(40)}, exportLabel,
+               exporting != 0, [this] { app_.requestSongExport(); }, 11);
+    }
+    const auto toast = app_.toast();
+    if (!toast.empty() && H_ >= 440.f)
+        text(W_ / 2, H_ - 8, 10, ACCENT, fit(toast, w, 10), 1, true);
+}
 
 void SamplerUI::projectSlotsSheet() {
     // Dialog takes precedence over every underlying PROJECT control.

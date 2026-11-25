@@ -35,6 +35,7 @@ struct Engine : public oboe::AudioStreamDataCallback, public oboe::AudioStreamEr
         session.setDataDir(dataDir); session.setSampleDir(sampleDir);   // before the app: it reads the library and loads the first samples
         app = std::make_unique<SamplerApp>(session, [this](const uint8_t* m, size_t n) { out.insert(out.end(), m, m + n); });
         ui = std::make_unique<SamplerUI>(*app);
+        app->enableRecovery();
     }
     oboe::DataCallbackResult onAudioReady(oboe::AudioStream* s, void* data, int32_t frames) override {
         Denormals::enableOnThisThread();
@@ -53,13 +54,14 @@ struct Engine : public oboe::AudioStreamDataCallback, public oboe::AudioStreamEr
     void onErrorAfterClose(oboe::AudioStream* s, oboe::Result r) override { LOG("stream closed: %s", oboe::convertToText(r)); if (s == streamRaw.load()) streamDead = true; }
     std::atomic<oboe::AudioStream*> streamRaw{nullptr};
 
-    int start(int dev) {
+    int start(int dev, bool strictPhoneOutput = false) {
         std::lock_guard<std::mutex> lk(streamMtx);
         deviceId = dev;
-        streamDead = false; streamRaw = nullptr;
+        streamDead = false;
+        if (strictPhoneOutput && !dev) { LOG("MONITOR requires an explicit built-in phone speaker/earpiece"); return -3; } streamRaw = nullptr;
         if (stream) { stream->close(); stream.reset(); }
         oboe::Result r = oboe::Result::ErrorInternal;
-        for (int attempt = 0; attempt < 3; attempt++) {   // exclusive low latency first, then shared, then without the device id
+        for (int attempt = 0; attempt < (strictPhoneOutput ? 2 : 3); attempt++) {   // MON never falls back to the default USB device
             oboe::AudioStreamBuilder b;
             b.setDirection(oboe::Direction::Output)->setPerformanceMode(oboe::PerformanceMode::LowLatency)
                 ->setSharingMode(attempt == 0 ? oboe::SharingMode::Exclusive : oboe::SharingMode::Shared)->setFormat(oboe::AudioFormat::Float)->setChannelCount(2)
@@ -75,6 +77,12 @@ struct Engine : public oboe::AudioStreamDataCallback, public oboe::AudioStreamEr
         streamRaw = stream.get();
         stream->setBufferSizeInFrames(stream->getFramesPerBurst() * 2);
         r = stream->requestStart();
+        if (r == oboe::Result::OK && strictPhoneOutput && stream->getDeviceId() != dev) {
+            LOG("MONITOR route mismatch: requested phone device %d, actual %d", dev, stream->getDeviceId());
+            streamRaw = nullptr;
+            stream->stop(); stream->close(); stream.reset();
+            return -4;
+        }
         LOG("stream started: rate %d burst %d buffer %d sharing %d perf %d dev %d", stream->getSampleRate(), stream->getFramesPerBurst(),
             stream->getBufferSizeInFrames(), (int)stream->getSharingMode(), (int)stream->getPerformanceMode(), stream->getDeviceId());
         return r == oboe::Result::OK ? 0 : -2;
@@ -122,11 +130,12 @@ FN(jlong, create)(JNIEnv* env, jclass, jstring dataDir, jstring sampleDir) {
     return reinterpret_cast<jlong>(e);
 }
 FN(void, destroy)(JNIEnv*, jclass, jlong h) { E(h)->stop(); delete E(h); }
-FN(jint, startAudio)(JNIEnv*, jclass, jlong h, jint dev) { return E(h)->start(dev); }
+FN(jint, startAudio)(JNIEnv*, jclass, jlong h, jint dev, jboolean strict) { return E(h)->start(dev, strict == JNI_TRUE); }
 FN(jint, startInput)(JNIEnv*, jclass, jlong h, jint dev) { return E(h)->startInput(dev); }
 FN(void, stopAudio)(JNIEnv*, jclass, jlong h) { E(h)->stop(); }
 // 1 once when the system closed the output stream under us (the device list changed)
 FN(jboolean, audioDead)(JNIEnv*, jclass, jlong h) { return E(h)->streamDead.exchange(false); }
+FN(jboolean, metronomeMonitor)(JNIEnv*, jclass, jlong h) { return E(h)->session.status().metroMode >= 3; }
 FN(jint, xruns)(JNIEnv*, jclass, jlong h) { auto& e = *E(h); return e.stream ? e.stream->getXRunCount().value() : -1; }
 
 FN(void, midiDisconnected)(JNIEnv*, jclass, jlong h) {
@@ -144,6 +153,7 @@ FN(void, midiIn)(JNIEnv* env, jclass, jlong h, jbyteArray a, jint off, jint n) {
     if (!d) return;
     auto& e = *E(h);
     std::lock_guard<std::mutex> l(e.surfaceMtx);
+    if (e.app->recoveryTransition()) { env->ReleaseByteArrayElements(a, d, JNI_ABORT); return; }
     for (int i = off; i < off + n; i++) {
         const uint8_t s = (uint8_t)d[i];
         if (s >= 0xf8) continue;                        // real time (clock, active sensing): may come anywhere, even inside a SysEx
@@ -171,6 +181,14 @@ FN(jbyteArray, tick)(JNIEnv* env, jclass, jlong h, jlong nowMs) {
     e.out.clear();
     return r;
 }
+FN(void, requestCheckpoint)(JNIEnv*, jclass, jlong h, jboolean finishRecording) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    e.app->requestCheckpoint(finishRecording != JNI_FALSE);
+}
+FN(jboolean, checkpointPending)(JNIEnv*, jclass, jlong h) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    return e.app->checkpointPending();
+}
 // the phone UI asked for the disk picker (LOAD FILE FROM DISK)
 FN(jboolean, wantFile)(JNIEnv*, jclass, jlong h) { auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx); return e.app->wantFile(); }
 // a picked file, already converted to a 16-bit WAV in the data dir: load it on the selected track
@@ -186,6 +204,10 @@ FN(jboolean, wantLoopExport)(JNIEnv*, jclass, jlong h) {
 FN(jboolean, wantSongExport)(JNIEnv*, jclass, jlong h) {
     auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
     return e.app->wantSongExport();
+}
+FN(void, finishSongExport)(JNIEnv*, jclass, jlong h, jboolean success) {
+    auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);
+    e.app->finishSongExport(success != JNI_FALSE);
 }
 FN(jboolean, exportSong)(JNIEnv* env, jclass, jlong h, jstring directory) {
     auto& e = *E(h);
@@ -226,7 +248,7 @@ FN(jboolean, backupReady)(JNIEnv*, jclass, jlong h) {
     auto& e = *E(h);
     std::lock_guard<std::mutex> l(e.surfaceMtx);
     const int op = e.session.projectOperation();
-    return !e.app->recordingNow() && e.app->micState() == 0 && op != 1 && op != 3;
+    return !e.app->recordingNow() && e.app->micState() == 0 && op != 1 && op != 3 && e.session.recoveryOperation() != 1;
 }
 FN(void, refreshLibrary)(JNIEnv*, jclass, jlong h) {
     auto& e = *E(h); std::lock_guard<std::mutex> l(e.surfaceMtx);

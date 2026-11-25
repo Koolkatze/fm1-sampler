@@ -1,4 +1,4 @@
-// The sampler instrument: one sample, up to eight voices, six playback algorithms.
+// The sampler instrument: one sample, up to 64 voices, six playback algorithms.
 //   MELODIC  pitched by the note, ADSR, plays the window once
 //   ONESHOT  pitched by the note, always plays the whole window (note off is ignored)
 //   LOOPED   pitched by the note, ADSR, the window loops while the key is held
@@ -22,7 +22,10 @@ struct SampleBuf {
 class Sampler {
 public:
     enum Mode { MELODIC, ONESHOT, LOOPED, KIT, GRAIN, PAUL, kModes };
-    static constexpr int kVoices = 8;
+    static constexpr int kVoices = 64;
+    static constexpr int kKitVoices = 32, kGrainVoices = 16, kPaulVoices = 8;
+    int activeVoiceCount() const;
+    int voiceLimit() const;
 
     Sampler(int engineRate);
     ~Sampler();
@@ -71,7 +74,7 @@ private:
     std::shared_ptr<const SampleBuf> orig_, proc_;
     float procA_ = 0, procB_ = 1, rangeA_ = 0, rangeB_ = 1, bend_ = 0, atk_ = 0.01f, dec_ = 0.3f, sus_ = 0.8f, rel_ = 0.3f, root_ = 60.f;
     int mode_ = MELODIC; std::vector<int> slices_; std::string label_; std::vector<float> peaks_;
-    Voice voices_[kVoices]; std::vector<std::unique_ptr<PaulStream>> paul_; bool paulBusy_[kVoices] = {};
+    Voice voices_[kVoices]; std::vector<std::unique_ptr<PaulStream>> paul_;
     std::vector<Onset> onsets_; float sliceThr_ = 0.22f, kitSemis_ = 0.f, grainLen_ = 0.12f, grainScatter_ = 1.f, paulStretch_ = 8.f, paulWidth_ = 1.f; int grainN_ = 7; double sliceEnd_ = 0;
     uint32_t bornCounter_ = 0, rng_ = 7;
 };

@@ -1,5 +1,6 @@
 // Host tests of the sampler app: every algorithm sounds, LFO targets, stretch/pitch, tape knobs, arp, loop speed, library, import. Exit code 1 on failure.
 #include <Session.h>
+#include <Sampler.h>
 #include <SamplerApp.h>
 #include <Common.h>
 #include <Stretch.h>
@@ -142,6 +143,141 @@ int main() {
         run(.25);
         CHECK(!app.sequencerMode() && app.page() == SamplerApp::P_HOME,
               "HOME exits SEQUENCER without changing looper tracks");
+    }
+    // The user-facing HOME controls stay minimal in Light and Dark mode:
+    // the step-grid icon shares the central tools column, no persistent
+    // tempo button appears on sample tracks, and MET reuses small page tabs.
+    {
+        SamplerUI ui(app);
+        ui.setSize(860.f, 400.f, 0.f, 0.f);
+        app.selectTrack(0);
+        for (bool light : {true, false}) {
+            theme::apply(light);
+            ui.frame(now + (light ? 10 : 11));
+            bool toolbarText = false, obsoleteButton = false;
+            bool seqGlyph = false, libraryGlyph = false, metGlyph = false;
+            for (const auto& op : ui.ops()) {
+                if (op.type == UiOp::TEXT) {
+                    toolbarText |= std::fabs(op.f[0] - 351.f) < 1.f &&
+                        (op.text == "SEQ" || op.text == "LIBRARY" || op.text == "MET");
+                    obsoleteButton |= op.text == "TEMPO / PITCH" || op.text == "SEQUENCER";
+                }
+                if (op.type == UiOp::RRECT) {
+                    seqGlyph |= std::fabs(op.f[0] - 340.5f) < .2f &&
+                        std::fabs(op.f[1] - 114.f) < .2f && std::fabs(op.f[2] - 4.2f) < .2f;
+                    libraryGlyph |= std::fabs(op.f[0] - 341.f) < .2f &&
+                        std::fabs(op.f[1] - 163.3f) < .2f && std::fabs(op.f[2] - 7.3f) < .2f;
+                }
+                if (op.type == UiOp::LINE)
+                    metGlyph |= std::fabs(op.f[0] - 345.5f) < .2f &&
+                        std::fabs(op.f[1] - 210.f) < .2f &&
+                        std::fabs(op.f[2] - 340.f) < .2f && std::fabs(op.f[3] - 230.f) < .2f;
+            }
+            CHECK(seqGlyph && libraryGlyph && metGlyph && !toolbarText && !obsoleteButton,
+                  "%s HOME retains central SEQ, LIBRARY and MET glyphs with no labels",
+                  light ? "LIGHT" : "DARK");
+            // Test the BPM against both sizes of the tape illustration (INFO
+            // shown/hidden), while ensuring it is never drawn beside K1..K4.
+            for (bool help : {true, false}) {
+                ui.setShortcutHelpVisible(help);
+                ui.frame(now + (help ? 19 : 20));
+                int bpmAtTape = 0, bpmElsewhere = 0;
+                bool projectAtTransportLevel = false, stopAligned = false, knobLabelAligned = false;
+                for (const auto& op : ui.ops()) {
+                    if (op.type == UiOp::TEXT &&
+                        op.text.find(" BPM") != std::string::npos) {
+                        if (std::fabs(op.f[0] - 24.f) < 1.f &&
+                            std::fabs(op.f[1] - 226.f) < 2.f) ++bpmAtTape;
+                        else ++bpmElsewhere;
+                    }
+                    // PROJECT and STOP use the same 268 center. Their glyph bottoms
+                    // sit within two units of the knob names' baseline.
+                    if (op.type == UiOp::RRECT &&
+                        std::fabs(op.f[0] - 341.f) < .2f &&
+                        std::fabs(op.f[1] - 258.7f) < .2f &&
+                        std::fabs(op.f[2] - 20.f) < .2f &&
+                        std::fabs(op.f[3] - 3.4f) < .2f)
+                        projectAtTransportLevel = true;
+                    if (op.type == UiOp::RRECT && std::fabs(op.f[0] - 98.7f) < .2f &&
+                        std::fabs(op.f[1] - 258.7f) < .2f && std::fabs(op.f[3] - 18.6f) < .2f) stopAligned = true;
+                    if (op.type == UiOp::TEXT && op.f[0] >= 440.f && std::fabs(op.f[1] - 281.24f) < .5f) knobLabelAligned = true;
+                }
+                CHECK(bpmAtTape == 1 && bpmElsewhere == 0 && projectAtTransportLevel && stopAligned && knobLabelAligned,
+                      "%s HOME (%s INFO) shows BPM on tape's left and aligns PROJECT with PLAY",
+                      light ? "LIGHT" : "DARK", help ? "WITH" : "WITHOUT");
+            }
+            ui.setShortcutHelpVisible(true);
+            ui.frame(now + 21);
+            // The last tool's touch area ends at y285, before the timeline.
+            ui.touch(0, 351.f, 286.f, now + 12);
+            ui.touch(2, 351.f, 286.f, now + 12);
+            CHECK(!app.sequencerMode(),
+                  "%s central toolbar does not overlap bottom timeline",
+                  light ? "LIGHT" : "DARK");
+            ui.touch(0, 351.f, 130.f, now + 13);
+            ui.touch(2, 351.f, 130.f, now + 13);
+            CHECK(app.sequencerMode(),
+                  "%s central step-grid icon opens sequencer",
+                  light ? "LIGHT" : "DARK");
+            app.exitSequencer();
+
+            ui.frame(now + 13);
+            ui.touch(0, 351.f, 220.f, now + 14);
+            ui.touch(2, 351.f, 220.f, now + 14);
+            CHECK(app.metronomeSelected(), "%s MET icon selects the metronome directly", light ? "LIGHT" : "DARK");
+            ui.frame(now + 14);
+            bool bigTempoButton = false, metroVisible = false;
+            for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+                bigTempoButton |= op.text == "TEMPO / PITCH" ||
+                    op.text == "METER / CLICK";
+                metroVisible |= op.text == "METRONOME";
+            }
+            CHECK(metroVisible && !bigTempoButton &&
+                  app.page() == SamplerApp::P_METRO_TEMPO,
+                  "%s MET displays only native small page selectors",
+                  light ? "LIGHT" : "DARK");
+            // Standard page markers are 19x28 touch zones, right-aligned
+            // at x798 and x817 (W=860, 24px right margin).
+            ui.touch(0, 806.f, 163.f, now + 15);
+            ui.touch(2, 806.f, 163.f, now + 15);
+            CHECK(app.page() == SamplerApp::P_METRO_SETTINGS,
+                  "%s second tiny MET selector opens METER/CLICK",
+                  light ? "LIGHT" : "DARK");
+            ui.frame(now + 16);
+            ui.touch(0, 787.f, 163.f, now + 17);
+            ui.touch(2, 787.f, 163.f, now + 17);
+            CHECK(app.page() == SamplerApp::P_METRO_TEMPO,
+                  "%s first tiny MET selector returns to TEMPO/PITCH",
+                  light ? "LIGHT" : "DARK");
+            ui.frame(now + 18);
+            ui.touch(0, 826.f, 163.f, now + 19);
+            ui.touch(2, 826.f, 163.f, now + 19);
+            ui.frame(now + 20);
+            CHECK(app.page() == SamplerApp::P_METRO_CORRECT &&
+                  app.knobs()[0].valid && !app.knobs()[1].valid && !app.knobs()[2].valid && app.knobs()[3].valid,
+                  "%s third MET page has correction, wide tap target and decimal knob",
+                  light ? "LIGHT" : "DARK");
+            bool tapVisible = false, fineVisible = false;
+            for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+                tapVisible |= op.text == "TAP TEMPO";
+                fineVisible |= op.text == "DECIMALS";
+            }
+            CHECK(tapVisible && fineVisible, "%s TAP TEMPO and DECIMALS are visible", light ? "LIGHT" : "DARK");
+            const float priorBpm = app.correctedTempoBpm();
+            app.setCorrectTempoBpm(120.25f);
+            ui.frame(now + 21);
+            ui.touch(0, 786.5f, 220.f, now + 22);
+            ui.touch(1, 786.5f, 165.f, now + 23);
+            ui.touch(2, 786.5f, 165.f, now + 24);
+            CHECK(std::fabs(app.correctedTempoBpm() - 120.75f) < .011f,
+                  "%s right-hand decimal knob changes fractional BPM by touch", light ? "LIGHT" : "DARK");
+            enc(5, 1);
+            CHECK(std::fabs(app.correctedTempoBpm() - 120.76f) < .011f,
+                  "physical K4 increases tempo by exactly one hundredth");
+            app.setCorrectTempoBpm(priorBpm);
+            app.selectTrack(0);
+        }
+        theme::apply(true);
     }
     // Empty SONG must not cause a file picker, or publish any audio at all.
     app.requestSongExport();
@@ -608,7 +744,9 @@ int main() {
         CHECK(app.songOrder()[1] == 0 && app.songOrder()[2] == 2, "Song Mode can reorder steps");
         app.songMove(+1); run(0.1);
         app.requestSongExport();
-        CHECK(app.wantSongExport(), "valid three-step SONG requests processed export");
+        CHECK(app.songExportState() == 1 && app.wantSongExport(), "valid three-step SONG requests processed export");
+        app.requestSongExport();
+        CHECK(!app.wantSongExport(), "EXPORTING blocks duplicate taps");
         const std::string songDir = "/tmp/fm1sampler_t2/song_export_three_scenes";
         CHECK(s.exportSong(songDir), "export entire C1-D1-C1 SONG starts");
         for (int k = 0; k < 220 && s.loopExportStatus() == 1; ++k) run(0.04);
@@ -620,6 +758,14 @@ int main() {
               songAudio.size() > (size_t)compositionLength * 2 * 3 &&
               songEnergy > 0.01,
               "EXPORT SONG renders all 3 ordered scenes plus the reverb/delay tail");
+        CHECK(app.songExportState() == 1, "rendered WAV alone does not mark public export complete");
+        // Android calls this only after MediaStore publication succeeds.
+        app.finishSongExport(true);
+        CHECK(app.songExportState() == 2, "publication marks SONG EXPORTED");
+        app.requestSongExport();
+        CHECK(app.songExportState() == 1 && app.wantSongExport(), "completed song may be exported again");
+        app.finishSongExport(false);
+        CHECK(app.songExportState() == -1, "publication error never claims SONG EXPORTED");
         app.playSong(); run(0.12);
         CHECK(app.status().songPlaying && app.status().songStep == 0 &&
               app.status().activeScene == 0, "Song starts on its first scene");
@@ -633,8 +779,23 @@ int main() {
         CHECK(!app.status().songPlaying && !app.status().playing,
               "Song ends after the final scene instead of looping forever");
         run(0.4);
-        CHECK(std::filesystem::exists("/tmp/fm1sampler_t2/fm1_scenes.dat"),
-              "saved scenes and Song Mode order are persisted for the next launch");
+        CHECK(!std::filesystem::exists("/tmp/fm1sampler_t2/fm1_scenes.dat"),
+              "unsaved LOOP pads and SONG are NOT written to a global startup file");
+        // Simulate an old installation with a once-autosaved SCN3 sidecar:
+        // it must be left intact for recovery but ignored at app startup.
+        {
+            const std::string oldFile = "/tmp/fm1sampler_t2/fm1_scenes.dat";
+            std::ofstream legacy(oldFile, std::ios::binary | std::ios::trunc);
+            const uint32_t magic = 0x334E4353, rate = (uint32_t)sr, zero = 0;
+            legacy.write(reinterpret_cast<const char*>(&magic), sizeof(magic));
+            legacy.write(reinterpret_cast<const char*>(&rate), sizeof(rate));
+            for (int scene = 0; scene < Session::kScenes; ++scene) {
+                uint8_t empty[2] = {0, 0};
+                legacy.write(reinterpret_cast<const char*>(empty), sizeof(empty));
+            }
+            legacy.write(reinterpret_cast<const char*>(&zero), sizeof(zero));
+            CHECK(legacy.good(), "valid legacy SCN3 fixture stored for no-autorestore test");
+        }
         {
             Session restored(sr);
             restored.setDataDir("/tmp/fm1sampler_t2");
@@ -646,12 +807,11 @@ int main() {
                 if (loaded.arrangementLoaded) break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(4));
             }
-            CHECK(loaded.arrangementLoaded && (loaded.sceneMask & 5u) == 5u &&
-                  loaded.sceneTracks[0] == 1u && (loaded.sceneTracks[2] & 3u) == 3u &&
-                  loaded.sceneSequencers[2] == 2 &&
-                  loaded.arrangementSize == 3 && loaded.arrangement[0] == 0 &&
-                  loaded.arrangement[1] == 2 && loaded.arrangement[2] == 0,
-                  "saved C1/D1 loop packs and the C1-D1-C1 song survive app restart");
+            CHECK(loaded.sceneMask == 0 && loaded.arrangementSize == 0 &&
+                  !loaded.songPlaying && !loaded.compositionValid,
+                  "new app session starts with EMPTY LOOP pads and SONG, even if legacy scenes file exists");
+            CHECK(std::filesystem::exists("/tmp/fm1sampler_t2/fm1_scenes.dat"),
+                  "legacy scene backup is not deleted when new project-only behavior starts");
         }
 
         // Project sheet must render two separate columns in both existing themes.
@@ -696,62 +856,131 @@ int main() {
         ui.touch(0, 297, 69, now + 4);
         ui.touch(2, 297, 69, now + 4);
         CHECK(ui.shortcutHelpVisible(), "INFO chip reopens physical shortcuts");
+        // Full-screen PROJECT menu is separate from the full-screen
+        // LOOP/SONG editor. No dual-column overlay or tiny scene controls.
         ui.openProject(true);
         for (bool light : {true, false}) {
             theme::apply(light);
             ui.frame(now + (light ? 1 : 2));
-            bool project = false, song = false, pad = false;
+            bool project = false, entry = false, songEditor = false, slots = false;
             for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
                 project |= op.text == "PROJECT";
-                song |= op.text == "SONG MODE";
-                pad |= op.text == "C1";
+                entry |= op.text == "LOOP / SONG MODE";
+                slots |= op.text == "SAVE PROJECT";
+                songEditor |= op.text == "SONG ORDER";
             }
-            CHECK(project && song && pad,
-                  "PROJECT and scene/song editor render together in %s theme",
-                  light ? "light" : "dark");
+            CHECK(project && entry && slots && !songEditor,
+                  "%s PROJECT menu has large LOOP/SONG entry, not overlapping editor",
+                  light ? "LIGHT" : "DARK");
+            ui.touch(0, 740.f, 76.f, now + 3);
+            ui.touch(2, 740.f, 76.f, now + 3);
+            ui.frame(now + 4);
+            // The preceding song-playback test may still be in SONG mode.
+            // Pick LOOP explicitly using its actual full-screen tab.
+            ui.touch(0, 297.f, 28.f, now + 4);
+            ui.touch(2, 297.f, 28.f, now + 4);
+            ui.frame(now + 4);
+            int tracks = 0, seqButtons = 0, pads = 0;
+            bool loopScene = false, songScene = false, songOrder = false;
+            for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+                if (op.text.size() >= 2 && op.text[0] == 'T' &&
+                    op.text[1] >= '1' && op.text[1] <= '9' &&
+                    op.text.size() <= 3 && op.f[1] > 200.f && op.f[1] < 275.f)
+                    ++tracks;
+                if (op.text.rfind("SC ", 0) == 0 && op.text.size() <= 4) ++seqButtons;
+                pads += op.text == "C1" || op.text == "D1";
+                loopScene |= op.text.find("SEQUENCER SCENE") != std::string::npos;
+                songScene |= op.text == "SONG MODE";
+                songOrder |= op.text == "SONG ORDER";
+            }
+            CHECK(tracks == 16 && seqButtons == 8 && pads >= 2 &&
+                  loopScene && songScene && !songOrder,
+                  "%s LOOP fills whole view with 12 pads, 16 tracks, 8 direct SEQ scenes",
+                  light ? "LIGHT" : "DARK");
+            // Direct sequencer selector: OFF, SC 1, SC 2 at x=58,151,244;
+            // SC 2 selects the complete sequencer scene index 1.
+            ui.touch(0, 243.f, 312.f, now + 5);
+            ui.touch(2, 243.f, 312.f, now + 5);
+            CHECK(app.loopSequencerScene() == 1,
+                  "%s SC 2 button selects sequencer scene 2 for LOOP pad",
+                  light ? "LIGHT" : "DARK");
+            ui.touch(0, 58.f, 312.f, now + 6);
+            ui.touch(2, 58.f, 312.f, now + 6);
+            CHECK(app.loopSequencerScene() == -1,
+                  "%s OFF button detaches sequencer scene without changing looper tracks",
+                  light ? "LIGHT" : "DARK");
+            // Switching SONG replaces the LOOP parameter grid, not overlays it.
+            ui.touch(0, 425.f, 28.f, now + 7);
+            ui.touch(2, 425.f, 28.f, now + 7);
+            ui.frame(now + 8);
+            bool songControls = false, seqStillVisible = false;
+            for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+                songControls |= op.text == "+ ADD PAD";
+                seqStillVisible |= op.text == "SC 1";
+            }
+            CHECK(songControls && !seqStillVisible && app.songMode(),
+                  "%s SONG has its own spacious arrangement page without LOOP grid",
+                  light ? "LIGHT" : "DARK");
+            // PROJECT returns to the menu without clearing saved content.
+            ui.touch(0, 55.f, 26.f, now + 9);
+            ui.touch(2, 55.f, 26.f, now + 9);
+            ui.frame(now + 10);
+            bool returned = false, songHidden = true;
+            for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
+                returned |= op.text == "LOOP / SONG MODE";
+                if (op.text == "+ ADD PAD") songHidden = false;
+            }
+            CHECK(returned && songHidden,
+                  "%s PROJECT button returns from performance page to menu",
+                  light ? "LIGHT" : "DARK");
         }
         theme::apply(true);
-        // A narrower screen must switch between project and scene columns
-        // rather than draw both on top of each other.
+        // Narrow landscape must still show one full-screen editor, never
+        // squeezed side-by-side project and LOOP/SONG columns.
         ui.setSize(640.f, 400.f, 0.f, 0.f);
-        ui.frame(now + 3);
-        bool narrowProject = false, narrowSong = false;
+        ui.frame(now + 11);
+        bool narrowEntry = false, narrowScene = false;
         for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
-            narrowProject |= op.text == "PROJECT"; narrowSong |= op.text == "SONG MODE";
+            narrowEntry |= op.text == "LOOP / SONG MODE";
+            narrowScene |= op.text == "SONG ORDER";
         }
-        CHECK(narrowProject && !narrowSong, "narrow screen shows PROJECT alone");
-        ui.touch(0, 380, 32, now + 3); ui.touch(2, 380, 32, now + 3);
-        ui.frame(now + 4);
-        narrowProject = narrowSong = false;
+        CHECK(narrowEntry && !narrowScene, "narrow PROJECT menu is not overlaid by SONG");
+        ui.touch(0, 552.f, 76.f, now + 12); ui.touch(2, 552.f, 76.f, now + 12);
+        ui.frame(now + 13);
+        ui.touch(0, 300.f, 28.f, now + 13); ui.touch(2, 300.f, 28.f, now + 13);
+        ui.frame(now + 13);
+        bool narrowLoop = false, narrowPads = false;
         for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
-            narrowProject |= op.text == "PROJECT"; narrowSong |= op.text == "SONG MODE";
+            narrowLoop |= op.text == "SEQUENCER SCENE  /  ONE PATTERN PER PAD";
+            narrowPads |= op.text == "C1";
         }
-        CHECK(narrowSong, "narrow screen switches to scene/song column");
+        CHECK(narrowLoop && narrowPads, "narrow LOOP editor also uses entire screen");
+        app.exitPerformanceMode();
         app.setSongMode(false);
-        CHECK(app.performanceActive() && !app.songMode(),
-              "LOOP mode enables scene-key bank");
+        CHECK(app.performanceActive() && !app.songMode(), "LOOP mode enables scene-key bank");
         app.exitPerformanceMode(); run(0.08);
-        CHECK(!app.performanceActive() && !app.songMode(),
-              "EXIT LOOP returns to normal composition and chromatic keyboard");
+        CHECK(!app.performanceActive() && !app.songMode(), "EXIT LOOP restores composition");
         app.setSongMode(true); run(0.08);
         CHECK(app.performanceActive() && app.songMode(), "SONG mode enters successfully");
         app.exitPerformanceMode(); run(0.08);
-        CHECK(!app.performanceActive() && !app.songMode(),
-              "EXIT SONG returns to composition");
-        // Verify touchable EXIT beside LAUNCH in the actual PROJECT right panel.
+        CHECK(!app.performanceActive() && !app.songMode(), "EXIT SONG restores composition");
+
+        // The EXIT LOOP button stays touchable at its new full-screen location.
         ui.setSize(860.f, 400.f, 0.f, 0.f);
         ui.openProject(true);
-        app.setSongMode(false); ui.frame(now + 7);
+        ui.frame(now + 14);
+        ui.touch(0, 740.f, 76.f, now + 14); ui.touch(2, 740.f, 76.f, now + 14);
+        app.setSongMode(false);
+        ui.frame(now + 15);
         bool exitVisible = false, composeVisible = false;
         for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT) {
-            exitVisible |= op.text == "EXIT";
+            exitVisible |= op.text == "EXIT LOOP";
             composeVisible |= op.text == "COMPOSE";
         }
-        CHECK(exitVisible && composeVisible, "PROJECT shows EXIT beside LAUNCH and COMPOSE mode tab");
-        // Right column x=445..846; four actions at y~221, EXIT is third.
-        ui.touch(0, 701.f, 224.f, now + 7);
-        ui.touch(2, 701.f, 224.f, now + 7);
-        CHECK(!app.performanceActive(), "PROJECT EXIT button actually leaves LOOP mode");
+        CHECK(exitVisible && composeVisible, "full-screen LOOP has accessible EXIT and COMPOSE controls");
+        ui.touch(0, 535.f, 365.f, now + 16);
+        ui.touch(2, 535.f, 365.f, now + 16);
+        CHECK(!app.performanceActive(), "EXIT LOOP actually leaves LOOP performance mode");
 
         // FULL PROJECT FILES: eight independent slots, not merely the legacy
         // fm1_scenes.dat bank. Save must include the actual two COMPOSE clips,
@@ -771,6 +1000,7 @@ int main() {
         app.enterSequencer();
         app.selectSequencerScene(0); // write bass note to scene 1, keep scene 2's drums
         app.selectSequencerTrack(5);
+        app.setSequencerVolume(5, .37f); app.setSequencerVolume(2, 1.24f);
         app.setSequencerBeats(11);
         app.setSequencerPage(2);
         app.sequencerSetStepNote(39, 47); // bass-compatible per-step pitch
@@ -782,6 +1012,7 @@ int main() {
         app.setPitchCents(17);
         app.setPitchedTempo(1.10f);
         app.setTempoFlexBpm(134.f);
+        app.setCorrectTempoBpm(147.83f);
         app.exitSequencer();
         run(.20);
         CHECK(app.saveFullProject(0), "Save Full Project starts asynchronous FMP2 snapshot");
@@ -790,12 +1021,14 @@ int main() {
               std::filesystem::file_size("/tmp/fm1sampler_t2/project_1.fm1p") > 100000,
               "project slot 1 contains a real self-contained archive with audio");
         // Mutate all sequencer state, then load; restored data must win.
+        app.setSequencerVolume(5, 0.f); app.setSequencerVolume(2, .5f);
         app.enterSequencer();
         app.selectSequencerTrack(5);
         app.sequencerToggleStep(39);
         app.setSequencerBeats(4);
         app.setPitchSemitones(0); app.setPitchCents(0);
         app.setPitchedTempo(1.f); app.setTempoFlexBpm(120.f);
+        app.setCorrectTempoBpm(120.f);
         app.exitSequencer();
         app.setAlgo(5); app.selectScene(0); app.deleteScene(); run(0.25);
         app.loopClear(); run(0.25);
@@ -815,6 +1048,10 @@ int main() {
               std::fabs(app.pitchedTempo() - 1.10f) < .001f &&
               std::fabs(app.tempoFlexBpm() - 134.f) < .1f,
               "v5 project restores sequencer meter, steps, bass notes, source and tempo/pitch");
+        CHECK(std::fabs(app.sequencerVolume(5) - .37f) < .001f && std::fabs(app.sequencerVolume(2) - 1.24f) < .001f,
+              "manual project restores independent sequencer lane gains");
+        CHECK(std::fabs(app.correctedTempoBpm() - 147.83f) < .001f,
+              "full-project save/load preserves hundredth-BPM correction");
         CHECK(app.status().sceneSequencers[2] == 2,
               "full project restores LOOP part D1 -> complete sequencer scene 2");
         app.selectSequencerScene(1);
@@ -880,6 +1117,34 @@ int main() {
         CHECK(app.status().track_has_clip[0] && app.status().track_has_clip[1],
               "EXIT after a reloaded SONG restores the saved COMPOSE recordings");
 
+        // Different projects own different LOOP pads and SONG arrangements.
+        // A project with NO scenes must clear every scene/order inherited
+        // from the previously opened project, without erasing source samples.
+        const std::string sampleBeforeEmptyProject = app.sampleLabel(0);
+        for (int pad = 0; pad < Session::kScenes; ++pad) {
+            app.selectScene(pad, false);
+            if (app.sceneSaved(pad)) { app.deleteScene(); run(.12); }
+        }
+        run(.20);
+        CHECK(app.status().sceneMask == 0 && app.songOrder().empty(),
+              "clearing LOOP pads also empties this working SONG arrangement");
+        CHECK(app.saveFullProject(4),
+              "save an independent PROJECT 5 with empty LOOP pads and SONG");
+        for (int spin = 0; spin < 28 && app.fullProjectOperation() == 1; ++spin) run(.12);
+        CHECK(app.fullProjectOperation() == 2 && app.fullProjectExists(4),
+              "empty performance project saved with its samples and settings");
+        CHECK(app.loadFullProject(0), "switch back to PROJECT 1 with recorded scenes");
+        for (int spin = 0; spin < 35 && app.fullProjectOperation() == 3; ++spin) run(.12);
+        run(.28);
+        CHECK((app.status().sceneMask & 5u) == 5u && app.songOrder() == originalSong,
+              "PROJECT 1 restores only its own LOOP pads and SONG");
+        CHECK(app.loadFullProject(4), "switch to empty PROJECT 5");
+        for (int spin = 0; spin < 35 && app.fullProjectOperation() == 3; ++spin) run(.12);
+        run(.28);
+        CHECK(app.status().sceneMask == 0 && app.songOrder().empty() &&
+              app.sampleLabel(0) == sampleBeforeEmptyProject,
+              "PROJECT 5 clears previous project's LOOP and SONG, retaining its own samples");
+
         // Truncated project must never overwrite the current unsaved workspace.
         {
             std::ifstream original("/tmp/fm1sampler_t2/project_1.fm1p", std::ios::binary);
@@ -905,8 +1170,42 @@ int main() {
         bool hasSongExport = false;
         for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT)
             hasSongExport |= op.text == "EXPORT SONG";
-        CHECK(hasSongExport, "PROJECT shows EXPORT SONG beside CLOSE");
-        ui.touch(0, 80.f, 64.f, now + 9);
+        CHECK(!hasSongExport, "PROJECT menu no longer crams SONG controls into its layout");
+        ui.touch(0, 740.f, 76.f, now + 10);
+        ui.touch(2, 740.f, 76.f, now + 10);
+        app.setSongMode(true);
+        ui.frame(now + 11);
+        hasSongExport = false;
+        for (const auto& op : ui.ops()) if (op.type == UiOp::TEXT)
+            hasSongExport |= op.text == "EXPORT SONG";
+        CHECK(hasSongExport, "separate full-screen SONG page includes EXPORT SONG");
+        if (!app.songOrder().empty()) {
+            const auto orangeButton = [&](const char* label) {
+                bool visible = false, orange = false;
+                for (const auto& op : ui.ops()) {
+                    if (op.type == UiOp::TEXT && op.text == label && op.color == theme::ON_ACCENT) visible = true;
+                    if (op.type == UiOp::RRECT && op.color == theme::ACCENT &&
+                        op.f[0] > 600.f && op.f[1] >= 344.f && op.f[1] <= 346.f) orange = true;
+                }
+                return visible && orange;
+            };
+            for (bool light : {true, false}) {
+                theme::apply(light);
+                app.requestSongExport();
+                CHECK(app.wantSongExport(), "song export starts from idle or previous completion");
+                ui.frame(now + 11);
+                CHECK(orangeButton("EXPORTING"), "%s EXPORTING button is orange", light ? "LIGHT" : "DARK");
+                app.finishSongExport(true);
+                ui.frame(now + 11);
+                CHECK(orangeButton("SONG EXPORTED"), "%s SONG EXPORTED stays orange", light ? "LIGHT" : "DARK");
+            }
+            theme::apply(true);
+        }
+        app.exitPerformanceMode();
+        ui.touch(0, 55.f, 26.f, now + 12); // return to PROJECT menu
+        ui.touch(2, 55.f, 26.f, now + 12);
+        ui.frame(now + 13);
+        ui.touch(0, 80.f, 64.f, now + 14);
         ui.touch(2, 80.f, 64.f, now + 9);
         ui.frame(now + 10);
         bool slotPicker = false, slot1 = false, slot2 = false, page1 = false;
@@ -1097,7 +1396,7 @@ int main() {
         for (int tr : {0, 1}) { app.selectTrack(tr); app.setAlgo(2); }
         auto level = [&]() { app.selectTrack(1); app.playNote(60, true); run(0.5); app.selectTrack(0); app.playNote(60, true); run(0.9); float pk = 0; for (int i = 0; i < 20; i++) { run(0.03); pk = std::max(pk, app.status().track_peak[1]); } app.playNote(60, false); app.selectTrack(1); app.playNote(60, false); run(0.8); return pk; };
         app.selectTrack(1); { auto k = app.knobs(SamplerApp::P_MIX); k[1].set(0.f); } const float open = level();
-        { auto k = app.knobs(SamplerApp::P_MIX); k[1].set(1.f / 8.f); k = app.knobs(SamplerApp::P_MIX); k[2].set(0.1f); k = app.knobs(SamplerApp::P_MIX); k[3].set(1.f); } run(0.2);
+        { auto k = app.knobs(SamplerApp::P_MIX); k[1].set(1.f / SamplerApp::kTracks); k = app.knobs(SamplerApp::P_MIX); k[2].set(0.1f); k = app.knobs(SamplerApp::P_MIX); k[3].set(1.f); } run(0.2);
         const float ducked = level();
         CHECK(open > 0.01f && ducked < open * 0.6f, "sidechain: track 2 ducked by track 1 (%.3f -> %.3f)", open, ducked);
         { auto k = app.knobs(SamplerApp::P_MIX); k[1].set(0.f); }
@@ -1221,7 +1520,7 @@ int main() {
         CHECK(app.browserDir().empty() && app.browserSelected() == nullptr,
               "repeated BACK can reach the unselected archive root again");
         click(660.f, 29.f); // CLOSE the library sheet to get back to HOME
-        CHECK(!hasText("+ IMPORT ZIP") && hasText("LIBRARY"),
+        CHECK(!hasText("+ IMPORT ZIP") && !hasText("LIBRARY"),
               "closing the library sheet restores HOME controls");
         click(91.f, 26.f); // HOME's ENTER must use the same root navigator
         CHECK(app.browserDir() == "PACKS" && hasText("My Imported ZIP"),
@@ -1231,12 +1530,334 @@ int main() {
         click(91.f, 26.f); // HOME ENTER again, must not lock up
         CHECK(app.browserDir() == "PACKS" && !app.wantFile(),
               "BACK then ENTER at root remains repeatable without external file picker");
-        click(351.f, 248.f);
+        click(351.f, 268.f);
         CHECK(hasText("SAVE PROJECT") && hasText("LOAD PROJECT") &&
               hasText("EXPORT ALL LOOPS"), "PROJECT retains saving and exporting actions");
-        click(351.f, 67.f);
+        click(530.f, 76.f); // EXPORT ALL LOOPS in full-width PROJECT menu
         CHECK(app.wantLoopExport() && !app.wantLoopExport(),
               "EXPORT ALL LOOPS still requests Android's public download export");
+    }
+    {   // 16 independent looper tracks + separate, non-recordable click track.
+        CHECK(Session::kTracks == 16 && SamplerApp::kTracks == 16,
+              "looper exposes sixteen complete audio tracks");
+        app.selectTrack(15);
+        CHECK(app.track() == 15 && !app.metronomeSelected(),
+              "sixteenth audio track remains a real looper/sample track");
+        app.selectMetronome();
+        CHECK(app.metronomeSelected() && app.page() == SamplerApp::P_METRO_TEMPO,
+              "metronome is a separately selectable seventeenth control track");
+        auto controls = app.knobs(SamplerApp::P_METRO_TEMPO);
+        CHECK(controls[0].valid && controls[1].valid && controls[2].valid && controls[3].valid,
+              "metronome tempo page exposes four independent pitch/tempo knobs");
+        app.gotoPage(SamplerApp::P_METRO_SETTINGS);
+        controls = app.knobs();
+        controls[0].set(6.f / 63.f);  // 7/4
+        controls[1].set(.25f);       // swing 25%
+        controls[2].set(.8f);        // volume 80%
+        controls[3].set(3.f / 5.f);  // PLAY/REC MON
+        run(.1);
+        const auto status = app.status();
+        CHECK(status.metroBeats == 7 && std::fabs(status.metroSwing - .25f) < .01f &&
+              std::fabs(status.metroVolume - .8f) < .01f && status.metroMode == 3,
+              "metronome 7/4 swing, gain and monitored routing reach audio engine");
+        app.selectTrack(0);
+        controls = app.knobs(SamplerApp::P_METRO_SETTINGS);
+        controls[3].set(2.f / 5.f); // restore click OFF for existing live workspace
+        run(.1);
+    }
+    {   // Grid correction must never request Tempo Flex processing or change raw BPM.
+        const float original = app.tempoFlexBpm() * app.pitchedTempo();
+        const auto raw = app.status();
+        app.setCorrectTempoBpm(100.37f);
+        run(.1);
+        CHECK(std::fabs(app.correctedTempoBpm() - 100.37f) < .001f &&
+              std::fabs(app.status().bpm - raw.bpm) < .01f &&
+              app.status().loopSamples == raw.loopSamples,
+              "manual correction changes only grid calibration");
+        auto fine = app.knobs(SamplerApp::P_METRO_CORRECT)[3];
+        fine.step(1); run(.1);
+        CHECK(std::fabs(app.correctedTempoBpm() - 100.38f) < .001f &&
+              std::fabs(app.status().bpm - raw.bpm) < .01f && app.status().loopSamples == raw.loopSamples,
+              "cent-BPM adjustment leaves raw tempo and clip length unchanged");
+        app.setCorrectTempoBpm(120.99f); fine.step(1);
+        CHECK(std::fabs(app.correctedTempoBpm() - 121.f) < .001f, "K4 carries across integer BPM");
+        fine.step(-1);
+        CHECK(std::fabs(app.correctedTempoBpm() - 120.99f) < .001f, "K4 borrows across integer BPM");
+        app.tapTempo(10000); app.tapTempo(10500); app.tapTempo(11000);
+        CHECK(std::fabs(app.correctedTempoBpm() - 120.f) < .01f,
+              "500ms taps produce 120 BPM");
+        app.tapTempo(15000);
+        CHECK(std::fabs(app.correctedTempoBpm() - 120.f) < .01f,
+              "a long gap starts a new tap series without changing BPM");
+        app.setCorrectTempoBpm(original); run(.1);
+    }
+    {   // Live pad edits must never make an occupied track available.
+        Session pad(sr);
+        std::array<float, 512> audio{}, mic{};
+        mic.fill(.35f);
+        auto pump = [&](int blocks) { for (int i = 0; i < blocks; ++i) pad.process(audio.data(), mic.data(), 256); };
+        pad.setLoopSource(0);
+        pad.freeRecord(0, true); pump(180);
+        pad.freeRecord(0, false); pump(2);
+        pad.captureScene(0, 1, 0); pump(2);
+        pad.clipRecord(1, true); pump(20); pad.clipRecord(1, false); pump(2);
+        pad.captureScene(1, 2, 0); pump(2);
+        pad.beginPadEdit(0, true); pump(2);
+        CHECK(pad.status().activeScene == 0 && pad.status().playing &&
+              pad.status().track_has_clip[0] && !pad.status().track_has_clip[1],
+              "COMPOSE edit keeps selected pad playing, not the original composition");
+        pad.clipRecord(1, true); pump(3);
+        CHECK(!pad.status().track_clip_rec[1], "track used in another pad cannot be recorded");
+        pad.clipRecord(2, true); pump(25); pad.clipRecord(2, false); pump(2);
+        CHECK(pad.status().sceneTracks[0] == 5 && pad.status().sceneTracks[1] == 2,
+              "free recording autosaves only to the selected pad");
+        pad.endPadEdit(); pump(2);
+        pad.beginPadEdit(0, false); pump(2);
+        Session::SeqPattern pattern{};
+        pattern[0][0] = {100, 60};
+        pad.replaceSequencerScene(Session::kSeqScenes, 7, pattern);
+        pad.attachPadSequencer(0, Session::kSeqScenes); pump(2);
+        CHECK(pad.status().sceneSequencers[0] == Session::kSeqScenes + 1 &&
+              pad.status().sceneSequencers[1] == 1 &&
+              pad.status().seqBeats == 7 && pad.status().playing,
+              "private sequencer bank changes only the edited pad while playback continues");
+        pad.restoreComposition(); pump(2);
+        CHECK(pad.status().activeScene == -1 && pad.status().track_has_clip[0] &&
+              pad.status().track_has_clip[1] && pad.status().track_has_clip[2],
+              "HOME restores the full composition including new compatible audio tracks");
+    }
+    {   // LIBRARY stays accessible during live pad sequencing.
+        Session pad(sr);
+        pad.setSampleDir(std::string(getenv("HOME")) + "/fm1-sampler/samples");
+        SamplerApp live(pad, [](const uint8_t*, size_t) {});
+        std::array<float, 512> audio{};
+        pad.captureScene(0, 0, 0);
+        pad.process(audio.data(), nullptr, 256); live.tick(100);
+        live.selectScene(0);
+        CHECK(live.enterPadEditor(true), "saved sequencer-only pad opens for live editing");
+        pad.process(audio.data(), nullptr, 256); live.tick(133);
+        live.selectSequencerTrack(0);
+        const int bank = live.sequencerScene();
+        const auto prior = live.sequencerSoundName(0);
+        int entry = -1;
+        for (int i = 0; i < (int)live.library().size(); ++i)
+            if (live.library()[(size_t)i].label != prior) { entry = i; break; }
+        CHECK(entry >= 0, "library has a different sample for pad audition");
+        if (entry >= 0) {
+            const std::string expected = live.library()[(size_t)entry].label;
+            live.loadEntry(entry);
+            pad.process(audio.data(), nullptr, 256); live.tick(166);
+            CHECK(live.sequencerSoundName(0) == expected &&
+                  live.sequencerScene() == bank && live.padSequencerEditing() &&
+                  live.status().activeScene == 0 && live.status().playing,
+                  "pad sample replacement preserves active pattern and transport");
+        }
+        SamplerUI liveUI(live);
+        liveUI.setSize(860.f, 400.f, 0.f, 0.f);
+        for (bool light : {true, false}) {
+            theme::apply(light);
+            liveUI.frame(200);
+            bool library = false;
+            for (const auto& op : liveUI.ops())
+                if (op.type == UiOp::TEXT && op.text == "LIBRARY") library = true;
+            CHECK(library, "%s pad sequencer exposes LIBRARY", light ? "LIGHT" : "DARK");
+            liveUI.touch(0, 207.f, 25.f, 201); liveUI.touch(2, 207.f, 25.f, 201);
+            liveUI.frame(202);
+            bool sheet = false;
+            for (const auto& op : liveUI.ops())
+                if (op.type == UiOp::TEXT && op.text == "FM1-SAMPLER") sheet = true;
+            CHECK(sheet && live.status().playing, "library opens without stopping selected pad");
+            liveUI.touch(0, 670.f, 30.f, 203); liveUI.touch(2, 670.f, 30.f, 203);
+        }
+        theme::apply(true);
+    }
+    {   // Click never leaks into monitored phone mix or user loop buffers.
+        Session metro(SAMPLERATE);
+        std::array<float, 512> pcm{};
+        metro.setMetronome(7, .25f, .8f, 0); // transport-gated main mix
+        metro.play(true);
+        metro.process(pcm.data(), nullptr, 256);
+        float audible = 0.f;
+        for (float x : pcm) audible = std::max(audible, std::fabs(x));
+        metro.setMetronome(7, .25f, .8f, 3); // monitor-only FM1 headphones
+        metro.process(pcm.data(), nullptr, 256);
+        float privateMix = 0.f;
+        for (float x : pcm) privateMix = std::max(privateMix, std::fabs(x));
+        CHECK(audible > .001f && privateMix < .000001f &&
+              metro.status().metroMode == 3,
+              "sample-clocked click audibly plays in normal mode and is absent from phone mix in MON");
+        CHECK(metro.status().metroBeats == 7 &&
+              metro.status().metroPhase > 0.f,
+              "independent metronome phase advances with the 7/4 audio clock");
+        metro.setMetronome(7, .25f, .8f, 0);
+        metro.play(false); metro.process(pcm.data(), nullptr, 256);
+        metro.process(pcm.data(), nullptr, 256);
+        float stopped = 0.f; for (float x : pcm) stopped = std::max(stopped, std::fabs(x));
+        CHECK(stopped < .000001f, "STOP gates the metronome immediately");
+    }
+    {   // Two separate engine instances emulate app/process restart.
+        const std::string dir = "/tmp/fm1sampler_t2/recovery";
+        std::filesystem::create_directories(dir);
+        const std::string samples = std::string(getenv("HOME")) + "/fm1-sampler/samples";
+        auto pump = [&](Session& session, SamplerApp& a, uint32_t& ms, int blocks) {
+            std::array<float, 512> pcm{};
+            for (int k = 0; k < blocks; ++k) {
+                session.process(pcm.data(), nullptr, 256);
+                ms += 6; a.tick(ms);
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        };
+        {
+            Session session(sr); session.setDataDir(dir); session.setSampleDir(samples);
+            SamplerApp a(session, [](const uint8_t*, size_t) {});
+            uint32_t ms = 0;
+            pump(session, a, ms, 400);
+            session.freeRecord(0, true); pump(session, a, ms, 10);
+            a.playNote(60, true); pump(session, a, ms, 180);
+            a.playNote(60, false); session.freeRecord(0, false); pump(session, a, ms, 20);
+            CHECK(a.status().track_has_clip[0], "recovery test has a recorded loop");
+            session.play(false); pump(session, a, ms, 180);
+            a.enterSequencer(); a.selectSequencerTrack(2); a.sequencerToggleStep(3);
+            a.setSequencerVolume(2, .43f); a.setSequencerVolume(7, 0.f);
+            a.exitSequencer(); a.selectTrack(3); a.setCorrectTempoBpm(147.83f);
+            session.captureScene(0, 1, 0); pump(session, a, ms, 10);
+            a.setSongMode(true); a.selectScene(0); a.songAdd(); pump(session, a, ms, 20);
+            a.setRecoveryView(2);
+            CHECK(a.saveFullProject(0), "manual project remains separately saved");
+            for (int k = 0; k < 120 && a.fullProjectOperation() == 1; ++k) pump(session, a, ms, 10);
+            CHECK(a.fullProjectOperation() == 2, "manual project file is committed");
+            a.enableRecovery(); a.requestCheckpoint();
+            for (int k = 0; k < 160 && a.checkpointPending(); ++k) pump(session, a, ms, 10);
+            CHECK(session.recoveryOperation() == 2 && std::filesystem::is_regular_file(dir + "/CURRENT_SESSION.fm1p"),
+                  "automatic recovery archive committed separately");
+            CHECK(std::filesystem::is_regular_file(dir + "/project_1.fm1p"),
+                  "checkpoint does not replace saved project");
+        }
+        {
+            Session session(sr); session.setDataDir(dir); session.setSampleDir(samples);
+            SamplerApp a(session, [](const uint8_t*, size_t) {});
+            uint32_t ms = 0; a.enableRecovery();
+            for (int k = 0; k < 160 && a.recoveryTransition(); ++k) pump(session, a, ms, 10);
+            pump(session, a, ms, 20);
+            CHECK(!a.recoveryTransition() && a.status().track_has_clip[0] && a.status().sceneMask == 1 &&
+                  a.songOrder().size() == 1 && a.songOrder()[0] == 0 &&
+                  a.sequencerHit(2, 3).velocity > 0 && a.track() == 3 && a.restoredView() == 2 &&
+                  std::fabs(a.correctedTempoBpm() - 147.83f) < .02f &&
+                  std::fabs(a.sequencerVolume(2) - .43f) < .001f && a.sequencerVolume(7) == 0.f,
+                  "cold start restores loop, pad, SONG, sequencer, track, tempo and screen");
+            SamplerUI u(a); u.setSize(860, 400, 0, 0);
+            u.frame(ms); u.openProject(true); u.frame(ms);
+            bool newButton = false;
+            for (const auto& op : u.ops()) if (op.type == UiOp::TEXT && op.text == "NEW PROJECT") newButton = true;
+            CHECK(newButton, "PROJECT offers NEW PROJECT");
+            CHECK(a.newFullProject(), "NEW PROJECT writes empty recovery archive before reset");
+            for (int k = 0; k < 160 && a.recoveryTransition(); ++k) pump(session, a, ms, 10);
+            pump(session, a, ms, 20);
+            CHECK(!a.recoveryTransition() && a.status().sceneMask == 0 && a.songOrder().empty() &&
+                  !a.status().track_has_clip[0] && !a.sequencerHit(2, 3).velocity &&
+                  a.fullProjectExists(0) && a.sequencerVolume(2) == 1.f && a.sequencerVolume(7) == 1.f,
+                  "NEW PROJECT clears only current session and resets lane gains, not saved slots");
+        }
+        {
+            Session session(sr); session.setDataDir(dir); session.setSampleDir(samples);
+            SamplerApp a(session, [](const uint8_t*, size_t) {});
+            uint32_t ms = 0; a.enableRecovery();
+            for (int k = 0; k < 160 && a.recoveryTransition(); ++k) pump(session, a, ms, 10);
+            pump(session, a, ms, 20);
+            CHECK(!a.recoveryTransition() && !a.status().track_has_clip[0] && a.songOrder().empty() &&
+                  a.fullProjectExists(0), "next cold start after NEW PROJECT stays empty");
+        }
+    }
+    {   // Expanded voice pools, unchanged oldest-first voice stealing.
+        const std::string path = "/tmp/fm1sampler_t2/polyphony.wav";
+        std::vector<float> tone((size_t)sr * 8);
+        for (size_t i = 0; i < tone.size(); i += 2)
+            tone[i] = tone[i + 1] = .25f * std::sin(2. * 3.141592653589793 * 220. * (i / 2) / sr);
+        CHECK(writeWav16(path, tone, sr), "polyphony fixture written");
+        Sampler poly(sr);
+        CHECK(poly.load(path), "polyphony fixture loaded");
+        const int limits[] = {64, 64, 64, 32, 16, 8};
+        for (int mode = 0; mode < Sampler::kModes; ++mode) {
+            poly.allOff(); poly.setMode(mode);
+            CHECK(poly.voiceLimit() == limits[mode], "mode %d voice limit is %d", mode, limits[mode]);
+            for (int n = 0; n < limits[mode]; ++n) poly.noteOn(60, 100);
+            CHECK(poly.activeVoiceCount() == limits[mode], "mode %d supports all %d simultaneous voices", mode, limits[mode]);
+            poly.noteOn(60, 100);
+            CHECK(poly.activeVoiceCount() == limits[mode], "mode %d retains bounded oldest-first allocation", mode);
+        }
+        poly.allOff(); poly.setMode(Sampler::MELODIC);
+        poly.setEnv(.002f, .1f, .8f, 5.f);
+        poly.noteOn(60, 100);
+        std::array<float, 512> pcm{};
+        poly.render(pcm.data(), 256);
+        poly.noteOff(60);
+        for (int i = 1; i < 64; ++i) poly.noteOn(60 + i % 12, 100);
+        std::array<float, 64> positions{}, levels{};
+        CHECK(poly.voicePositions(positions.data(), 64, levels.data()) == 64 && positions[0] > 0.f && levels[0] > .1f,
+              "first released piano note survives 63 additional notes");
+        poly.noteOn(72, 100);
+        CHECK(poly.voicePositions(positions.data(), 64, levels.data()) == 64 && positions[0] == 0.f,
+              "65th note replaces oldest voice exactly as in previous allocator");
+        poly.render(pcm.data(), 256);
+        bool finite = true;
+        for (float x : pcm) finite &= std::isfinite(x);
+        CHECK(finite, "64-voice melodic render produces finite PCM");
+    }
+    { // Per-lane volume affects sounding tails, without changing steps or the looper.
+        Session session(sr);
+        SamplerApp mixer(session, [](const uint8_t*, size_t) {});
+        mixer.enterSequencer();
+        SamplerUI u(mixer); u.setSize(860, 400, 0, 0);
+        for (bool light : {true, false}) {
+            theme::apply(light);
+            mixer.setSequencerVolume(0, 1.f); mixer.setSequencerVolume(1, 1.f);
+            u.frame(100);
+            u.touch(0, 145, 88, 101); u.touch(1, 145, 198, 101); u.touch(2, 145, 198, 101);
+            u.frame(102);
+            u.touch(0, 145, 117, 103); u.touch(1, 145, 7, 103); u.touch(2, 145, 7, 103);
+            CHECK(mixer.sequencerVolume(0) == 0.f && mixer.sequencerVolume(1) == 1.5f &&
+                  mixer.sequencerVolume(2) == 1.f && !mixer.sequencerHit(0, 0).velocity,
+                  "%s independent compact lane knobs do not toggle steps", light ? "LIGHT" : "DARK");
+        }
+        theme::apply(true);
+        mixer.selectSequencerTrack(0);
+        mixer.setSequencerVolume(0, 1.f); mixer.setSequencerVolume(1, 1.f);
+        const uint8_t selectNext[] = {0xb0, 16, 65};
+        const uint8_t volumeDown[] = {0xb0, 17, 54};
+        const uint8_t volumeUp[] = {0xb0, 17, 69};
+        mixer.onMidi(selectNext, 3); mixer.onMidi(volumeDown, 3);
+        CHECK(mixer.sequencerTrack() == 1 && std::fabs(mixer.sequencerVolume(1) - .9f) < .001f &&
+              mixer.sequencerVolume(0) == 1.f, "SELECT chooses lane and ALGORITHM adjusts only its gain");
+        mixer.onMidi(volumeUp, 3);
+        CHECK(std::fabs(mixer.sequencerVolume(1) - .95f) < .001f,
+              "ALGORITHM increases selected lane volume");
+        mixer.exitSequencer();
+        const int priorAlgo = mixer.state(0).algo;
+        mixer.onMidi(volumeUp, 3);
+        CHECK(mixer.state(0).algo == std::min(5, priorAlgo + 1) &&
+              std::fabs(mixer.sequencerVolume(1) - .95f) < .001f,
+              "ALGORITHM retains original instrument mode selection outside SEQUENCER");
+        const std::string path = "/tmp/fm1sampler_t2/polyphony.wav";
+        session.setMetronome(4, 0.f, 0.f, 5);
+        session.loadSequencerSamplePath(path, 0);
+        session.setSequencerVolume(0, 1.f);
+        session.setSequencerStep(0, 0, 100);
+        std::array<float, 512> pcm{};
+        auto pump = [&](int blocks) {
+            double energy = 0.;
+            for (int i = 0; i < blocks; ++i) {
+                session.process(pcm.data(), nullptr, 256);
+                for (float x : pcm) energy += x * x;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            return energy;
+        };
+        pump(250); session.play(true);
+        CHECK(pump(15) > .01, "sequencer at unity gain is audible");
+        session.setSequencerVolume(0, 0.f); pump(2);
+        CHECK(pump(15) < .000001, "muting lane silences an already playing voice");
+        session.setSequencerVolume(0, .5f); pump(2);
+        CHECK(pump(15) > .001, "raising lane gain restores the same voice without retriggering");
     }
     printf("%s (%d failures)\n", fails ? "FAILED" : "ALL OK", fails);
     return fails ? 1 : 0;

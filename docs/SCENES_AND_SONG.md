@@ -1,36 +1,41 @@
-# FM-1 Sampler — Scenes (Loop Mode) & Song Mode
+# FM1 Sampler — LOOP/SONG workspace (Android v0.41)
 
-The **Android phone app** plays and stores the audio. The physical FM-1 only sends MIDI buttons and notes. No new `.fwsc` is required to use the on-screen controls.
+The Android app runs the audio engine and stores full projects. The physical M-VAVE FM-1 can control its transport and scene-key bank over MIDI, but the on-screen project and performance editor does not need a new physical firmware.
 
-## In PROJECT
+## Navigation
 
-Open the three-line **PROJECT** button on the cassette deck. The original project operations are retained in the **left column**. The **right column** contains **LOOP MODE** and **SONG MODE**. Both use the app's existing light and dark palettes. On narrow screens, tap the column-switch button; controls never cover one another.
+From **HOME**, use the last central **PROJECT** icon. The full-screen PROJECT menu has **SAVE PROJECT**, **LOAD PROJECT**, **EXPORT ALL LOOPS** and **LOOP / SONG MODE**, plus its existing loop editing/clearing controls.
 
-### LOOP MODE: 12 MIDI scenes
+Touch **LOOP / SONG MODE** for the dedicated full-screen performance workspace. The header has **PROJECT**, **COMPOSE**, **LOOP MODE**, **SONG MODE** and **HOME**. LOOP and SONG are *separate screen layouts* rather than small panels squeezed beside the project menu. All controls use the app's existing Light/Dark theme colors.
 
-1. Create or overdub the audio loops for the tracks you want to use. All tracks share the loop clock, as in the existing app.
-2. Choose a scene pad **C1, C#1, D1, D#1, E1, F1, F#1, G1, G#1, A1, A#1 or B1**.
-3. Toggle tracks **1–8** to decide which currently recorded loops to include.
-4. Tap **SAVE SCENE**. For an existing scene, confirm **REPLACE** with a second tap.
-5. Select another pad and build another combination. One scene can contain kick+bass, another kick+bass+melody, another only percussion, etc.
-6. Tap a saved pad, or press its key, to launch its loop set. The app queues the change for the **next whole bar**, with a short audio fade at the transition. Each scene loops until you launch another scene or stop.
+## LOOP: 12 pads, 16 looper tracks, eight complete sequencer scenes
 
-In **Ableton Live's note naming**, C1..B1 are MIDI **36..47** (D1 = 38). The app also accepts MIDI **24..35**, the same pitches labelled C1..B1 in scientific octave notation. When LOOP MODE is enabled, the first 12 keys of the FM-1's native 53-based keyboard are interpreted as virtual C1..B1 (physical MIDI notes 53..64). This avoids needing a firmware update to retune the MIDI keys. Outside LOOP MODE the FM-1 keyboard behaves normally.
+1. Record or overdub loops in the 16 independent audio tracks.
+2. Open **LOOP MODE** and tap one of the 12 scene pads **C1–B1** to select it for editing. A tap only selects; **LAUNCH** plays it.
+3. Tap **T1–T16** to choose which recorded audio clips belong to this scene. Both rows of eight are visible at once.
+4. Select **OFF** (no sequencer) or one of **SC 1–SC 8** using the nine dedicated buttons. Each SC button includes the chosen *complete* sequencer pattern (all its eight steps lanes) in the current pad; no separate sequencer lanes can be added individually to a pad. A pad may contain both looper clips and one sequencer scene, or a sequencer scene alone.
+5. Tap **SAVE PAD**. For an existing pad, **REPLACE PAD** requires a second confirmation tap. **DELETE PAD** also requires confirmation.
+6. Tap **LAUNCH** to play the pad. Existing tempo-quantized scene transitions, fades, loop playback, and track contents are unchanged.
+7. **EXIT LOOP** returns to COMPOSE, restoring the unchanged original loop workspace.
 
-All the clip audio and settings remain on the phone. A scene captures the **recorded loop audio**, not a new instrument preset or its live unrecorded notes. Scenes retain up to eight loop tracks. Capturing a saved scene and subsequently editing a track uses copy-on-write: previously saved scenes are not changed until explicitly replaced.
+Under the established MIDI mapping, virtual scene pads C1–B1 correspond to MIDI 36–47 in Ableton's convention, or 24–35 in scientific octave naming. The native FM-1 keyboard notes 53–64 also select these pads when LOOP mode is enabled.
 
-### SONG MODE: ordered scenes
+## SONG: full-screen arrangement editor
 
-1. Choose **SONG MODE**.
-2. Select a saved scene pad and tap **+ ADD**. Repeat as needed: for example **C1 → D1 → C1 → E1**. Repeats are allowed, up to 64 slots.
-3. Select a numbered sequence step to edit it. Use **REMOVE**, **MOVE <** or **MOVE >**.
-4. Tap **PLAY SONG**. It begins at the start of the first scene; each scene plays its complete loop duration and then the next scene starts in sync. The song **stops after the last scene**, rather than looping endlessly.
-5. Use **STOP** or the physical PLAY transport to stop/restart in SONG MODE.
+Tap **SONG MODE** in the performance header. The same 12 pads are available, plus a large arrangement strip. Select a saved pad and tap **+ ADD PAD** to append it after the selected position, up to 64 steps (repetitions allowed). Tap a step to select it; use **REMOVE**, **MOVE LEFT** and **MOVE RIGHT** to edit order. The strip displays eight large steps at a time and follows the selected step. **PLAY SONG** plays scenes in order once; **STOP SONG** stops. **EXPORT SONG** renders a processed audio file when the arrangement is nonempty.
 
-The project's scene packs and song order are written to `fm1_scenes.dat` in the app's private data directory. Scene saves and song edits persist between app launches, and the file is replaced atomically. The file stores floating-point audio at the app's sample rate; very long scenes consume more storage. Clearing live loops in PROJECT **does not delete saved scene pads**. Deleting a scene requires confirmation and removes its steps from the song order.
+## Project isolation and startup behavior
 
-## Compatibility
+From v0.41, **opening the APK fresh without a project load displays zero saved LOOP pads and an empty SONG arrangement**, even if an older global scene file exists. Loading project A restores only the scene bank and song saved with A. Loading project B restores only B's bank and song; a B without performance content clears A's old pads and order. Source samples and current app settings continue using their existing startup behavior.
 
-This feature builds on the existing FM1 Sampler CUE branch. It keeps CUE, tape FX, sample library, recorder and editor unchanged. The debug Android application is packaged separately as **FM1 Sampler Scenes** (`com.ferluht.fm1sampler.scenes`) so it does not overwrite an existing FM1 Sampler or FM1 Sampler CUE app; each app has separate private projects.
+To preserve performance content after restarting the app, use **PROJECT → SAVE PROJECT**. The numbered self-contained `.fm1p` slots store COMPOSE loops, all scenes, entire SONG order, sequencer patterns and sound assignments, samples and FX. Loading one restores all of that state.
 
-Source: `engine/session/Session.cpp` (snapshot, tempo-quantized transitions, song transport, persistence), `engine/app/SamplerApp.cpp` (MIDI/key bindings and editing), `engine/ui/SamplerUI.cpp` (dual-column responsive sheet). Android JNI/CMake builds those same sources into the APK. Host tests cover scene switching, song order, project persistence and light/dark UI rendering.
+Older versions wrote `fm1_scenes.dat` in the app-private data directory. **v0.41 no longer automatically writes or restores that global file**, but intentionally does **not delete** an existing copy. Before upgrading, open v0.40, save every important scene/song in a full project slot, then make a full backup. Unsaved legacy global scenes are not automatically imported by 0.41.
+
+## Compatibility and testing
+
+The package remains `com.ferluht.fm1sampler.scenes`, signed with the same pinned certificate, now versionCode **65**. Light and Dark themes use one common responsive grid. Host regressions cover direct SC selectors, project menu navigation, separate LOOP/SONG layouts, project changes with and without saved scenes, safe project loading and clean restart. These tests do not constitute physical FM-1 firmware validation.
+
+Source: `engine/ui/SamplerUI.cpp`, `engine/app/SamplerApp.cpp`, `engine/session/Session.cpp`, `engine/tools/test_app.cpp`.
+
+No images or screenshots are included.

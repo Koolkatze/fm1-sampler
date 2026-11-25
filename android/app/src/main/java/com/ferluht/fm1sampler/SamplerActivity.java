@@ -28,6 +28,9 @@ public class SamplerActivity extends Activity {
     static final int EXPORT_BACKUP = 9;
     static final int RESTORE_BACKUP = 10;
     private volatile boolean backupBusy;
+    // Shared by Activity instances (the backend survives recreation). Keep the
+    // staging and MediaStore publication mutually exclusive, not only rendering.
+    private static final java.util.concurrent.atomic.AtomicBoolean audioExportBusy = new java.util.concurrent.atomic.AtomicBoolean();
     private volatile boolean packDeletionBusy;
     private final Object packStorageLock = new Object();
     Backend backend;
@@ -93,6 +96,14 @@ public class SamplerActivity extends Activity {
         super.onPictureInPictureModeChanged(enabled, config);
         if (samplerView != null) samplerView.setPictureInPicture(enabled);
         if (!enabled) hideSystemBars();
+    }
+    @Override protected void onPause() {
+        if (backend != null) Native.requestCheckpoint(backend.engine, false);
+        super.onPause();
+    }
+    @Override protected void onStop() {
+        if (backend != null) Native.requestCheckpoint(backend.engine, false);
+        super.onStop();
     }
     @Override protected void onDestroy() {
         if (isFinishing() && backend != null) {
@@ -320,12 +331,20 @@ public class SamplerActivity extends Activity {
 
     private void exportProcessedAudio(boolean song) {
         if (android.os.Build.VERSION.SDK_INT < 29) {
+            if (song) Native.finishSongExport(backend.engine, false);
             Native.say(backend.engine, "EXPORT NEEDS ANDROID 10+");
+            return;
+        }
+        if (!audioExportBusy.compareAndSet(false, true)) {
+            if (song) Native.finishSongExport(backend.engine, false);
+            Native.say(backend.engine, "EXPORT ALREADY RUNNING");
             return;
         }
         final File temp = new File(getCacheDir(), (song ? "fm1-song-" : "fm1-loops-") +
                                    System.currentTimeMillis() + "-" + System.nanoTime());
         if (!temp.mkdirs()) {
+            audioExportBusy.set(false);
+            if (song) Native.finishSongExport(backend.engine, false);
             Native.say(backend.engine, "CANNOT PREPARE EXPORT");
             return;
         }
@@ -334,11 +353,14 @@ public class SamplerActivity extends Activity {
             : Native.exportLoops(backend.engine, temp.getAbsolutePath());
         if (!started) {
             temp.delete();
+            audioExportBusy.set(false);
+            if (song) Native.finishSongExport(backend.engine, false);
             Native.say(backend.engine, "EXPORT ALREADY RUNNING");
             return;
         }
         Native.say(backend.engine, song ? "EXPORTING SONG WITH FX..." : "PREPARING WAV EXPORT...");
         new Thread(() -> {
+            boolean published = false;
             try {
                 long until = android.os.SystemClock.elapsedRealtime() + 600000L;
                 int state;
@@ -360,6 +382,7 @@ public class SamplerActivity extends Activity {
                         : state == -2 ? "Writing WAV files failed"
                         : "Export timed out");
                 int files = LoopExport.publish(this, temp);
+                published = files > 0;
                 LoopExport.deleteTemporaryFiles(temp);
                 Native.say(backend.engine, song
                     ? "SONG EXPORTED TO DOWNLOAD/FM1-SAMPLER"
@@ -368,6 +391,9 @@ public class SamplerActivity extends Activity {
                 android.util.Log.w("fm1sampler", song ? "song export" : "loop export", e);
                 Native.say(backend.engine, "EXPORT FAILED - ORIGINALS KEPT");
                 // Keep any finished staging WAVs for recovery on I/O errors.
+            } finally {
+                audioExportBusy.set(false);
+                if (song) Native.finishSongExport(backend.engine, published);
             }
         }, song ? "fm1-export-song" : "fm1-export-loops").start();
     }

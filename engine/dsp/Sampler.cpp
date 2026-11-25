@@ -4,7 +4,7 @@
 #include <cstring>
 
 Sampler::Sampler(int engineRate) : sr_(engineRate) {
-    for (int i = 0; i < kVoices; i++) paul_.emplace_back(new PaulStream);
+    for (int i = 0; i < kPaulVoices; i++) paul_.emplace_back(new PaulStream);
 }
 Sampler::~Sampler() = default;
 
@@ -81,13 +81,12 @@ void Sampler::resolveWindow(Voice& v, const SampleBuf*& buf, double& ws, double&
 
 void Sampler::noteOn(int note, int vel) {
     if (!orig_) return;
+    // Same policy as before: first free slot, otherwise oldest voice.
+    // Mode-specific limits keep expensive grain/FFT processing bounded.
+    const int limit = voiceLimit();
     int vi = -1; uint32_t oldest = 0xffffffffu;
-    if (mode_ == PAUL) {   // each voice costs FFTs: at most four at once
-        int active = 0; for (auto& v : voices_) active += v.on;
-        if (active >= 4) { for (int i = 0; i < kVoices; i++) if (voices_[i].on && voices_[i].born < oldest) { oldest = voices_[i].born; vi = i; } }
-    }
-    if (vi < 0) for (int i = 0; i < kVoices; i++) if (!voices_[i].on) { vi = i; break; }
-    if (vi < 0) { oldest = 0xffffffffu; for (int i = 0; i < kVoices; i++) if (voices_[i].born < oldest) { oldest = voices_[i].born; vi = i; } }
+    for (int i = 0; i < limit; i++) if (!voices_[i].on) { vi = i; break; }
+    if (vi < 0) for (int i = 0; i < limit; i++) if (voices_[i].born <= oldest) { oldest = voices_[i].born; vi = i; }
     Voice& v = voices_[vi];
     v = Voice();
     v.on = true; v.gate = true; v.note = note; v.vel = clampf(vel / 127.f, 0.f, 1.f); v.born = ++bornCounter_;
@@ -104,11 +103,19 @@ void Sampler::noteOff(int note) {
     for (auto& v : voices_) if (v.on && v.gate && v.note == note) { v.gate = false; v.env.gateOff(); }
 }
 void Sampler::allOff() { for (auto& v : voices_) v = Voice(); }
+int Sampler::voiceLimit() const {
+    return mode_ == PAUL ? kPaulVoices : mode_ == GRAIN ? kGrainVoices : mode_ == KIT ? kKitVoices : kVoices;
+}
+int Sampler::activeVoiceCount() const {
+    int active = 0;
+    for (int i = 0; i < voiceLimit(); ++i) active += voices_[i].on;
+    return active;
+}
 bool Sampler::hasVoices() const { for (auto& v : voices_) if (v.on) return true; return false; }
 
 void Sampler::render(float* out, int n) {
     if (!orig_) return;
-    for (auto& v : voices_) if (v.on) renderVoice(v, out, n);
+    for (int i = 0; i < voiceLimit(); ++i) if (voices_[i].on) renderVoice(voices_[i], out, n);
 }
 
 void Sampler::renderVoice(Voice& v, float* out, int n) {
