@@ -1713,7 +1713,14 @@ void SamplerApp::encoder(int i, int delta) {
         else browserBack();
         return;
     }
-    if (i == 1) { if (!sequencerMode_ && !metroSelected_) setAlgo(ts_[track_].algo + (delta > 0 ? 1 : -1)); return; }
+    if (i == 1) {
+        if (sequencerMode_) {
+            setSequencerVolume(seqTrack_, sequencerVolume(seqTrack_) + delta * .01f);
+            say("SEQ T" + std::to_string(seqTrack_ + 1) + " VOLUME " +
+                std::to_string((int)std::lround(sequencerVolume(seqTrack_) * 100.f)) + "%");
+        } else if (!metroSelected_) setAlgo(ts_[track_].algo + (delta > 0 ? 1 : -1));
+        return;
+    }
     // OCT+ makes K1 the CUE subdivision control BEFORE and DURING PLAY.
     // Crucially, microphone threshold or the underlying page never steals K1.
     if (i == 2 && !metroSelected_ && ((held_ & (1u << OCT_UP)) || cueActive_ || page_ == P_CUE)) {

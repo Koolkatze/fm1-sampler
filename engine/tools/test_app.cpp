@@ -1812,14 +1812,31 @@ int main() {
             theme::apply(light);
             mixer.setSequencerVolume(0, 1.f); mixer.setSequencerVolume(1, 1.f);
             u.frame(100);
-            u.touch(0, 126, 88, 101); u.touch(2, 126, 88, 101);
+            u.touch(0, 145, 88, 101); u.touch(1, 145, 198, 101); u.touch(2, 145, 198, 101);
             u.frame(102);
-            u.touch(0, 194, 117, 103); u.touch(2, 194, 117, 103);
+            u.touch(0, 145, 117, 103); u.touch(1, 145, 7, 103); u.touch(2, 145, 7, 103);
             CHECK(mixer.sequencerVolume(0) == 0.f && mixer.sequencerVolume(1) == 1.5f &&
                   mixer.sequencerVolume(2) == 1.f && !mixer.sequencerHit(0, 0).velocity,
-                  "%s independent lane faders do not toggle steps", light ? "LIGHT" : "DARK");
+                  "%s independent compact lane knobs do not toggle steps", light ? "LIGHT" : "DARK");
         }
         theme::apply(true);
+        mixer.selectSequencerTrack(0);
+        mixer.setSequencerVolume(0, 1.f); mixer.setSequencerVolume(1, 1.f);
+        const uint8_t selectNext[] = {0xb0, 16, 65};
+        const uint8_t volumeDown[] = {0xb0, 17, 54};
+        const uint8_t volumeUp[] = {0xb0, 17, 69};
+        mixer.onMidi(selectNext, 3); mixer.onMidi(volumeDown, 3);
+        CHECK(mixer.sequencerTrack() == 1 && std::fabs(mixer.sequencerVolume(1) - .9f) < .001f &&
+              mixer.sequencerVolume(0) == 1.f, "SELECT chooses lane and ALGORITHM adjusts only its gain");
+        mixer.onMidi(volumeUp, 3);
+        CHECK(std::fabs(mixer.sequencerVolume(1) - .95f) < .001f,
+              "ALGORITHM increases selected lane volume");
+        mixer.exitSequencer();
+        const int priorAlgo = mixer.state(0).algo;
+        mixer.onMidi(volumeUp, 3);
+        CHECK(mixer.state(0).algo == std::min(5, priorAlgo + 1) &&
+              std::fabs(mixer.sequencerVolume(1) - .95f) < .001f,
+              "ALGORITHM retains original instrument mode selection outside SEQUENCER");
         const std::string path = "/tmp/fm1sampler_t2/polyphony.wav";
         session.setMetronome(4, 0.f, 0.f, 5);
         session.loadSequencerSamplePath(path, 0);

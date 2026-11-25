@@ -849,35 +849,54 @@ void SamplerUI::sequencerView() {
     text(W_ - 16, 25, 16, st_.flexProcessing ? ACCENT : TEXT,
          "SEQUENCER  " + num("%.0f BPM", app_.correctedTempoBpm()) + (st_.flexProcessing ? "  FLEX..." : ""), 2, true);
 
-    const float x0 = 244.f, right = W_ - 14.f;
+    const float x0 = 198.f, right = W_ - 14.f;
     const float gridW = std::max(150.f, right - x0);
     const float cw = gridW / 16.f;
     const float firstY = 76.f, rowH = std::max(20.f, (H_ - 164.f) / 8.f);
     const int firstStep = app_.sequencerPage() * 16;
     const int limit = app_.sequencerBeats() * 4;
     text(14, 63, 12, ACCENT, app_.padSequencerEditing() ? "PAD PATTERN · AUTO SAVE" : "8 EXTRA TRACKS · SCENE " + std::to_string(app_.sequencerScene() + 1) + "/8", 0, true);
-    text(x0, 63, 10, DIM, "SELECT / BLACK KEYS: TRACK    K1: TIMELINE    K4: SCENE    WHITE: STEPS");
+    text(x0, 63, 10, DIM, "SELECT / BLACK: TRACK   ALGORITHM: VOL   K1: PAGE   K4: SCENE   WHITE: STEPS");
     for (int t = 0; t < SamplerApp::kSeqTracks; ++t) {
         const bool selected = t == app_.sequencerTrack();
         const float y = firstY + rowH * t;
         const Rect row{12, y, x0 - 20, rowH - 3};
         rrect(row, R_CONTROL, selected ? RAISED : SURFACE);
         if (selected) rrect({row.x, row.y, 3, row.h}, 0, ACCENT);
-        const float sliderX = 126.f, sliderW = 68.f;
-        text(row.x + 10, y + row.h / 2, 10.5f, selected ? ACCENT : TEXT,
-             fit("T" + std::to_string(t + 1) + " " + app_.sequencerSoundName(t), sliderX - row.x - 16, 10.5f),
+        // Compact rotary control fits inside the original 178-unit lane header.
+        const float cx = 145.f, mid = y + row.h / 2, R = std::min(9.f, row.h * .37f);
+        text(row.x + 10, mid, 10.5f, selected ? ACCENT : TEXT,
+             fit("T" + std::to_string(t + 1) + " " + app_.sequencerSoundName(t), cx - R - row.x - 15.f, 10.5f),
              0, selected);
-        tap({row.x, row.y, sliderX - row.x - 3, row.h}, [this, t] { app_.selectSequencerTrack(t); });
-        const float volume = app_.sequencerVolume(t);
-        const float mid = y + row.h / 2;
-        rrect({sliderX, mid - 3, sliderW, 6}, 3, OUTLINE);
-        rrect({sliderX, mid - 3, sliderW * volume / 1.5f, 6}, 3, ACCENT);
-        circle(sliderX + sliderW * volume / 1.5f, mid, 4.f, selected ? ACCENT : TEXT);
-        text(232.f, mid, 9.5f, volume == 0.f ? DIM : TEXT, std::to_string((int)std::lround(volume * 100.f)) + "%", 2, true);
-        const auto adjust = [this, t, sliderX, sliderW](float px, float) {
-            app_.setSequencerVolume(t, 1.5f * std::clamp((px - sliderX) / sliderW, 0.f, 1.f));
+        tap({row.x, row.y, cx - R - row.x - 4.f, row.h}, [this, t] { app_.selectSequencerTrack(t); });
+        const float volume = app_.sequencerVolume(t), norm = volume / 1.5f;
+        auto pt = [&](float radius, float u, float& px, float& py) {
+            const float angle = (-150.f + u * 300.f) * kPi / 180.f;
+            px = cx + std::sin(angle) * radius; py = mid - std::cos(angle) * radius;
         };
-        hit({sliderX - 3, y, sliderW + 6, row.h}, adjust, adjust);
+        auto arc = [&](float end, uint32_t color, float width) {
+            const int n = std::max(1, (int)std::ceil(end * 20.f));
+            float ax, ay; pt(R, 0.f, ax, ay);
+            for (int i = 1; i <= n; ++i) {
+                float bx, by; pt(R, end * i / n, bx, by);
+                line(ax, ay, bx, by, color, width); ax = bx; ay = by;
+            }
+        };
+        arc(1.f, OUTLINE, 1.8f);
+        if (norm > 0.f) arc(norm, ACCENT, 2.f);
+        float px, py; pt(R * .66f, norm, px, py);
+        line(cx, mid, px, py, TEXT, 1.8f);
+        text(186.f, mid, 9.f, volume == 0.f ? DIM : TEXT,
+             std::to_string((int)std::lround(volume * 100.f)) + "%", 2, true);
+        // Select on touch; vertical drag uses a captured lane, not whatever
+        // is selected by external MIDI during the gesture.
+        hit({cx - 13.f, y, 58.f, row.h},
+            [this, t, norm](float, float py) {
+                app_.selectSequencerTrack(t); dragY_ = py; dragV_ = norm;
+            },
+            [this, t](float, float py) {
+                app_.setSequencerVolume(t, 1.5f * clamp01(dragV_ + (dragY_ - py) / 110.f));
+            });
         for (int col = 0; col < 16; ++col) {
             const int step = firstStep + col;
             const auto hit = app_.sequencerHit(t, step);

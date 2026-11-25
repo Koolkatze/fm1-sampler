@@ -56,7 +56,7 @@ public:
     void selectSequencerScene(int slot);
     void selectSequencerTrack(int track);
     void setSequencerVolume(int track, float gain);
-    float sequencerVolume(int track) const { return seqVolume_[(size_t)std::clamp(track, 0, kSeqTracks - 1)]; }
+    float sequencerVolume(int track) const { return seqVolume_[(size_t)std::max(0, std::min(kSeqTracks - 1, track))]; }
     int sequencerPage() const { return seqPage_; }
     int sequencerBeats() const { return seqBeats_; }
     int sequencerEditStep() const { return seqEditStep_; }
